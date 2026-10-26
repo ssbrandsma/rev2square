@@ -13,6 +13,7 @@ be disclosed here.
   Tailwind v4 + Alpine toolchain, MariaDB-backed PHPUnit suite
   (`BootstrapSmokeTest`), `README.md`, `AGENTS.md`,
   `docs/IMPLEMENTATION_PLAN.md`, this file, `CASE_STUDIES.md`.
+- WP1 (27 Oct 2026): project data layer (devices, projects, members, milestones, tasks), public landing/explore/detail/about pages, maintainer dashboard + project CRUD with ownership policies, Bublcam/Squeezebox showcase seeds (PRD facts only), ProjectCrud/Policy/Explorer tests.
 - Later WPs will be appended here with date + scope as they land.
 
 ## Pre-existing / third-party (NOT hackathon work)

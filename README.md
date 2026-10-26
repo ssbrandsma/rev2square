@@ -90,6 +90,11 @@ docker compose -f compose.dev.yaml run --rm --user $(id -u):$(id -g) -e npm_conf
 The `node` service runs `npm run dev` (HMR) automatically; production builds
 are compiled into the image in WP5.
 
+## Seed login (dev only)
+
+`migrate:fresh --seed` creates `maintainer@rev2square.test` / `password`
+(owner of the Bublcam Revival and Squeezebox Standalone showcase projects).
+
 ## WP0 decisions
 
 - Scheduler form: `schedule:work` (single long-running process).
