@@ -107,7 +107,17 @@
 
             <section class="rounded-xl border border-zinc-200 p-5">
                 <h2 class="font-mono text-xs uppercase tracking-widest text-zinc-500">Evidence sources</h2>
-                <p class="mt-2 text-sm text-zinc-600">Repository import arrives next. Linked sources will appear here with provenance.</p>
+                @php($repository = $project->repositories()->latest()->first())
+                @if($repository?->isReady())
+                    <p class="mt-2 text-sm text-zinc-600">{{ $repository->currentEvidence()->count() }} imported files from <a href="{{ $repository->canonical_url }}" target="_blank" rel="noopener" class="font-mono text-xs hover:text-emerald-700">{{ $repository->owner }}/{{ $repository->name }}</a>, pinned to commit <span class="font-mono text-xs">{{ substr($repository->last_commit_sha, 0, 12) }}</span>.</p>
+                @elseif($repository)
+                    <p class="mt-2 text-sm text-zinc-600">Repository import {{ $repository->import_status }}.</p>
+                @else
+                    <p class="mt-2 text-sm text-zinc-600">No evidence imported yet.</p>
+                @endif
+                @can('update', $project)
+                    <p class="mt-3"><a href="{{ route('projects.evidence', $project) }}" class="text-sm font-semibold text-emerald-700 hover:text-emerald-600">Manage evidence →</a></p>
+                @endcan
             </section>
         </aside>
     </div>

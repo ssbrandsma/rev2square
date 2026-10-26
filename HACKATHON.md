@@ -14,6 +14,7 @@ be disclosed here.
   (`BootstrapSmokeTest`), `README.md`, `AGENTS.md`,
   `docs/IMPLEMENTATION_PLAN.md`, this file, `CASE_STUDIES.md`.
 - WP1 (27 Oct 2026): project data layer (devices, projects, members, milestones, tasks), public landing/explore/detail/about pages, maintainer dashboard + project CRUD with ownership policies, Bublcam/Squeezebox showcase seeds (PRD facts only), ProjectCrud/Policy/Explorer tests.
+- WP2 (27 Oct 2026): GitHub evidence importer (allowlisted REST client, bounded file selection, queued imports, evidence manifest UI on project evidence page), repositories + evidence_sources tables, EvidencePackage handoff for WP3, GitHubUrl/EvidenceManifest/GitHubImport tests. Real Bublcam import observed end-to-end (35 files, ~117KB at commit c5d4b9f); refined re-import (+LICENSE-DOCS rule) auto-retries after the GitHub rate-limit reset.
 - Later WPs will be appended here with date + scope as they land.
 
 ## Pre-existing / third-party (NOT hackathon work)

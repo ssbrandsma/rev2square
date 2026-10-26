@@ -95,6 +95,23 @@ are compiled into the image in WP5.
 `migrate:fresh --seed` creates `maintainer@rev2square.test` / `password`
 (owner of the Bublcam Revival and Squeezebox Standalone showcase projects).
 
+## GitHub evidence import (WP2)
+
+Outbound GitHub calls go only to `api.github.com` (see `config/revival.php`
+for the allowlist, endpoint set, and budgets: 50 files, 100KB/file, 500KB
+total, ~100k tokens). Anonymous rate limit is 60 requests/hour; set
+`GITHUB_TOKEN` in `.env` for 5,000/hour. Citation source IDs are stable
+`evidence_sources` row IDs (shown as `S{id}` in the manifest UI).
+
+## Queue workers
+
+`queue` and `scheduler` are long-running daemons: restart them after code
+changes, or they keep running the old release:
+
+```sh
+docker compose -f compose.dev.yaml restart queue scheduler
+```
+
 ## WP0 decisions
 
 - Scheduler form: `schedule:work` (single long-running process).

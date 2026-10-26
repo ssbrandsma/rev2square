@@ -61,6 +61,12 @@ class Project extends Model
         return $this->hasMany(ProjectMember::class);
     }
 
+    /** @return HasMany<Repository, $this> */
+    public function repositories(): HasMany
+    {
+        return $this->hasMany(Repository::class);
+    }
+
     /** @return HasMany<Milestone, $this> */
     public function milestones(): HasMany
     {

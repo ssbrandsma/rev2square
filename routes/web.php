@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\EvidenceController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\ProjectController;
 use App\Models\Project;
@@ -25,6 +26,9 @@ Route::middleware('auth')->group(function () {
 });
 
 Route::get('/projects/{project}', [ProjectController::class, 'show'])->name('projects.show');
+
+Route::get('/projects/{project}/evidence', [EvidenceController::class, 'show'])
+    ->middleware('auth')->name('projects.evidence');
 
 Route::get('/dashboard', DashboardController::class)
     ->middleware(['auth', 'verified'])->name('dashboard');

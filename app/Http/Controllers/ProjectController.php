@@ -21,7 +21,7 @@ class ProjectController extends Controller
     {
         Gate::authorize('view', $project);
 
-        $project->load(['devices', 'milestones', 'tasks']);
+        $project->load(['devices', 'milestones', 'tasks', 'repositories']);
 
         return view('projects.show', ['project' => $project]);
     }
