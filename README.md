@@ -6,6 +6,8 @@ testable, community-executable revival plan.
 
 - Product spec: `docs/Rev2Square_PRD_v0.3_Hackathon_Edition.md`
 - Execution plan: `docs/IMPLEMENTATION_PLAN.md`
+- Production deployment: `docs/DEPLOYMENT.md`
+- Virtualmin/ARM64 deployment variant: `docs/DEPLOYMENT_VIRTUALMIN_ARM64.md`
 - Agent contract: `AGENTS.md`
 - Hackathon provenance: `HACKATHON.md`
 - Case-study inventory: `CASE_STUDIES.md`

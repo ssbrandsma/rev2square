@@ -1,0 +1,177 @@
+name: rev2square-virtualmin
+
+# Rev2Square production stack for a Virtualmin-managed VPS (WP5B adaptation).
+# See docs/DEPLOYMENT_VIRTUALMIN_ARM64.md.
+#
+# Usage (from the repo root on the server, as root):
+#   docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin up -d --build
+#
+# Differences from compose.prod.yaml:
+# - NO Caddy proxy: Virtualmin-managed Apache terminates TLS on ports
+#   80/443 and reverse-proxies to this stack on 127.0.0.1:8081 (see
+#   docker/virtualmin/apache-vhost-snippet.conf).
+# - nginx publishes ONLY a loopback port (default 127.0.0.1:8081,
+#   configurable via APP_LOOPBACK_PORT). Nothing else publishes ports.
+# - All services pin an explicit target platform, defaulting to
+#   linux/arm64 for the Hetzner ARM64 VPS (override with DOCKER_PLATFORM
+#   for local behavior validation on amd64).
+# - Same hardened images, users, capabilities, healthchecks, and restart
+#   policies as compose.prod.yaml; the Dockerfiles are shared unchanged.
+# - Secrets come from .env.virtualmin (chmod 600, never committed).
+
+services:
+  app:
+    platform: ${DOCKER_PLATFORM:-linux/arm64}
+    build:
+      context: .
+      dockerfile: docker/php/Dockerfile.prod
+    image: rev2square/app:${APP_VERSION:-latest}
+    env_file:
+      - path: .env.virtualmin
+        required: true
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    user: "www-data"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      # Boots the framework: proves code + cached config load.
+      test: ["CMD-SHELL", "php artisan about >/dev/null 2>&1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  nginx:
+    platform: ${DOCKER_PLATFORM:-linux/arm64}
+    build:
+      context: .
+      dockerfile: docker/nginx/Dockerfile.prod
+    image: rev2square/nginx:${APP_VERSION:-latest}
+    # Loopback only: Apache on the same host is the sole client. Never
+    # replace 127.0.0.1 with 0.0.0.0 here — container services must not be
+    # publicly exposed on a Virtualmin host.
+    ports:
+      - "127.0.0.1:${APP_LOOPBACK_PORT:-8081}:80"
+    depends_on:
+      - app
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      # Full HTTP path through php-fpm (nginx runs no env of its own).
+      test: ["CMD-SHELL", "curl -fsS -o /dev/null http://127.0.0.1/up || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  db:
+    platform: ${DOCKER_PLATFORM:-linux/arm64}
+    image: mariadb:11.8
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?Set DB_ROOT_PASSWORD in .env.virtualmin (and pass --env-file .env.virtualmin)}
+      MYSQL_DATABASE: ${DB_DATABASE:-rev2square}
+      MYSQL_USER: ${DB_USERNAME:-rev2square}
+      MYSQL_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env.virtualmin (and pass --env-file .env.virtualmin)}
+    volumes:
+      - db-data:/var/lib/mysql
+      - ./docker/mariadb/init.sql:/docker-entrypoint-initdb.d/10-init.sql:ro
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # No ports: isolated from Virtualmin's host MariaDB and from the network.
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  queue:
+    platform: ${DOCKER_PLATFORM:-linux/arm64}
+    # Shares the app image (built once via the app service): no build block
+    # here, so parallel builds never race exporting the same tag.
+    image: rev2square/app:${APP_VERSION:-latest}
+    pull_policy: never
+    # --max-time exits 0 hourly by design; the restart policy brings the
+    # worker back with fresh code, which also bounds memory growth.
+    # Single worker: conservative for the 4 GB shared VPS.
+    command: ["php", "artisan", "queue:work", "--sleep=3", "--tries=3", "--max-time=3600"]
+    env_file:
+      - path: .env.virtualmin
+        required: true
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    user: "www-data"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD-SHELL", "for f in /proc/[0-9]*/cmdline; do grep -qa 'queue:work' \"$$f\" 2>/dev/null && exit 0; done; exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Exactly one scheduler instance; never scale this service.
+  scheduler:
+    platform: ${DOCKER_PLATFORM:-linux/arm64}
+    # Shares the app image (built once via the app service); see queue.
+    image: rev2square/app:${APP_VERSION:-latest}
+    pull_policy: never
+    command: ["php", "artisan", "schedule:work"]
+    env_file:
+      - path: .env.virtualmin
+        required: true
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    user: "www-data"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      replicas: 1
+    healthcheck:
+      test: ["CMD-SHELL", "for f in /proc/[0-9]*/cmdline; do grep -qa 'schedule:work' \"$$f\" 2>/dev/null && exit 0; done; exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  db-data:

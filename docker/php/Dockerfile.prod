@@ -1,0 +1,84 @@
+# Rev2Square production PHP image (WP5B).
+#
+# Reproducible build: PHP dependencies come from composer.lock
+# (`composer install`, never update) and frontend assets from
+# package-lock.json (`npm ci`, which fails if the lock is out of sync).
+# Base images track the same tags as the dev stack (see README version
+# table); record the resolved digests after building
+# (`docker images --digests rev2square/app`).
+#
+# The runtime stage runs as www-data, ships no dev dependencies, no
+# composer, no node, and no bind-mounted source. Config/route/view caches
+# are built at container start (entrypoint-prod.sh) so runtime secrets
+# from .env.production are picked up without baking them into the image.
+
+# ---------------------------------------------------------------- PHP deps
+FROM composer:2 AS vendor
+
+WORKDIR /src
+
+COPY . .
+
+# No artisan scripts at build time: caches are generated at container start
+# when the production environment is present.
+RUN composer install \
+        --no-dev \
+        --no-interaction \
+        --no-progress \
+        --prefer-dist \
+        --optimize-autoloader \
+        --no-scripts \
+    && composer dump-autoload \
+        --optimize \
+        --no-dev \
+        --classmap-authoritative
+
+# ------------------------------------------------------------ Frontend assets
+FROM node:22 AS assets
+
+WORKDIR /src
+
+COPY package.json package-lock.json ./
+
+RUN npm ci --ignore-scripts --no-audit --no-fund
+
+COPY resources resources
+COPY vite.config.js ./
+COPY public public
+
+RUN npm run build
+
+# ------------------------------------------------------------------ Runtime
+FROM php:8.4-fpm
+
+# Same extension set as docker/php/Dockerfile (dev): pdo_mysql (MariaDB),
+# mbstring, zip, exif, pcntl (queue/scheduler signals), bcmath, opcache,
+# curl, dom.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git unzip libzip-dev libonig-dev libxml2-dev libcurl4-openssl-dev \
+    && docker-php-ext-install pdo_mysql mbstring zip exif pcntl bcmath opcache curl dom \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# Production PHP defaults (display_errors off, log_errors on).
+RUN cp "$PHP_INI_DIR/php.ini-production" "$PHP_INI_DIR/php.ini"
+COPY docker/php/conf.d-opcache-prod.ini /usr/local/etc/php/conf.d/opcache-prod.ini
+COPY docker/php/entrypoint-prod.sh /usr/local/bin/rev2-entrypoint-prod.sh
+RUN chmod +x /usr/local/bin/rev2-entrypoint-prod.sh
+
+WORKDIR /var/www
+
+COPY . .
+COPY --from=vendor /src/vendor ./vendor
+COPY --from=assets /src/public/build ./public/build
+
+# Writable dirs for the www-data runtime user; everything else stays
+# root-owned and read-only at runtime. .config holds the PsySH history so
+# `php artisan tinker` works for operators (otherwise its startup notice
+# escalates to a fatal under Laravel's error handler).
+RUN mkdir -p /var/www/.config/psysh \
+    && chown -R www-data:www-data /var/www/storage /var/www/bootstrap/cache /var/www/.config
+
+USER www-data
+
+ENTRYPOINT ["rev2-entrypoint-prod.sh"]
+CMD ["php-fpm"]

@@ -1,0 +1,195 @@
+name: rev2square-prod
+
+# Rev2Square production stack (WP5B). See docs/DEPLOYMENT.md.
+#
+# Usage (from the repo root on the server):
+#   docker compose -f compose.prod.yaml --env-file .env.production up -d --build
+#
+# Key differences from compose.dev.yaml:
+# - No source bind mounts: app + nginx run from built images with compiled
+#   assets. No Vite dev server, no published database port.
+# - Caddy terminates TLS with automatic ACME certificates and proxies to
+#   nginx; only Caddy publishes host ports (80/443).
+# - Queue/scheduler run the same hardened image as app (www-data,
+#   no-new-privileges, no Linux capabilities).
+# - Secrets come from .env.production (chmod 600, never committed).
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: docker/php/Dockerfile.prod
+    image: rev2square/app:${APP_VERSION:-latest}
+    env_file:
+      - path: .env.production
+        required: true
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    user: "www-data"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      # Boots the framework: proves code + cached config load.
+      test: ["CMD-SHELL", "php artisan about >/dev/null 2>&1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  nginx:
+    build:
+      context: .
+      dockerfile: docker/nginx/Dockerfile.prod
+    image: rev2square/nginx:${APP_VERSION:-latest}
+    depends_on:
+      - app
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      # Full HTTP path through php-fpm (nginx runs no env of its own).
+      test: ["CMD-SHELL", "curl -fsS -o /dev/null http://127.0.0.1/up || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # TLS terminator with automatic ACME issuance + renewal. The only service
+  # with published ports. Local smoke test: HTTP_PORT=8081 HTTPS_PORT=8443
+  # DOMAIN=localhost (see docs/DEPLOYMENT.md).
+  proxy:
+    image: caddy:2
+    ports:
+      - "${HTTP_PORT:-80}:80"
+      - "${HTTPS_PORT:-443}:443"
+    volumes:
+      - ./docker/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    env_file:
+      - path: .env.production
+        required: true
+    depends_on:
+      - nginx
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:2019/config/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  db:
+    image: mariadb:11.8
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?Set DB_ROOT_PASSWORD in .env.production (and pass --env-file .env.production)}
+      MYSQL_DATABASE: ${DB_DATABASE:-rev2square}
+      MYSQL_USER: ${DB_USERNAME:-rev2square}
+      MYSQL_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env.production (and pass --env-file .env.production)}
+    volumes:
+      - db-data:/var/lib/mysql
+      - ./docker/mariadb/init.sql:/docker-entrypoint-initdb.d/10-init.sql:ro
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    # No ports: the database is reachable only inside the Compose network.
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  queue:
+    # Shares the app image (built once via the app service): no build block
+    # here, so parallel builds never race exporting the same tag.
+    image: rev2square/app:${APP_VERSION:-latest}
+    pull_policy: never
+    # --max-time exits 0 hourly by design; the restart policy brings the
+    # worker back with fresh code, which also bounds memory growth.
+    command: ["php", "artisan", "queue:work", "--sleep=3", "--tries=3", "--max-time=3600"]
+    env_file:
+      - path: .env.production
+        required: true
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    user: "www-data"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD-SHELL", "for f in /proc/[0-9]*/cmdline; do grep -qa 'queue:work' \"$$f\" 2>/dev/null && exit 0; done; exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Exactly one scheduler instance; never scale this service.
+  scheduler:
+    # Shares the app image (built once via the app service); see queue.
+    image: rev2square/app:${APP_VERSION:-latest}
+    pull_policy: never
+    command: ["php", "artisan", "schedule:work"]
+    env_file:
+      - path: .env.production
+        required: true
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    user: "www-data"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      replicas: 1
+    healthcheck:
+      test: ["CMD-SHELL", "for f in /proc/[0-9]*/cmdline; do grep -qa 'schedule:work' \"$$f\" 2>/dev/null && exit 0; done; exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  db-data:
+  caddy-data:
+  caddy-config:

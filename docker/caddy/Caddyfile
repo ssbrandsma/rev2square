@@ -1,0 +1,28 @@
+# Rev2Square TLS front proxy (WP5B). Caddy terminates HTTPS, redirects
+# plain HTTP to HTTPS automatically, and obtains/renews ACME certificates
+# without operator intervention. DOMAIN is required (see .env.production);
+# for a local smoke test use DOMAIN=localhost, which serves a locally
+# trusted certificate instead of ACME.
+{
+	admin 127.0.0.1:2019
+}
+
+{$DOMAIN} {
+	reverse_proxy nginx:80
+
+	encode gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		# X-Frame-Options deliberately SAMEORIGIN: Livewire/Alpine run
+		# first-party only, and framing is denied everywhere else.
+		X-Frame-Options "SAMEORIGIN"
+	}
+
+	log {
+		output stdout
+		format json
+	}
+}

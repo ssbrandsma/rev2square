@@ -7,6 +7,7 @@ use App\Services\AI\MetaAIProvider;
 use App\Services\GitHub\GitHubClient;
 use App\Services\Revival\EvidenceManifestBuilder;
 use App\Services\Revival\GitHubRepositoryImporter;
+use Illuminate\Support\Facades\URL;
 use Illuminate\Support\ServiceProvider;
 use Tests\Support\MockAIProvider;
 
@@ -42,6 +43,13 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        //
+        // Production is served over HTTPS (TLS terminates at the Caddy
+        // proxy). Force generated URLs to https; the HTTP->HTTPS redirect
+        // itself lives in the proxy, not in application middleware, so
+        // unauthenticated healthchecks keep working over plain HTTP inside
+        // the Compose network.
+        if ($this->app->environment('production')) {
+            URL::forceScheme('https');
+        }
     }
 }
