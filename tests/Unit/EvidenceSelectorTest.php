@@ -37,6 +37,37 @@ class EvidenceSelectorTest extends TestCase
         $this->assertSame([], $result['excluded']);
     }
 
+    public function test_scored_rows_use_relevance_order_with_provenance(): void
+    {
+        $driver = $this->row(1, 'tools/driver.c', 'code');
+        $driver->relevance_score = 120;
+        $driver->is_partial = true;
+        $driver->line_ranges = [['start' => 1, 'end' => 30]];
+        $driver->original_lines = 400;
+        $driver->language = 'C';
+
+        $util = $this->row(2, 'app/util.py', 'code');
+        $util->relevance_score = 40;
+
+        $readme = $this->row(3, 'README.md', 'readme');
+        $readme->relevance_score = 100;
+
+        $result = EvidenceSelector::select(collect([$util, $driver, $readme]), 100000);
+
+        // Overview first, then score — never path order.
+        $this->assertSame(
+            ['README.md', 'tools/driver.c', 'app/util.py'],
+            array_column($result['included'], 'path')
+        );
+
+        $driverItem = $result['included'][1];
+        $this->assertTrue($driverItem['is_partial']);
+        $this->assertSame([['start' => 1, 'end' => 30]], $driverItem['line_ranges']);
+        $this->assertSame(400, $driverItem['original_lines']);
+        $this->assertSame('C', $driverItem['language']);
+        $this->assertSame(120, $driverItem['relevance_score']);
+    }
+
     public function test_records_budget_exclusions_with_reasons(): void
     {
         $sources = collect([

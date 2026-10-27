@@ -197,27 +197,38 @@ class GitHubImportTest extends TestCase
         $this->assertSame('v2', $repository->fresh()->currentEvidence()->first()->content);
     }
 
-    public function test_skips_oversized_binary_and_unallowlisted_files(): void
+    public function test_supports_html_partial_extraction_and_skips_binary(): void
     {
         $repository = $this->repository();
 
-        config(['revival.github.max_file_bytes' => 100]);
+        config(['revival.github.max_extraction_bytes' => 100]);
         $this->fakeGitHub([
             'README.md' => 'ok',
             'app/viewer.html' => '<html></html>',
             'tools/blob.py' => "a\0b",
             'docs/big.md' => str_repeat('x', 200),
+            'assets/logo.png' => 'binary',
         ]);
 
         $result = app(GitHubRepositoryImporter::class)->import($repository);
 
-        $this->assertCount(1, $result['manifest']);
+        // HTML is supported evidence; the oversized doc contributes a partial
+        // excerpt instead of being skipped outright.
+        $this->assertCount(3, $result['manifest']);
+
+        $big = $repository->currentEvidence()->where('path', 'docs/big.md')->firstOrFail();
+        $this->assertTrue($big->isPartial());
+        $this->assertSame([['start' => 1, 'end' => 1]], $big->line_ranges);
+        $this->assertSame(200, $big->original_bytes);
 
         $reasons = collect($result['skipped'])->mapWithKeys(fn ($s) => [$s['path'] => $s['reason']]);
-        $this->assertSame('extension not allowlisted', $reasons['app/viewer.html']);
         $this->assertSame('binary content', $reasons['tools/blob.py']);
-        $this->assertSame('exceeds file-size limit', $reasons['docs/big.md']);
-        $this->assertCount(3, $repository->last_import_summary['skipped']);
+        $this->assertSame('unsupported format', $reasons['assets/logo.png']);
+        $this->assertCount(2, $repository->last_import_summary['skipped']);
+
+        // Inventory still records every discovered blob.
+        $this->assertSame(5, $repository->currentInventory()->count());
+        $this->assertSame(5, $repository->last_import_summary['inventory']['blobs']);
     }
 
     public function test_empty_selection_records_warning(): void

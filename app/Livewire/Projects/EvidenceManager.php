@@ -10,6 +10,7 @@ use App\Models\Repository;
 use App\Services\GitHub\GitHubUrl;
 use App\Services\GitHub\InvalidGitHubUrlException;
 use App\Services\Revival\AnalysisRunRepository;
+use App\Services\Revival\GitHubRepositoryImporter;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\RateLimiter;
 use Livewire\Component;
@@ -108,6 +109,32 @@ class EvidenceManager extends Component
         );
 
         AnalyzeProjectJob::dispatch($run->id);
+    }
+
+    public function fetchMissing(string $path): void
+    {
+        Gate::authorize('update', $this->project);
+
+        $limits = config('revival.import_rate_limit');
+        $key = 'fetchmore:'.$this->project->id.':'.auth()->id();
+
+        if (RateLimiter::tooManyAttempts($key, $limits['max_attempts'])) {
+            $this->addError('fetchMissing', 'Too many evidence fetches started recently. Try again later.');
+
+            return;
+        }
+
+        $repository = $this->project->repositories()->latest()->first();
+
+        if ($repository === null || ! $repository->isReady()) {
+            $this->addError('fetchMissing', 'Import repository evidence before fetching more files.');
+
+            return;
+        }
+
+        RateLimiter::hit($key, $limits['per_minutes'] * 60);
+
+        app(GitHubRepositoryImporter::class)->fetchAdditionalPaths($repository, [$path]);
     }
 
     public function render()

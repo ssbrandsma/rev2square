@@ -55,6 +55,20 @@ class Repository extends Model
             ->orderBy('path');
     }
 
+    /** @return HasMany<RepositoryFile, $this> */
+    public function inventoryFiles(): HasMany
+    {
+        return $this->hasMany(RepositoryFile::class);
+    }
+
+    /** @return HasMany<RepositoryFile, $this> */
+    public function currentInventory(): HasMany
+    {
+        return $this->hasMany(RepositoryFile::class)
+            ->where('commit_sha', $this->last_commit_sha)
+            ->orderBy('path');
+    }
+
     public function isImporting(): bool
     {
         return $this->import_status === 'importing';

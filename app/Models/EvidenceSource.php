@@ -21,6 +21,14 @@ class EvidenceSource extends Model
         'content_hash',
         'identity_hash',
         'content',
+        'is_partial',
+        'line_ranges',
+        'original_bytes',
+        'original_lines',
+        'relevance_score',
+        'language',
+        'blob_sha',
+        'extraction_note',
         'visibility',
         'fetched_at',
         'ingestion_status',
@@ -31,7 +39,14 @@ class EvidenceSource extends Model
     {
         return [
             'fetched_at' => 'datetime',
+            'is_partial' => 'boolean',
+            'line_ranges' => 'array',
         ];
+    }
+
+    public function isPartial(): bool
+    {
+        return (bool) $this->is_partial;
     }
 
     /** @return BelongsTo<Project, $this> */

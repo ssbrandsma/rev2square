@@ -10,7 +10,7 @@
             </button>
         </div>
         @error('url')<p class="mt-2 text-sm text-red-600">{{ $message }}</p>@enderror
-        <p class="mt-2 text-xs text-zinc-500">Public repositories only. README, docs, manifests, and small source files are imported within strict size budgets; nothing is executed.</p>
+        <p class="mt-2 text-xs text-zinc-500">Public repositories only. Every file is inventoried; the most relevant source, docs, and configs become AI evidence within strict budgets. Oversized files contribute marked excerpts; nothing is executed.</p>
     </form>
 
     @if($repository)
@@ -44,6 +44,21 @@
                     <div><dt class="font-mono text-xs uppercase tracking-wider text-zinc-500">Files</dt><dd class="mt-0.5">{{ $evidence->count() }}</dd></div>
                     <div><dt class="font-mono text-xs uppercase tracking-wider text-zinc-500">Synced</dt><dd class="mt-0.5">{{ $repository->last_synced_at?->diffForHumans() }}</dd></div>
                 </dl>
+                @if(!empty($repository->last_import_summary['inventory'] ?? []))
+                    @php($inv = $repository->last_import_summary['inventory'])
+                    <dl class="mt-3 grid gap-3 border-t border-zinc-100 pt-3 text-sm sm:grid-cols-5">
+                        <div><dt class="font-mono text-xs uppercase tracking-wider text-zinc-500">Discovered</dt><dd class="mt-0.5">{{ number_format($inv['blobs'] ?? 0) }}</dd></div>
+                        <div><dt class="font-mono text-xs uppercase tracking-wider text-zinc-500">Eligible</dt><dd class="mt-0.5">{{ number_format($inv['eligible'] ?? 0) }}</dd></div>
+                        <div><dt class="font-mono text-xs uppercase tracking-wider text-zinc-500">Downloaded</dt><dd class="mt-0.5">{{ number_format($inv['downloaded'] ?? 0) }}</dd></div>
+                        <div><dt class="font-mono text-xs uppercase tracking-wider text-zinc-500">Stored</dt><dd class="mt-0.5">{{ number_format($inv['stored'] ?? 0) }}</dd></div>
+                        <div><dt class="font-mono text-xs uppercase tracking-wider text-zinc-500">Partial</dt><dd class="mt-0.5">{{ number_format($inv['partial'] ?? 0) }}</dd></div>
+                    </dl>
+                    @if(!empty($repository->last_import_summary['coverage'] ?? []))
+                        <p class="mt-2 text-xs text-zinc-600">Subsystem coverage:
+                            @foreach($repository->last_import_summary['coverage'] as $subsystem => $count)<span class="mr-2 whitespace-nowrap font-mono">{{ $subsystem }} ({{ $count }})</span>@endforeach
+                        </p>
+                    @endif
+                @endif
             @endif
         </div>
 
@@ -55,6 +70,7 @@
                             <th class="px-4 py-3 text-left font-semibold text-zinc-700">Source</th>
                             <th class="px-4 py-3 text-left font-semibold text-zinc-700">Path</th>
                             <th class="hidden px-4 py-3 text-left font-semibold text-zinc-700 sm:table-cell">Size</th>
+                            <th class="hidden px-4 py-3 text-left font-semibold text-zinc-700 lg:table-cell">Coverage</th>
                             <th class="hidden px-4 py-3 text-left font-semibold text-zinc-700 md:table-cell">SHA-256</th>
                         </tr>
                     </thead>
@@ -64,6 +80,14 @@
                                 <td class="whitespace-nowrap px-4 py-2.5 font-mono text-xs font-bold">S{{ $source->id }}</td>
                                 <td class="px-4 py-2.5"><a href="{{ $source->url }}" target="_blank" rel="noopener" class="font-mono text-xs hover:text-emerald-700">{{ $source->path }}</a></td>
                                 <td class="hidden whitespace-nowrap px-4 py-2.5 text-zinc-600 sm:table-cell">{{ number_format($source->byteSize()) }} B</td>
+                                <td class="hidden whitespace-nowrap px-4 py-2.5 lg:table-cell">
+                                    @if($source->isPartial())
+                                        <span class="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-semibold text-amber-800">Partial</span>
+                                        <span class="ml-1 font-mono text-xs text-zinc-500">@foreach($source->line_ranges ?? [] as $range)L{{ $range['start'] }}–L{{ $range['end'] }}@if(!$loop->last), @endif@endforeach of {{ number_format($source->original_lines ?? 0) }}</span>
+                                    @else
+                                        <span class="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-800">Complete</span>
+                                    @endif
+                                </td>
                                 <td class="hidden px-4 py-2.5 font-mono text-xs text-zinc-500 md:table-cell">{{ substr($source->content_hash, 0, 12) }}…</td>
                             </tr>
                         @endforeach
@@ -72,14 +96,41 @@
             </div>
         @endif
 
-        @if(!empty($repository->last_import_summary['skipped'] ?? []))
-            <div class="mt-6 rounded-xl border border-zinc-200 bg-zinc-50 p-6">
-                <h2 class="text-sm font-bold">Skipped files ({{ count($repository->last_import_summary['skipped']) }})</h2>
+        @if(!empty($repository->last_import_summary['missing_relevant'] ?? []))
+            <div class="mt-6 rounded-xl border border-amber-300 bg-amber-50 p-6">
+                <h2 class="text-sm font-bold text-amber-900">Relevant files not imported</h2>
+                <p class="mt-1 text-xs text-amber-800">High-scoring files left out by budgets or fetch failures. Fetch them individually into this import.</p>
                 <ul class="mt-3 space-y-1.5 text-sm">
-                    @foreach($repository->last_import_summary['skipped'] as $skip)
-                        <li class="flex flex-wrap gap-x-2"><span class="font-mono text-xs">{{ $skip['path'] }}</span><span class="text-xs text-zinc-500">— {{ $skip['reason'] }}</span></li>
+                    @foreach($repository->last_import_summary['missing_relevant'] as $missing)
+                        <li class="flex flex-wrap items-center gap-x-2">
+                            <span class="font-mono text-xs">{{ $missing['path'] }}</span>
+                            <span class="text-xs text-amber-800">— {{ $missing['reason'] }}</span>
+                            <button type="button" wire:click="fetchMissing({{ Illuminate\Support\Js::from($missing['path']) }})" wire:loading.attr="disabled" class="rounded bg-amber-200 px-2 py-0.5 text-xs font-semibold text-amber-900 hover:bg-amber-300 disabled:opacity-50">Fetch</button>
+                        </li>
                     @endforeach
                 </ul>
+                @error('fetchMissing')<p class="mt-2 text-sm text-red-600">{{ $message }}</p>@enderror
+            </div>
+        @endif
+
+        @if(!empty($repository->last_import_summary['skipped'] ?? []))
+            <div class="mt-6 rounded-xl border border-zinc-200 bg-zinc-50 p-6">
+                <h2 class="text-sm font-bold">Excluded files ({{ count($repository->last_import_summary['skipped']) }})</h2>
+                @if(!empty($repository->last_import_summary['excluded_by_reason'] ?? []))
+                    <ul class="mt-3 flex flex-wrap gap-2 text-xs">
+                        @foreach($repository->last_import_summary['excluded_by_reason'] as $reason => $count)
+                            <li class="rounded-full bg-zinc-200 px-3 py-1 font-mono">{{ $reason }} · {{ $count }}</li>
+                        @endforeach
+                    </ul>
+                @endif
+                <details class="mt-3">
+                    <summary class="cursor-pointer text-sm font-semibold text-zinc-700 hover:text-emerald-700">Show all excluded paths</summary>
+                    <ul class="mt-3 max-h-96 space-y-1.5 overflow-y-auto text-sm">
+                        @foreach($repository->last_import_summary['skipped'] as $skip)
+                            <li class="flex flex-wrap gap-x-2"><span class="font-mono text-xs">{{ $skip['path'] }}</span><span class="text-xs text-zinc-500">— {{ $skip['reason'] }}</span></li>
+                        @endforeach
+                    </ul>
+                </details>
             </div>
         @endif
 

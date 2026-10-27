@@ -55,10 +55,11 @@ class RevivalAnalysisService
 
         $deviceLine = $project->devices->map->displayName()->implode(', ');
         $goal = $project->pitch ?: 'Assess revival feasibility.';
+        $context = EvidenceContextBuilder::forRepository($repository, $selection['included'], $selection['excluded']);
 
         $request = new AIRequest(
             system: AnalysisPrompt::system(),
-            user: AnalysisPrompt::user($project, $deviceLine, $goal, $selection['included']),
+            user: AnalysisPrompt::user($project, $deviceLine, $goal, $selection['included'], $context),
             jsonSchema: ReportSchema::jsonSchema(),
         );
 

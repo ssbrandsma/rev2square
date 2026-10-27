@@ -62,13 +62,14 @@ class GitHubClient
     }
 
     /** @return array{sha: string, truncated: bool, tree: array<int, array<string, mixed>>} */
-    public function getTree(string $owner, string $name, string $sha): array
+    public function getTree(string $owner, string $name, string $sha, bool $recursive = true): array
     {
         if (! preg_match('/^[0-9a-f]{40}$/', $sha)) {
             throw new GitHubException('Invalid commit SHA.');
         }
 
-        $data = $this->request('GET', ['repos', $owner, $name, 'git', 'trees', $sha], ['recursive' => '1']);
+        $query = $recursive ? ['recursive' => '1'] : [];
+        $data = $this->request('GET', ['repos', $owner, $name, 'git', 'trees', $sha], $query);
 
         return [
             'sha' => $data['sha'] ?? $sha,
