@@ -67,6 +67,18 @@ class Project extends Model
         return $this->hasMany(Repository::class);
     }
 
+    /** @return HasMany<AnalysisRun, $this> */
+    public function analysisRuns(): HasMany
+    {
+        return $this->hasMany(AnalysisRun::class);
+    }
+
+    /** @return HasMany<AnalysisReport, $this> */
+    public function reports(): HasMany
+    {
+        return $this->hasMany(AnalysisReport::class)->orderByDesc('version_number');
+    }
+
     /** @return HasMany<Milestone, $this> */
     public function milestones(): HasMany
     {

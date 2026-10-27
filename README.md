@@ -112,6 +112,16 @@ changes, or they keep running the old release:
 docker compose -f compose.dev.yaml restart queue scheduler
 ```
 
+## WP3 decisions (verified live)
+
+- Model `muse-spark-1.3` via `https://api.meta.ai/v1/chat/completions`
+  (Bearer `MODEL_API_KEY`, `response_format` json_schema strict).
+- Strict schemas must set `additionalProperties: false` and list every
+  property in `required` on all objects — the API rejects anything else.
+- Completion budget 16000 tokens (a full 36-source report uses ~12k output).
+- Citation source IDs are `evidence_sources` row IDs; the server validates
+  every citation and locator path before persisting a report.
+
 ## WP0 decisions
 
 - Scheduler form: `schedule:work` (single long-running process).

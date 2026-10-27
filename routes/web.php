@@ -4,6 +4,7 @@ use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\EvidenceController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\ProjectController;
+use App\Http\Controllers\ReportController;
 use App\Models\Project;
 use Illuminate\Support\Facades\Route;
 
@@ -29,6 +30,9 @@ Route::get('/projects/{project}', [ProjectController::class, 'show'])->name('pro
 
 Route::get('/projects/{project}/evidence', [EvidenceController::class, 'show'])
     ->middleware('auth')->name('projects.evidence');
+
+Route::get('/projects/{project}/reports/{report}', [ReportController::class, 'show'])
+    ->middleware('auth')->name('projects.reports.show');
 
 Route::get('/dashboard', DashboardController::class)
     ->middleware(['auth', 'verified'])->name('dashboard');

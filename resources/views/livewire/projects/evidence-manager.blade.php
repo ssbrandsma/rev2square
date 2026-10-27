@@ -1,4 +1,4 @@
-<div @if($repository?->isImporting()) wire:poll.3s @endif>
+<div @if($repository?->isImporting() || ($runsActive ?? false)) wire:poll.3s @endif>
     <form wire:submit="import" class="rounded-xl border border-zinc-200 bg-white p-6">
         <label for="repo-url" class="block text-sm font-semibold">Public GitHub repository URL</label>
         <div class="mt-2 flex flex-col gap-3 sm:flex-row">
@@ -95,4 +95,45 @@
     @else
         <p class="mt-6 rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-8 text-center text-sm text-zinc-600">No repository linked yet. Import one above to build the evidence manifest.</p>
     @endif
+
+    <div class="mt-8 rounded-xl border border-zinc-200 bg-white p-6">
+        <div class="flex flex-wrap items-center justify-between gap-3">
+            <div>
+                <h2 class="font-bold">AI Revival Investigator</h2>
+                <p class="mt-1 text-sm text-zinc-600">Runs a structured feasibility analysis over the imported evidence. Findings stay drafts until you approve them.</p>
+            </div>
+            <button type="button" wire:click="analyze" wire:loading.attr="disabled"
+                class="rounded-lg bg-zinc-950 px-5 py-2.5 text-sm font-semibold text-white hover:bg-zinc-800 disabled:opacity-50">
+                Analyze with AI
+            </button>
+        </div>
+        @error('analyze')<p class="mt-2 text-sm text-red-600">{{ $message }}</p>@enderror
+
+        @if($runs->isNotEmpty())
+            <ul class="mt-4 divide-y divide-zinc-100 border-t border-zinc-100">
+                @foreach($runs as $run)
+                    <li class="flex flex-wrap items-center justify-between gap-2 py-3 text-sm">
+                        <span class="text-zinc-600">
+                            Run #{{ $run->id }} · {{ $run->created_at->diffForHumans() }}
+                            @if($run->report) · <span class="font-semibold text-zinc-900">report v{{ $run->report->version_number }}</span>@endif
+                        </span>
+                        <span class="flex items-center gap-3">
+                            @if($run->report)
+                                <a href="{{ route('projects.reports.show', [$project, $run->report]) }}" class="font-semibold text-emerald-700 hover:text-emerald-600">Review report →</a>
+                            @endif
+                            <span class="rounded-full px-2.5 py-0.5 text-xs font-semibold
+                                @if($run->status->isFailure()) bg-red-100 text-red-800
+                                @elseif($run->status->isActive()) bg-amber-100 text-amber-800
+                                @else bg-emerald-100 text-emerald-800 @endif">
+                                {{ $run->status->label() }}
+                            </span>
+                        </span>
+                    </li>
+                    @if($run->error_message)
+                        <li class="-mt-1 pb-2 text-xs text-red-700">{{ $run->error_message }}</li>
+                    @endif
+                @endforeach
+            </ul>
+        @endif
+    </div>
 </div>
