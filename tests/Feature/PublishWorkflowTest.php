@@ -283,6 +283,21 @@ class PublishWorkflowTest extends TestCase
             ->assertSee('UNCERTAIN', false);
     }
 
+    public function test_citation_links_require_https_scheme(): void
+    {
+        ['project' => $project, 'report' => $report] = $this->approvedReport();
+        EvidenceSource::where('project_id', $project->id)
+            ->firstOrFail()
+            ->forceFill(['url' => 'javascript:alert(1)'])
+            ->save();
+        app(ProjectPublisher::class)->publish($report, $project->owner);
+
+        $this->get(route('projects.reports.show', [$project, $report]))
+            ->assertOk()
+            ->assertSee('README.md:L1-L5', false)
+            ->assertDontSee('javascript:alert(1)', false);
+    }
+
     public function test_old_published_version_stays_accessible(): void
     {
         ['project' => $project, 'report' => $v1] = $this->approvedReport();

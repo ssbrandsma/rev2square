@@ -393,4 +393,38 @@ class GitHubImportTest extends TestCase
             'import_status' => 'importing',
         ]);
     }
+
+    public function test_import_action_forbids_strangers(): void
+    {
+        $project = Project::factory()->create();
+        $stranger = User::factory()->create();
+
+        Livewire::actingAs($stranger)
+            ->test(EvidenceManager::class, ['project' => $project])
+            ->set('url', 'https://github.com/acme/widgets')
+            ->call('import')
+            ->assertForbidden();
+    }
+
+    public function test_import_action_is_throttled(): void
+    {
+        config(['revival.import_rate_limit.max_attempts' => 1]);
+        Queue::fake();
+        $project = Project::factory()->create();
+
+        Livewire::actingAs($project->owner)
+            ->test(EvidenceManager::class, ['project' => $project])
+            ->set('url', 'https://github.com/acme/widgets')
+            ->call('import')
+            ->assertHasNoErrors();
+
+        Livewire::actingAs($project->owner)
+            ->test(EvidenceManager::class, ['project' => $project])
+            ->set('url', 'https://github.com/acme/gadgets')
+            ->call('import')
+            ->assertHasErrors('url')
+            ->assertSee('Too many imports');
+
+        Queue::assertPushed(ImportRepositoryJob::class, 1);
+    }
 }

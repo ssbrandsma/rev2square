@@ -24,6 +24,15 @@ class EvidenceManager extends Component
     {
         Gate::authorize('update', $this->project);
 
+        $limits = config('revival.import_rate_limit');
+        $key = 'import:'.$this->project->id.':'.auth()->id();
+
+        if (RateLimiter::tooManyAttempts($key, $limits['max_attempts'])) {
+            $this->addError('url', 'Too many imports started recently. Try again later.');
+
+            return;
+        }
+
         $this->validate(['url' => ['required', 'string', 'max:500']]);
 
         try {
@@ -47,6 +56,8 @@ class EvidenceManager extends Component
         );
 
         $repository->forceFill(['import_status' => 'importing', 'import_error' => null])->save();
+
+        RateLimiter::hit($key, $limits['per_minutes'] * 60);
 
         ImportRepositoryJob::dispatch($repository->id);
 

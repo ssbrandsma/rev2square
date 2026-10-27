@@ -33,4 +33,10 @@ return [
         ],
     ],
 
+    // Per-user, per-project import throttle (protects the shared GitHub API quota).
+    'import_rate_limit' => [
+        'max_attempts' => 10,
+        'per_minutes' => 60,
+    ],
+
 ];

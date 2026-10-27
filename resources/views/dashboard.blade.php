@@ -19,7 +19,7 @@
                 <a href="{{ route('projects.create') }}" class="mt-4 inline-block rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-emerald-500">Start a revival</a>
             </div>
         @else
-            <div class="overflow-hidden rounded-xl border border-zinc-200">
+            <div class="overflow-x-auto rounded-xl border border-zinc-200">
                 <table class="min-w-full divide-y divide-zinc-200 text-sm">
                     <thead class="bg-zinc-50">
                         <tr>
@@ -43,6 +43,8 @@
                                     <span class="rounded-full px-2.5 py-0.5 text-xs font-semibold {{ $project->isPublished() ? 'bg-emerald-100 text-emerald-800' : 'bg-zinc-100 text-zinc-700' }}">{{ $project->publication_status->label() }}</span>
                                 </td>
                                 <td class="px-4 py-3 text-right">
+                                    <a href="{{ route('projects.evidence', $project) }}" class="font-semibold text-emerald-700 hover:text-emerald-600">Evidence</a>
+                                    <span class="mx-1 text-zinc-300">·</span>
                                     <a href="{{ route('projects.edit', $project) }}" class="font-semibold text-emerald-700 hover:text-emerald-600">Edit</a>
                                 </td>
                             </tr>

@@ -20,7 +20,7 @@
                     <span class="text-zinc-700">“{{ $item['claim'] }}”</span>
                     @php($source = $sourcesById->get($item['source_id']))
                     <span class="text-zinc-500">—
-                        @if($source)<a href="{{ $source->url }}" target="_blank" rel="noopener" class="font-mono text-xs hover:text-emerald-700">{{ $item['locator'] }}</a>
+                        @if($source && str_starts_with($source->url, 'https://'))<a href="{{ $source->url }}" target="_blank" rel="noopener" class="font-mono text-xs hover:text-emerald-700">{{ $item['locator'] }}</a>
                         @else<span class="font-mono text-xs">{{ $item['locator'] }}</span>@endif
                     </span>
                 @endif

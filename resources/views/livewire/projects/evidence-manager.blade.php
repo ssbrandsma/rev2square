@@ -4,8 +4,9 @@
         <div class="mt-2 flex flex-col gap-3 sm:flex-row">
             <input id="repo-url" type="url" wire:model="url" placeholder="https://github.com/owner/repository" required maxlength="500"
                 class="block w-full rounded-lg border-zinc-300 shadow-sm focus:border-emerald-500 focus:ring-emerald-500">
-            <button type="submit" class="shrink-0 rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-emerald-500">
-                {{ $repository ? 'Re-import' : 'Import' }}
+            <button type="submit" wire:loading.attr="disabled" class="shrink-0 rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-50">
+                <span wire:loading.remove>{{ $repository ? 'Re-import' : 'Import' }}</span>
+                <span wire:loading>Starting…</span>
             </button>
         </div>
         @error('url')<p class="mt-2 text-sm text-red-600">{{ $message }}</p>@enderror
@@ -47,7 +48,7 @@
         </div>
 
         @if($evidence->isNotEmpty())
-            <div class="mt-6 overflow-hidden rounded-xl border border-zinc-200">
+            <div class="mt-6 overflow-x-auto rounded-xl border border-zinc-200">
                 <table class="min-w-full divide-y divide-zinc-200 text-sm">
                     <thead class="bg-zinc-50">
                         <tr>
@@ -104,7 +105,8 @@
             </div>
             <button type="button" wire:click="analyze" wire:loading.attr="disabled"
                 class="rounded-lg bg-zinc-950 px-5 py-2.5 text-sm font-semibold text-white hover:bg-zinc-800 disabled:opacity-50">
-                Analyze with AI
+                <span wire:loading.remove>Analyze with AI</span>
+                <span wire:loading>Starting…</span>
             </button>
         </div>
         @error('analyze')<p class="mt-2 text-sm text-red-600">{{ $message }}</p>@enderror
@@ -134,6 +136,8 @@
                     @endif
                 @endforeach
             </ul>
+        @else
+            <p class="mt-4 text-sm text-zinc-600">No analyses yet. Import evidence above, then run the first AI analysis.</p>
         @endif
     </div>
 </div>

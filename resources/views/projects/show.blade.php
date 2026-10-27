@@ -31,11 +31,11 @@
                     <p class="mt-2 leading-relaxed text-zinc-800">{{ $assessment['summary'] ?? '' }}</p>
                     <div class="mt-3 flex flex-wrap gap-2">
                         @foreach($assessment['revival_paths'] ?? [] as $path)
-                            <span class="rounded-full px-2.5 py-0.5 font-mono text-[11px] font-bold
-                                @if($path['feasibility'] === 'PROMISING') bg-emerald-100 text-emerald-800
-                                @elseif($path['feasibility'] === 'HIGH_RISK') bg-red-100 text-red-800
+                            <span class="rounded-full px-2.5 py-1 text-xs font-semibold
+                                @if($path['feasibility'] === 'PROMISING') bg-emerald-100 text-emerald-900
+                                @elseif($path['feasibility'] === 'HIGH_RISK') bg-red-100 text-red-900
                                 @elseif($path['feasibility'] === 'INSUFFICIENT_EVIDENCE') bg-zinc-200 text-zinc-800
-                                @else bg-amber-100 text-amber-800 @endif">{{ $path['feasibility'] }}</span>
+                                @else bg-amber-100 text-amber-900 @endif">{{ $path['feasibility'] }}: {{ \Illuminate\Support\Str::limit($path['approach'], 60) }}</span>
                         @endforeach
                     </div>
                     <p class="mt-3 text-sm"><a href="{{ route('projects.reports.show', [$project, $publishedReport]) }}" class="font-semibold text-emerald-700 hover:text-emerald-600">Read the full assessment with sources →</a></p>
@@ -67,7 +67,7 @@
                             @endif
                         </div>
                     @empty
-                        <p class="rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-6 text-sm text-zinc-600">No milestones yet. The AI investigator will propose a roadmap from WP3 on; maintainers can already add context via the project story.</p>
+                        <p class="rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-6 text-sm text-zinc-600">No milestones yet. When the maintainers run an AI analysis and approve the roadmap, milestones appear here.</p>
                     @endforelse
                 </div>
             </section>
@@ -122,9 +122,14 @@
                 @endforelse
             </section>
 
-            <section class="rounded-xl border border-amber-300 bg-amber-50 p-5">
-                <h2 class="font-mono text-xs uppercase tracking-widest text-amber-800">AI revival assessment</h2>
-                <p class="mt-2 text-sm text-amber-900">Not yet available. Source-backed feasibility analysis arrives with the AI Revival Investigator.</p>
+            <section class="rounded-xl border {{ $publishedReport ? 'border-emerald-200 bg-emerald-50/50' : 'border-amber-300 bg-amber-50' }} p-5">
+                <h2 class="font-mono text-xs uppercase tracking-widest {{ $publishedReport ? 'text-emerald-800' : 'text-amber-800' }}">AI revival assessment</h2>
+                @if($publishedReport)
+                    <p class="mt-2 text-sm text-zinc-700">Version {{ $publishedReport->version_number }}, approved {{ $publishedReport->reviewed_at?->toDateString() ?? '—' }}{{ $publishedReport->run?->model ? ' · drafted with '.$publishedReport->run->model : '' }}.</p>
+                    <p class="mt-2 text-sm"><a href="{{ route('projects.reports.show', [$project, $publishedReport]) }}" class="font-semibold text-emerald-700 hover:text-emerald-600">Read the full assessment →</a></p>
+                @else
+                    <p class="mt-2 text-sm text-amber-900">Not yet available. The maintainers run the AI analysis from the evidence page; approved assessments appear here.</p>
+                @endif
             </section>
 
             <section class="rounded-xl border border-zinc-200 p-5">

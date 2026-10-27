@@ -282,6 +282,31 @@ class RevivalAnalysisTest extends TestCase
         Queue::assertPushed(AnalyzeProjectJob::class);
     }
 
+    public function test_analyze_action_is_throttled(): void
+    {
+        config(['ai.rate_limit.max_attempts' => 1]);
+        Queue::fake();
+        $project = Project::factory()->create();
+        Repository::factory()->create([
+            'project_id' => $project->id,
+            'import_status' => 'ready',
+            'last_commit_sha' => str_repeat('c', 40),
+        ]);
+
+        Livewire::actingAs($project->owner)
+            ->test(EvidenceManager::class, ['project' => $project])
+            ->call('analyze')
+            ->assertHasNoErrors();
+
+        Livewire::actingAs($project->owner)
+            ->test(EvidenceManager::class, ['project' => $project])
+            ->call('analyze')
+            ->assertHasErrors('analyze')
+            ->assertSee('Too many analyses');
+
+        Queue::assertPushed(AnalyzeProjectJob::class, 1);
+    }
+
     public function test_cross_project_analysis_is_forbidden(): void
     {
         $project = Project::factory()->create();
