@@ -15,6 +15,7 @@
                 @endunless
                 @can('update', $project)
                     <a href="{{ route('projects.edit', $project) }}" class="rounded-full bg-white px-3 py-1 text-xs font-semibold text-zinc-900 hover:bg-zinc-200">Edit project</a>
+                    <a href="{{ route('projects.offers.index', $project) }}" class="rounded-full bg-white px-3 py-1 text-xs font-semibold text-zinc-900 hover:bg-zinc-200">Offers ({{ $project->offers()->where('status', 'pending')->count() }})</a>
                 @endcan
             </div>
         </div>
@@ -22,6 +23,24 @@
 
     <div class="mx-auto grid max-w-6xl gap-10 px-4 py-12 sm:px-6 lg:grid-cols-3">
         <div class="space-y-10 lg:col-span-2">
+            @php($publishedReport = $project->reports()->whereNotNull('published_at')->first())
+            @if($publishedReport)
+                @php($assessment = $publishedReport->payload_json)
+                <section class="rounded-xl border border-emerald-200 bg-emerald-50/50 p-6">
+                    <p class="font-mono text-xs uppercase tracking-widest text-emerald-800">Revival assessment · v{{ $publishedReport->version_number }} · maintainer-approved</p>
+                    <p class="mt-2 leading-relaxed text-zinc-800">{{ $assessment['summary'] ?? '' }}</p>
+                    <div class="mt-3 flex flex-wrap gap-2">
+                        @foreach($assessment['revival_paths'] ?? [] as $path)
+                            <span class="rounded-full px-2.5 py-0.5 font-mono text-[11px] font-bold
+                                @if($path['feasibility'] === 'PROMISING') bg-emerald-100 text-emerald-800
+                                @elseif($path['feasibility'] === 'HIGH_RISK') bg-red-100 text-red-800
+                                @elseif($path['feasibility'] === 'INSUFFICIENT_EVIDENCE') bg-zinc-200 text-zinc-800
+                                @else bg-amber-100 text-amber-800 @endif">{{ $path['feasibility'] }}</span>
+                        @endforeach
+                    </div>
+                    <p class="mt-3 text-sm"><a href="{{ route('projects.reports.show', [$project, $publishedReport]) }}" class="font-semibold text-emerald-700 hover:text-emerald-600">Read the full assessment with sources →</a></p>
+                </section>
+            @endif
             <section>
                 <h2 class="font-mono text-xs uppercase tracking-widest text-zinc-500">Project story</h2>
                 <div class="mt-3 space-y-3 text-[15px] leading-relaxed text-zinc-700">
@@ -75,6 +94,9 @@
                             </div>
                             @if($task->definition_of_done)
                                 <p class="mt-3 border-t border-zinc-100 pt-3 text-sm text-zinc-600"><span class="font-semibold text-zinc-900">Done means:</span> {{ $task->definition_of_done }}</p>
+                            @endif
+                            @if($task->status->value === 'OPEN')
+                                <p class="mt-3"><a href="{{ route('projects.offers.create', [$project, 'task' => $task->id]) }}" class="text-sm font-semibold text-emerald-700 hover:text-emerald-600">Offer help →</a></p>
                             @endif
                         </div>
                     @empty

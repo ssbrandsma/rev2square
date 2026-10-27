@@ -18,6 +18,7 @@ class AnalysisReport extends Model
         'supersedes_report_id',
         'payload_json',
         'review_status',
+        'review_notes',
         'reviewer_id',
         'reviewed_at',
         'published_at',

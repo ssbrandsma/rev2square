@@ -20,6 +20,10 @@ class Milestone extends Model
         'status',
         'sort_order',
         'target_date',
+        'import_key',
+        'origin_report_id',
+        'last_seen_report_id',
+        'manually_edited',
     ];
 
     protected function casts(): array
@@ -27,6 +31,7 @@ class Milestone extends Model
         return [
             'status' => MilestoneStatus::class,
             'target_date' => 'date',
+            'manually_edited' => 'boolean',
         ];
     }
 

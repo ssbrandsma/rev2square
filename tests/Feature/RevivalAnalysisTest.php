@@ -296,7 +296,7 @@ class RevivalAnalysisTest extends TestCase
 
         $this->actingAs($stranger)
             ->get(route('projects.reports.show', [$project, $report]))
-            ->assertForbidden();
+            ->assertNotFound();
     }
 
     public function test_review_page_shows_findings_citations_and_pending_label(): void

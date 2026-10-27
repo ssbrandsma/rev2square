@@ -21,6 +21,9 @@ class ContributorTask extends Model
         'definition_of_done',
         'requires_hardware',
         'import_key',
+        'origin_report_id',
+        'last_seen_report_id',
+        'manually_edited',
     ];
 
     protected function casts(): array
@@ -29,6 +32,7 @@ class ContributorTask extends Model
             'skills' => 'array',
             'status' => TaskStatus::class,
             'requires_hardware' => 'boolean',
+            'manually_edited' => 'boolean',
         ];
     }
 

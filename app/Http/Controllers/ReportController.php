@@ -11,12 +11,23 @@ class ReportController extends Controller
 {
     public function show(Project $project, AnalysisReport $report): View
     {
-        Gate::authorize('update', $project);
-
+        Gate::authorize('view', $project);
         abort_unless($report->project_id === $project->id, 404);
 
         $report->load('run');
 
+        if (Gate::allows('update', $project)) {
+            return view('projects.reports.show', $this->viewData($project, $report, false));
+        }
+
+        abort_unless($report->isPublished(), 404);
+
+        return view('projects.reports.public', $this->viewData($project, $report, true));
+    }
+
+    /** @return array<string, mixed> */
+    private function viewData(Project $project, AnalysisReport $report, bool $public): array
+    {
         $payload = $report->payload_json;
 
         $evidenceById = collect($payload['evidence'] ?? [])->keyBy('id');
@@ -31,13 +42,17 @@ class ReportController extends Controller
             ->flatMap->evidenceSources
             ->keyBy('id');
 
-        return view('projects.reports.show', [
+        $versions = $public
+            ? $project->reports()->whereNotNull('published_at')->with('run')->get()
+            : $project->reports()->with('run')->get();
+
+        return [
             'project' => $project,
             'report' => $report,
             'payload' => $payload,
-            'versions' => $project->reports()->with('run')->get(),
+            'versions' => $versions,
             'evidenceById' => $evidenceById,
             'sourcesById' => $sourcesById,
-        ]);
+        ];
     }
 }

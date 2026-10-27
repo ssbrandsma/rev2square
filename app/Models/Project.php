@@ -79,6 +79,12 @@ class Project extends Model
         return $this->hasMany(AnalysisReport::class)->orderByDesc('version_number');
     }
 
+    /** @return HasMany<ContributionOffer, $this> */
+    public function offers(): HasMany
+    {
+        return $this->hasMany(ContributionOffer::class);
+    }
+
     /** @return HasMany<Milestone, $this> */
     public function milestones(): HasMany
     {
