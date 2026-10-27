@@ -61,6 +61,7 @@ class RevivalAnalysisService
             system: AnalysisPrompt::system(),
             user: AnalysisPrompt::user($project, $deviceLine, $goal, $selection['included'], $context),
             jsonSchema: ReportSchema::jsonSchema(),
+            correlationId: 'analysis-run-'.$run->id,
         );
 
         try {

@@ -59,7 +59,7 @@ class EvidencePlannerTest extends TestCase
             array_column($result['queue'], 'path')
         );
         $this->assertSame(
-            [['path' => 'app/a3.py', 'reason' => 'low relevance']],
+            [['path' => 'app/a3.py', 'reason' => 'file count limit reached']],
             $result['skipped']
         );
     }
@@ -73,18 +73,20 @@ class EvidencePlannerTest extends TestCase
 
         $result = EvidencePlanner::plan($items, $this->config(['max_download_bytes' => 5000]));
         $this->assertSame(['a.py'], array_column($result['queue'], 'path'));
-        $this->assertSame('evidence budget exhausted', $result['skipped'][0]['reason']);
+        $this->assertSame('download budget exhausted', $result['skipped'][0]['reason']);
 
         $result = EvidencePlanner::plan($items, $this->config(['max_evidence_bytes' => 5000]));
         $this->assertSame(['a.py'], array_column($result['queue'], 'path'));
+        $this->assertSame('evidence byte budget exhausted', $result['skipped'][0]['reason']);
 
         // 4000 bytes ≈ 1000 tokens each; budget fits one file.
         $result = EvidencePlanner::plan($items, $this->config(['token_budget' => 1500]));
         $this->assertSame(['a.py'], array_column($result['queue'], 'path'));
+        $this->assertSame('evidence token budget exhausted', $result['skipped'][0]['reason']);
 
         $result = EvidencePlanner::plan($items, $this->config(['max_files' => 1]));
         $this->assertSame(['a.py'], array_column($result['queue'], 'path'));
-        $this->assertSame('low relevance', $result['skipped'][0]['reason']);
+        $this->assertSame('file count limit reached', $result['skipped'][0]['reason']);
     }
 
     public function test_plan_is_deterministic_regardless_of_input_order(): void

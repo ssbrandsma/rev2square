@@ -45,15 +45,27 @@ class EvidencePlanner
             $wantBytes = min((int) $entry['size_bytes'], $maxExtraction);
 
             if (count($queue) >= $maxFiles) {
-                $skipped[] = ['path' => $entry['path'], 'reason' => 'low relevance'];
+                $skipped[] = ['path' => $entry['path'], 'reason' => 'file count limit reached'];
 
                 continue;
             }
 
-            if ($downloadBytes + (int) $entry['size_bytes'] > $maxDownload
-                || $evidenceBytes + $wantBytes > $maxEvidence
-                || (int) ceil(($evidenceBytes + $wantBytes) / 4) > $tokenBudget) {
-                $skipped[] = ['path' => $entry['path'], 'reason' => 'evidence budget exhausted'];
+            // Each budget reports its own reason so operators can tell which
+            // limit to raise; pipeline order decides ties (download first).
+            if ($downloadBytes + (int) $entry['size_bytes'] > $maxDownload) {
+                $skipped[] = ['path' => $entry['path'], 'reason' => 'download budget exhausted'];
+
+                continue;
+            }
+
+            if ($evidenceBytes + $wantBytes > $maxEvidence) {
+                $skipped[] = ['path' => $entry['path'], 'reason' => 'evidence byte budget exhausted'];
+
+                continue;
+            }
+
+            if ((int) ceil(($evidenceBytes + $wantBytes) / 4) > $tokenBudget) {
+                $skipped[] = ['path' => $entry['path'], 'reason' => 'evidence token budget exhausted'];
 
                 continue;
             }

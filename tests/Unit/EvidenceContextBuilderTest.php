@@ -19,7 +19,7 @@ class EvidenceContextBuilderTest extends TestCase
             ],
             'coverage' => ['app' => 20, 'tools' => 12, '(root)' => 6],
             'missing_relevant' => [
-                ['path' => 'app/extra.py', 'reason' => 'low relevance', 'score' => 70],
+                ['path' => 'app/extra.py', 'reason' => 'file count limit reached', 'score' => 70],
             ],
         ];
 
@@ -40,7 +40,7 @@ class EvidenceContextBuilderTest extends TestCase
         $this->assertStringContainsString('including 4 partial excerpts', $context);
         $this->assertStringContainsString('app (20)', $context);
         $this->assertStringContainsString('app/main.py: lines L1-L30, L400-L410 of 900', $context);
-        $this->assertStringContainsString('app/extra.py (low relevance)', $context);
+        $this->assertStringContainsString('app/extra.py (file count limit reached)', $context);
         $this->assertStringContainsString('docs/extra.md', $context);
         $this->assertStringContainsString('NOT received', $context);
     }

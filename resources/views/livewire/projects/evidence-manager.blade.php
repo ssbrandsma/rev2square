@@ -116,9 +116,10 @@
         @if(!empty($repository->last_import_summary['skipped'] ?? []))
             <div class="mt-6 rounded-xl border border-zinc-200 bg-zinc-50 p-6">
                 <h2 class="text-sm font-bold">Excluded files ({{ count($repository->last_import_summary['skipped']) }})</h2>
-                @if(!empty($repository->last_import_summary['excluded_by_reason'] ?? []))
+                @php($excludedTallies = collect($repository->last_import_summary['skipped'])->groupBy('reason')->map->count()->sortKeys())
+                @if($excludedTallies->isNotEmpty())
                     <ul class="mt-3 flex flex-wrap gap-2 text-xs">
-                        @foreach($repository->last_import_summary['excluded_by_reason'] as $reason => $count)
+                        @foreach($excludedTallies as $reason => $count)
                             <li class="rounded-full bg-zinc-200 px-3 py-1 font-mono">{{ $reason }} · {{ $count }}</li>
                         @endforeach
                     </ul>

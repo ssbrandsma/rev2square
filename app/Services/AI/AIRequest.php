@@ -10,5 +10,7 @@ class AIRequest
         /** @var array<string, mixed>|null JSON Schema for constrained decoding */
         public readonly ?array $jsonSchema = null,
         public readonly ?int $maxCompletionTokens = null,
+        /** Safe correlation identifier for log entries (e.g. analysis-run-123). */
+        public readonly ?string $correlationId = null,
     ) {}
 }

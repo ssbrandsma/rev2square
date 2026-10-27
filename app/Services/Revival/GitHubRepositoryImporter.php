@@ -2,12 +2,14 @@
 
 namespace App\Services\Revival;
 
+use App\Models\EvidenceSource;
 use App\Models\Repository;
 use App\Models\RepositoryFile;
 use App\Services\GitHub\GitHubClient;
 use App\Services\GitHub\GitHubException;
 use App\Services\GitHub\GitHubTimeoutException;
 use App\Services\GitHub\RateLimitedException;
+use Illuminate\Support\Collection;
 
 /**
  * Orchestrates one bounded repository import in two stages:
@@ -17,9 +19,42 @@ use App\Services\GitHub\RateLimitedException;
  *
  * Inventory never depends on API traversal order, and evidence selection
  * never depends on filenames alone: both stages are deterministic.
+ *
+ * Metric semantics (all scoped to the repository's current commit SHA):
+ * - discovered/blobs: inventory rows recorded for the commit.
+ * - eligible: inventory rows eligible for evidence.
+ * - downloaded: files fetched from the API during the latest import pass
+ *   (same-commit re-imports reuse stored bytes without re-downloading).
+ * - stored/files: current evidence rows for the commit. The stored set is
+ *   a monotonic union across re-imports: tighter budgets never delete
+ *   evidence, they only stop adding to it.
+ * - skipped / "Excluded files (N)": inventory paths without stored
+ *   evidence, each listed exactly once with its current reason. A stored
+ *   path is never listed as skipped.
+ * - excluded_by_reason: tally of skipped; always sums to N.
+ * - missing_relevant: top fetchable skipped paths by relevance score.
+ *
+ * Re-importing the same commit with unchanged budgets is a no-op; with
+ * changed budgets it imports incrementally (union, deterministic).
  */
 class GitHubRepositoryImporter
 {
+    /**
+     * Selection-affecting budgets snapshotted into every import summary.
+     * A same-commit re-import with a different snapshot re-runs instead of
+     * short-circuiting as up-to-date, so budget increases take effect.
+     */
+    public const BUDGET_KEYS = [
+        'max_files',
+        'max_evidence_bytes',
+        'max_download_bytes',
+        'max_download_file_bytes',
+        'max_extraction_bytes',
+        'max_chunk_bytes',
+        'token_budget',
+        'max_inventory_entries',
+    ];
+
     public function __construct(
         private readonly GitHubClient $client,
         private readonly EvidenceManifestBuilder $manifest,
@@ -28,6 +63,18 @@ class GitHubRepositoryImporter
     public static function fromConfig(): self
     {
         return new self(GitHubClient::fromConfig(), new EvidenceManifestBuilder);
+    }
+
+    /** @param  array<string, mixed>  $config */
+    public static function budgetSnapshot(array $config): array
+    {
+        $snapshot = [];
+
+        foreach (self::BUDGET_KEYS as $key) {
+            $snapshot[$key] = (int) ($config[$key] ?? 0);
+        }
+
+        return $snapshot;
     }
 
     /**
@@ -58,7 +105,8 @@ class GitHubRepositoryImporter
 
         if ($repository->last_commit_sha === $sha
             && $repository->currentEvidence()->exists()
-            && $repository->currentInventory()->exists()) {
+            && $repository->currentInventory()->exists()
+            && ($repository->last_import_summary['budgets'] ?? null) == self::budgetSnapshot($config)) {
             $repository->forceFill(['last_synced_at' => now(), 'import_status' => 'ready'])->save();
 
             return [
@@ -71,6 +119,13 @@ class GitHubRepositoryImporter
                 'inventory' => $this->storedInventorySummary($repository),
             ];
         }
+
+        // Same-commit re-import (e.g. after a budget change): identical blobs,
+        // so stored bytes are reused without re-downloading and the stored
+        // set only grows. New commits start from an empty set.
+        $existingEvidence = $repository->last_commit_sha === $sha
+            ? $repository->currentEvidence()->get()->keyBy('path')
+            : collect();
 
         // Legacy imports (evidence but no inventory rows) fall through to a
         // full re-import so inventory and evidence stay consistent.
@@ -128,6 +183,15 @@ class GitHubRepositoryImporter
             $skipped[] = $skip;
         }
 
+        // Stored evidence wins: a path already imported for this commit is
+        // kept (reused below), never re-listed as an exclusion.
+        if ($existingEvidence->isNotEmpty()) {
+            $skipped = array_values(array_filter(
+                $skipped,
+                fn ($s) => ! $existingEvidence->has($s['path'])
+            ));
+        }
+
         // Ineligible rows already carry status=skipped from storeInventory.
         $this->markInventory($repository, $sha, $queue, $plannedSkips);
 
@@ -143,6 +207,18 @@ class GitHubRepositoryImporter
 
         foreach ($queue as $item) {
             $entry = $byPath[$item['path']];
+
+            $reused = $existingEvidence->get($item['path']);
+
+            if ($reused !== null) {
+                // Identical blob: reuse stored bytes without another download.
+                // Always kept — a stored file is never budget-skipped twice —
+                // but still counted so later files face the true remainder.
+                $approxTokens += (int) ceil(strlen((string) $reused->content) / 4);
+                $files[] = $this->reuseFileArray($reused, $entry['score']);
+
+                continue;
+            }
 
             try {
                 $fetched = $this->client->getFileContent(
@@ -188,8 +264,8 @@ class GitHubRepositoryImporter
             $entryTokens = (int) ceil(strlen($extracted['content']) / 4);
 
             if ($approxTokens + $entryTokens > $tokenBudget) {
-                $skipped[] = ['path' => $item['path'], 'reason' => 'evidence budget exhausted'];
-                $this->setInventoryStatus($repository, $sha, $item['path'], 'skipped', 'evidence budget exhausted');
+                $skipped[] = ['path' => $item['path'], 'reason' => 'evidence token budget exhausted'];
+                $this->setInventoryStatus($repository, $sha, $item['path'], 'skipped', 'evidence token budget exhausted');
 
                 continue;
             }
@@ -211,10 +287,37 @@ class GitHubRepositoryImporter
             ];
         }
 
+        // Previously stored but no longer queued (e.g. tighter budgets):
+        // retained and grandfathered — never deleted, never re-skipped.
+        $filePaths = array_flip(array_column($files, 'path'));
+        $retained = 0;
+
+        foreach ($existingEvidence as $path => $existing) {
+            if (isset($filePaths[$path])) {
+                continue;
+            }
+
+            $retained++;
+            $files[] = $this->reuseFileArray($existing, $byPath->get($path)['score'] ?? $existing->relevance_score);
+        }
+
+        if ($retained > 0) {
+            $warnings[] = sprintf(
+                'Budgets tightened since the previous import; %d previously stored file(s) were retained and are grandfathered outside the current budgets.',
+                $retained
+            );
+        }
+
+        // Defense in depth: a stored path is never an exclusion.
+        $storedPaths = array_flip(array_column($files, 'path'));
+        $skipped = array_values(array_filter($skipped, fn ($s) => ! isset($storedPaths[$s['path']])));
+
         // Deterministic skip order for stable summaries.
         usort($skipped, fn ($a, $b) => [$a['path'], $a['reason']] <=> [$b['path'], $b['reason']]);
 
         $partial = count(array_filter($files, fn ($f) => $f['is_partial']));
+
+        $subsystems = collect($inventory['entries'])->mapWithKeys(fn ($e) => [$e['path'] => $e['subsystem']]);
 
         $result = $this->manifest->persist($repository, $sha, $files, $skipped, $warnings, [
             'inventory' => [
@@ -227,9 +330,10 @@ class GitHubRepositoryImporter
                 'capped' => $inventory['capped'],
                 'over_cap' => $inventory['over_cap'],
             ],
-            'coverage' => $this->coverage($files, $byPath),
+            'coverage' => $this->coverage($files, $subsystems),
             'excluded_by_reason' => $this->tallyReasons($skipped),
             'missing_relevant' => $this->missingRelevant($skipped, $byPath),
+            'budgets' => self::budgetSnapshot($config),
         ]);
 
         $this->linkStored($repository, $sha, $result['manifest']);
@@ -271,6 +375,7 @@ class GitHubRepositoryImporter
         $skipped = [];
         $files = [];
         $paths = array_values(array_unique($paths));
+        $fetchedCount = 0;
 
         foreach (array_slice($paths, 0, max(1, $max)) as $path) {
             $row = $repository->inventoryFiles()->where('commit_sha', $sha)->where('path', $path)->first();
@@ -301,6 +406,7 @@ class GitHubRepositoryImporter
                 continue;
             }
 
+            $fetchedCount++;
             $content = $fetched['content'];
 
             if (! mb_check_encoding($content, 'UTF-8') || str_contains($content, "\0") || $content === '') {
@@ -329,28 +435,121 @@ class GitHubRepositoryImporter
             $stored[] = $path;
         }
 
-        if ($files !== []) {
-            $summary = $repository->last_import_summary ?? [];
-            $priorSkipped = $summary['skipped'] ?? [];
-            $priorSkipped = array_values(array_filter(
-                $priorSkipped,
-                fn ($s) => ! in_array($s['path'] ?? null, $stored, true)
-            ));
-
-            $result = $this->manifest->persist($repository, $sha, $files, $priorSkipped, $summary['warnings'] ?? [], [
-                'inventory' => $summary['inventory'] ?? [],
-                'coverage' => $summary['coverage'] ?? [],
-                'excluded_by_reason' => $summary['excluded_by_reason'] ?? [],
-                'missing_relevant' => array_values(array_filter(
-                    $summary['missing_relevant'] ?? [],
-                    fn ($m) => ! in_array($m['path'] ?? null, $stored, true)
-                )),
-            ]);
-
-            $this->linkStored($repository, $sha, $result['manifest']);
-        }
+        $this->mergeSecondPass($repository, $sha, $files, $stored, $skipped, $fetchedCount, $config);
 
         return ['stored' => $stored, 'skipped' => $skipped];
+    }
+
+    /**
+     * Merge a second-pass fetch into the stored summary without breaking its
+     * invariants: the manifest stays the union of all current evidence (so
+     * files/bytes/tokens are totals), skipped drops newly stored paths and
+     * absorbs fresh fetch outcomes, and every derived tally is recomputed.
+     *
+     * @param  list<array<string, mixed>>  $files
+     * @param  list<string>  $stored
+     * @param  list<array{path: string, reason: string}>  $skipped
+     * @param  array<string, mixed>  $config
+     */
+    private function mergeSecondPass(
+        Repository $repository,
+        string $sha,
+        array $files,
+        array $stored,
+        array $skipped,
+        int $fetchedCount,
+        array $config,
+    ): void {
+        $summary = $repository->last_import_summary ?? [];
+        $priorSkipped = $summary['skipped'] ?? [];
+
+        // Drop newly stored paths; merge fresh fetch outcomes (latest reason
+        // wins per path). Non-inventory pseudo-skips are call-site feedback
+        // only and must never enter the exclusion list.
+        $byPath = [];
+
+        foreach ($priorSkipped as $entry) {
+            if (isset($entry['path']) && ! in_array($entry['path'], $stored, true)) {
+                $byPath[$entry['path']] = $entry['reason'] ?? 'unsupported format';
+            }
+        }
+
+        foreach ($skipped as $entry) {
+            if (in_array($entry['reason'], ['not in inventory', 'already imported'], true)) {
+                continue;
+            }
+
+            $byPath[$entry['path']] = $entry['reason'];
+        }
+
+        foreach ($repository->currentEvidence()->pluck('path')->all() as $storedPath) {
+            unset($byPath[$storedPath]);
+        }
+
+        $finalSkipped = [];
+
+        foreach ($byPath as $path => $reason) {
+            $finalSkipped[] = ['path' => $path, 'reason' => $reason];
+        }
+
+        usort($finalSkipped, fn ($a, $b) => [$a['path'], $a['reason']] <=> [$b['path'], $b['reason']]);
+
+        if ($files === []) {
+            if ($finalSkipped !== $priorSkipped) {
+                $repository->forceFill(['last_import_summary' => array_merge($summary, [
+                    'skipped' => $finalSkipped,
+                    'excluded_by_reason' => $this->tallyReasons($finalSkipped),
+                ])])->save();
+            }
+
+            return;
+        }
+
+        // Union manifest: existing rows (from the database) plus the newly
+        // downloaded files, deduplicated by path (stored bytes win).
+        $unionByPath = [];
+
+        foreach ($repository->currentEvidence()->get() as $row) {
+            $unionByPath[$row->path] = $this->reuseFileArray($row, $row->relevance_score);
+        }
+
+        foreach ($files as $file) {
+            $unionByPath[$file['path']] ??= $file;
+        }
+
+        $union = array_values($unionByPath);
+
+        $inventory = $summary['inventory'] ?? [];
+        $inventory['downloaded'] = ($inventory['downloaded'] ?? 0) + $fetchedCount;
+        $inventory['stored'] = count($union);
+        $inventory['partial'] = count(array_filter($union, fn ($f) => (bool) ($f['is_partial'] ?? false)));
+
+        $coverage = $summary['coverage'] ?? [];
+        $subsystems = $repository->inventoryFiles()
+            ->where('commit_sha', $sha)
+            ->whereIn('path', $stored)
+            ->pluck('subsystem', 'path');
+
+        foreach ($stored as $path) {
+            $subsystem = $subsystems[$path] ?? '(root)';
+            $coverage[$subsystem] = ($coverage[$subsystem] ?? 0) + 1;
+        }
+
+        ksort($coverage);
+
+        $result = $this->manifest->persist($repository, $sha, $union, $finalSkipped, $summary['warnings'] ?? [], [
+            'inventory' => $inventory,
+            'coverage' => $coverage,
+            'excluded_by_reason' => $this->tallyReasons($finalSkipped),
+            'missing_relevant' => array_values(array_filter(
+                $summary['missing_relevant'] ?? [],
+                fn ($m) => ! in_array($m['path'] ?? null, $stored, true)
+            )),
+            'imported_at' => $summary['imported_at'] ?? now()->toIso8601String(),
+            'budgets' => $summary['budgets'] ?? self::budgetSnapshot($config),
+        ]);
+
+        $this->linkStored($repository, $sha, $result['manifest']);
     }
 
     /**
@@ -536,9 +735,37 @@ class GitHubRepositoryImporter
             )->update([
                 'status' => 'stored',
                 'skip_reason' => null,
+                // Stored implies eligible: clears stale ineligibility when a
+                // retained file no longer passes the current classifier.
+                'eligible' => true,
                 'evidence_source_id' => $item['source_id'],
             ]);
         }
+    }
+
+    /**
+     * Manifest file array rebuilt from a stored evidence row (same-commit
+     * re-import or second-pass union). persist() resolves it to the existing
+     * row by identity hash, so stored bytes and the source id are preserved.
+     */
+    private function reuseFileArray(EvidenceSource $existing, mixed $score): array
+    {
+        $content = (string) $existing->content;
+
+        return [
+            'path' => $existing->path,
+            'url' => $existing->url,
+            'content' => $content,
+            'size' => strlen($content),
+            'is_partial' => (bool) $existing->is_partial,
+            'line_ranges' => $existing->line_ranges,
+            'original_bytes' => $existing->original_bytes ?? strlen($content),
+            'original_lines' => $existing->original_lines,
+            'relevance_score' => is_int($score) ? $score : $existing->relevance_score,
+            'language' => $existing->language,
+            'blob_sha' => $existing->blob_sha,
+            'extraction_note' => $existing->extraction_note,
+        ];
     }
 
     /**
@@ -587,14 +814,15 @@ class GitHubRepositoryImporter
 
     /**
      * @param  list<array{path: string}>  $files
+     * @param  Collection<string, string>  $subsystems  path => subsystem
      * @return array<string, int> subsystem => stored files
      */
-    private function coverage(array $files, mixed $byPath): array
+    private function coverage(array $files, Collection $subsystems): array
     {
         $coverage = [];
 
         foreach ($files as $file) {
-            $subsystem = $byPath[$file['path']]['subsystem'] ?? '(root)';
+            $subsystem = $subsystems->get($file['path'], '(root)');
             $coverage[$subsystem] = ($coverage[$subsystem] ?? 0) + 1;
         }
 
@@ -635,7 +863,7 @@ class GitHubRepositoryImporter
                 continue;
             }
 
-            if (! in_array($skip['reason'], ['low relevance', 'evidence budget exhausted', 'download failed'], true)) {
+            if (! in_array($skip['reason'], ['file count limit reached', 'download budget exhausted', 'evidence byte budget exhausted', 'evidence token budget exhausted', 'download failed'], true)) {
                 continue;
             }
 

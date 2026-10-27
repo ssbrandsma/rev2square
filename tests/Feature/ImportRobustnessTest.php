@@ -273,7 +273,7 @@ class ImportRobustnessTest extends TestCase
             ->assertSee('Discovered', false)
             ->assertSee('Subsystem coverage', false)
             ->assertSee('Excluded files', false)
-            ->assertSee('low relevance', false)
+            ->assertSee('file count limit reached', false)
             ->assertSee('Relevant files not imported', false);
     }
 }

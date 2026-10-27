@@ -224,6 +224,18 @@ class RevivalAnalysisTest extends TestCase
         $this->assertNotNull($request->jsonSchema);
     }
 
+    public function test_analysis_request_carries_run_correlation_id(): void
+    {
+        ['project' => $project, 'repository' => $repository] = $this->seedEvidence(['README.md' => 'x']);
+        MockAIProvider::fake([MockAIProvider::reportPayload($this->sourceRefs($repository))]);
+
+        $run = $this->makeRun($project, $repository);
+        app(RevivalAnalysisService::class)->analyze($run->fresh());
+
+        $this->assertCount(1, MockAIProvider::$requests);
+        $this->assertSame('analysis-run-'.$run->id, MockAIProvider::$requests[0]->correlationId);
+    }
+
     public function test_reanalysis_creates_new_version_without_overwriting(): void
     {
         ['project' => $project, 'repository' => $repository] = $this->seedEvidence(['README.md' => 'v1 then v2']);
