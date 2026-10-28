@@ -22,4 +22,13 @@ class DeviceVariant extends Model
     {
         return $this->belongsTo(Device::class);
     }
+
+    public function displayLabel(): string
+    {
+        return trim(collect([
+            $this->device?->displayName(),
+            $this->hardware_revision ? 'rev '.$this->hardware_revision : null,
+            $this->firmware_version ? 'fw '.$this->firmware_version : null,
+        ])->filter()->implode(' · ')) ?: 'Variant #'.$this->id;
+    }
 }

@@ -4,7 +4,9 @@ namespace App\Providers;
 
 use App\Services\AI\AIProviderInterface;
 use App\Services\AI\MetaAIProvider;
+use App\Services\GitHub\ArchiveDownloader;
 use App\Services\GitHub\GitHubClient;
+use App\Services\Revival\ArchiveRepositoryImporter;
 use App\Services\Revival\EvidenceManifestBuilder;
 use App\Services\Revival\GitHubRepositoryImporter;
 use Illuminate\Support\Facades\URL;
@@ -22,6 +24,12 @@ class AppServiceProvider extends ServiceProvider
         $this->app->singleton(EvidenceManifestBuilder::class);
         $this->app->singleton(GitHubRepositoryImporter::class, fn ($app) => new GitHubRepositoryImporter(
             $app->make(GitHubClient::class),
+            $app->make(EvidenceManifestBuilder::class),
+        ));
+        $this->app->singleton(ArchiveDownloader::class, fn () => ArchiveDownloader::fromConfig());
+        $this->app->singleton(ArchiveRepositoryImporter::class, fn ($app) => new ArchiveRepositoryImporter(
+            $app->make(GitHubClient::class),
+            $app->make(ArchiveDownloader::class),
             $app->make(EvidenceManifestBuilder::class),
         ));
         $this->app->singleton(MetaAIProvider::class, fn () => MetaAIProvider::fromConfig());

@@ -64,4 +64,22 @@ class AnalysisRun extends Model
     {
         return $this->hasOne(AnalysisReport::class);
     }
+
+    /**
+     * True when the repository has been re-imported at a different commit
+     * since this run recorded its evidence. Runs without a recorded commit
+     * (older runs, failed ingests) are never marked stale.
+     */
+    public function isEvidenceStale(): bool
+    {
+        $sha = $this->input_manifest['commit_sha'] ?? null;
+
+        if (! is_string($sha) || $sha === '' || $this->repository === null) {
+            return false;
+        }
+
+        $current = $this->repository->last_commit_sha;
+
+        return is_string($current) && $current !== '' && $current !== $sha;
+    }
 }

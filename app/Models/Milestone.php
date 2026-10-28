@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Enums\ContentOrigin;
 use App\Enums\MilestoneStatus;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -24,6 +25,8 @@ class Milestone extends Model
         'origin_report_id',
         'last_seen_report_id',
         'manually_edited',
+        'origin',
+        'retired_at',
     ];
 
     protected function casts(): array
@@ -32,7 +35,20 @@ class Milestone extends Model
             'status' => MilestoneStatus::class,
             'target_date' => 'date',
             'manually_edited' => 'boolean',
+            'origin' => ContentOrigin::class,
+            'retired_at' => 'datetime',
         ];
+    }
+
+    /** @param Builder<Milestone> $query */
+    public function scopeActive(Builder $query): Builder
+    {
+        return $query->whereNull('retired_at');
+    }
+
+    public function isRetired(): bool
+    {
+        return $this->retired_at !== null;
     }
 
     /** @return BelongsTo<Project, $this> */

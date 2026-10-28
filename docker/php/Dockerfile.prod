@@ -71,11 +71,17 @@ COPY . .
 COPY --from=vendor /src/vendor ./vendor
 COPY --from=assets /src/public/build ./public/build
 
+# COPY preserves worktree mode bits, so a restrictive checkout umask on the
+# build host would otherwise bake files into the image that the www-data
+# runtime user cannot read (autoload include then fails with "Permission
+# denied"). a+rX restores world read (+execute on directories) without
+# changing ownership or granting write: the tree stays root-owned read-only.
 # Writable dirs for the www-data runtime user; everything else stays
 # root-owned and read-only at runtime. .config holds the PsySH history so
 # `php artisan tinker` works for operators (otherwise its startup notice
 # escalates to a fatal under Laravel's error handler).
-RUN mkdir -p /var/www/.config/psysh \
+RUN chmod -R a+rX /var/www \
+    && mkdir -p /var/www/.config/psysh \
     && chown -R www-data:www-data /var/www/storage /var/www/bootstrap/cache /var/www/.config
 
 USER www-data

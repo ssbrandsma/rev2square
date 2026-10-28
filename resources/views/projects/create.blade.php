@@ -1,7 +1,7 @@
 <x-app-layout>
     <x-slot name="header">
-        <p class="font-mono text-xs uppercase tracking-widest text-emerald-700">New project</p>
-        <h1 class="mt-1 text-2xl font-extrabold tracking-tight">Start a revival</h1>
+        <p class="text-sm font-semibold text-emerald-700">New project</p>
+        <h1 class="mt-1 text-[1.75rem] font-semibold leading-tight tracking-tight sm:text-3xl">Start a revival</h1>
     </x-slot>
     <div class="mx-auto max-w-3xl px-4 py-10 sm:px-6">
         <form method="POST" action="{{ route('projects.store') }}" class="rounded-xl border border-zinc-200 bg-white p-6 sm:p-8">

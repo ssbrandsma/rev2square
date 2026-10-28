@@ -1,8 +1,8 @@
 <x-app-layout>
     <x-slot name="title">Report v{{ $report->version_number }} — {{ $project->title }}</x-slot>
     <x-slot name="header">
-        <p class="font-mono text-xs uppercase tracking-widest text-emerald-700">AI revival report · v{{ $report->version_number }}</p>
-        <h1 class="mt-1 text-2xl font-extrabold tracking-tight">{{ $project->title }}</h1>
+        <p class="text-sm font-semibold text-emerald-700">AI revival report · v{{ $report->version_number }}</p>
+        <h1 class="mt-1 text-[1.75rem] font-semibold leading-tight tracking-tight sm:text-3xl">{{ $project->title }}</h1>
         <p class="mt-1 text-sm text-zinc-600"><a href="{{ route('projects.evidence', $project) }}" class="font-semibold text-emerald-700">← Back to evidence</a></p>
     </x-slot>
 
@@ -20,7 +20,7 @@
         </p>
 
         <section class="mt-6 rounded-xl border border-zinc-200 bg-zinc-50 p-5">
-            <h2 class="text-sm font-bold">Maintainer review</h2>
+            <h2 class="text-sm font-semibold">Maintainer review</h2>
             @if($report->review_status->value === 'PENDING_REVIEW')
                 <form method="POST" action="{{ route('projects.reports.approve', [$project, $report]) }}" class="mt-3">
                     @csrf
@@ -46,13 +46,13 @@
         </section>
 
         <section class="mt-8">
-            <h2 class="font-mono text-xs uppercase tracking-widest text-zinc-500">Assessment summary</h2>
+            <h2 class="text-sm font-semibold text-zinc-500">Assessment summary</h2>
             <p class="mt-2 leading-relaxed text-zinc-800">{{ $payload['summary'] ?? '' }}</p>
             <p class="mt-2 text-sm text-zinc-600"><span class="font-semibold text-zinc-900">Goal:</span> {{ $payload['goal'] ?? '' }}</p>
         </section>
 
         <section class="mt-10">
-            <h2 class="font-mono text-xs uppercase tracking-widest text-zinc-500">Findings ({{ count($payload['findings'] ?? []) }})</h2>
+            <h2 class="text-sm font-semibold text-zinc-500">Findings ({{ count($payload['findings'] ?? []) }})</h2>
             <div class="mt-3 space-y-4">
                 @forelse($payload['findings'] ?? [] as $finding)
                     @include('projects.reports._finding', ['finding' => $finding, 'evidenceById' => $evidenceById, 'sourcesById' => $sourcesById])
@@ -63,7 +63,7 @@
         </section>
 
         <section class="mt-10">
-            <h2 class="font-mono text-xs uppercase tracking-widest text-zinc-500">Open unknowns ({{ count($payload['unknowns'] ?? []) }})</h2>
+            <h2 class="text-sm font-semibold text-zinc-500">Open unknowns ({{ count($payload['unknowns'] ?? []) }})</h2>
             <ul class="mt-3 space-y-2">
                 @foreach($payload['unknowns'] ?? [] as $unknown)
                     <li class="rounded-xl border border-zinc-200 bg-white p-4 text-sm">
@@ -75,7 +75,7 @@
         </section>
 
         <section class="mt-10">
-            <h2 class="font-mono text-xs uppercase tracking-widest text-zinc-500">Revival approaches ({{ count($payload['revival_paths'] ?? []) }})</h2>
+            <h2 class="text-sm font-semibold text-zinc-500">Revival approaches ({{ count($payload['revival_paths'] ?? []) }})</h2>
             <div class="mt-3 space-y-4">
                 @foreach($payload['revival_paths'] ?? [] as $path)
                     @include('projects.reports._path', ['path' => $path])
@@ -84,7 +84,7 @@
         </section>
 
         <section class="mt-10">
-            <h2 class="font-mono text-xs uppercase tracking-widest text-zinc-500">Proposed experiments ({{ count($payload['experiments'] ?? []) }})</h2>
+            <h2 class="text-sm font-semibold text-zinc-500">Proposed experiments ({{ count($payload['experiments'] ?? []) }})</h2>
             <div class="mt-3 space-y-4">
                 @foreach($payload['experiments'] ?? [] as $experiment)
                     @include('projects.reports._experiment', ['experiment' => $experiment])
@@ -93,7 +93,7 @@
         </section>
 
         <section class="mt-10">
-            <h2 class="font-mono text-xs uppercase tracking-widest text-zinc-500">Suggested roadmap</h2>
+            <h2 class="text-sm font-semibold text-zinc-500">Suggested roadmap</h2>
             <div class="mt-3 grid gap-4 md:grid-cols-2">
                 <div>
                     <h3 class="text-sm font-bold">Milestones</h3>
@@ -119,7 +119,7 @@
 
         @if(!empty($payload['warnings'] ?? []))
             <section class="mt-10 rounded-xl border border-amber-300 bg-amber-50 p-5">
-                <h2 class="font-mono text-xs uppercase tracking-widest text-amber-800">Warnings</h2>
+                <h2 class="text-sm font-semibold text-amber-800">Warnings</h2>
                 <ul class="mt-2 list-disc pl-5 text-sm text-amber-900">
                     @foreach($payload['warnings'] as $warning)<li>{{ $warning }}</li>@endforeach
                 </ul>
@@ -127,12 +127,12 @@
         @endif
 
         <section class="mt-10 border-t border-zinc-200 pt-6">
-            <h2 class="font-mono text-xs uppercase tracking-widest text-zinc-500">Provenance</h2>
+            <h2 class="text-sm font-semibold text-zinc-500">Provenance</h2>
             <dl class="mt-2 grid gap-2 text-sm text-zinc-600 sm:grid-cols-2">
-                <div><dt class="font-mono text-xs uppercase">Model</dt><dd>{{ $report->run->model ?? 'unknown' }} ({{ $report->run->provider }})</dd></div>
-                <div><dt class="font-mono text-xs uppercase">Schema</dt><dd>v{{ $report->run->schema_version }}</dd></div>
-                <div><dt class="font-mono text-xs uppercase">Run</dt><dd>#{{ $report->run->id }} · {{ $report->created_at->diffForHumans() }}</dd></div>
-                <div><dt class="font-mono text-xs uppercase">Tokens</dt><dd>{{ $report->run->token_usage['total'] ?? 'n/a' }} (in {{ $report->run->token_usage['input'] ?? '?' }} / out {{ $report->run->token_usage['output'] ?? '?' }})</dd></div>
+                <div><dt class="text-xs font-semibold text-zinc-500">Model</dt><dd>{{ $report->run->model ?? 'unknown' }} ({{ $report->run->provider }})</dd></div>
+                <div><dt class="text-xs font-semibold text-zinc-500">Schema</dt><dd>v{{ $report->run->schema_version }}</dd></div>
+                <div><dt class="text-xs font-semibold text-zinc-500">Run</dt><dd>#{{ $report->run->id }} · {{ $report->created_at->diffForHumans() }}</dd></div>
+                <div><dt class="text-xs font-semibold text-zinc-500">Tokens</dt><dd>{{ $report->run->token_usage['total'] ?? 'n/a' }} (in {{ $report->run->token_usage['input'] ?? '?' }} / out {{ $report->run->token_usage['output'] ?? '?' }})</dd></div>
             </dl>
             <h3 class="mt-6 text-sm font-bold">Report history</h3>
             <ul class="mt-2 space-y-1 text-sm">

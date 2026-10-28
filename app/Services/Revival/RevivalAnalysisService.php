@@ -51,7 +51,7 @@ class RevivalAnalysisService
         }
 
         $selection = EvidenceSelector::select($sources, (int) config('ai.analysis_token_budget'));
-        $this->runs->recordInputManifest($run, $selection['included'], $selection['excluded']);
+        $this->runs->recordInputManifest($run, $selection['included'], $selection['excluded'], $repository->last_commit_sha);
 
         $deviceLine = $project->devices->map->displayName()->implode(', ');
         $goal = $project->pitch ?: 'Assess revival feasibility.';

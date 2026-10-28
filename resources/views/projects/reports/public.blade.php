@@ -2,8 +2,8 @@
     <x-slot name="title">Revival assessment v{{ $report->version_number }} — {{ $project->title }}</x-slot>
     <section class="bg-zinc-950 text-white">
         <div class="mx-auto max-w-4xl px-4 py-12 sm:px-6">
-            <p class="font-mono text-xs uppercase tracking-widest text-zinc-400">Revival assessment · v{{ $report->version_number }} · reviewed by the maintainers</p>
-            <h1 class="mt-2 text-3xl font-extrabold tracking-tight">{{ $project->title }}</h1>
+            <p class="text-sm font-semibold text-zinc-400">Revival assessment · v{{ $report->version_number }} · reviewed by the maintainers</p>
+            <h1 class="mt-2 text-3xl font-semibold tracking-tight">{{ $project->title }}</h1>
             <p class="mt-3 max-w-2xl text-zinc-300">{{ $payload['summary'] ?? '' }}</p>
             <div class="mt-4 flex flex-wrap gap-2">
                 @foreach($payload['revival_paths'] ?? [] as $path)
@@ -28,13 +28,13 @@
 
         @if($report->review_notes)
             <section class="mt-6 rounded-xl border border-emerald-200 bg-emerald-50 p-5">
-                <h2 class="font-mono text-xs uppercase tracking-widest text-emerald-800">Maintainer notes</h2>
+                <h2 class="text-sm font-semibold text-emerald-800">Maintainer notes</h2>
                 <p class="mt-2 text-sm text-emerald-950">{{ $report->review_notes }}</p>
             </section>
         @endif
 
         <section class="mt-8">
-            <h2 class="font-mono text-xs uppercase tracking-widest text-zinc-500">Key findings</h2>
+            <h2 class="text-sm font-semibold text-zinc-500">Key findings</h2>
             <div class="mt-3 space-y-4">
                 @foreach(array_slice($payload['findings'] ?? [], 0, 5) as $finding)
                     @include('projects.reports._finding', ['finding' => $finding, 'evidenceById' => $evidenceById, 'sourcesById' => $sourcesById])
@@ -53,7 +53,7 @@
         </section>
 
         <section class="mt-8">
-            <h2 class="font-mono text-xs uppercase tracking-widest text-zinc-500">What is still unknown</h2>
+            <h2 class="text-sm font-semibold text-zinc-500">What is still unknown</h2>
             <ul class="mt-3 space-y-2">
                 @foreach($payload['unknowns'] ?? [] as $unknown)
                     <li class="rounded-xl border border-zinc-200 bg-white p-4 text-sm">
@@ -84,7 +84,7 @@
 
         @if(!empty($payload['warnings'] ?? []))
             <section class="mt-8 rounded-xl border border-amber-300 bg-amber-50 p-5">
-                <h2 class="font-mono text-xs uppercase tracking-widest text-amber-800">Caveats</h2>
+                <h2 class="text-sm font-semibold text-amber-800">Caveats</h2>
                 <ul class="mt-2 list-disc pl-5 text-sm text-amber-900">
                     @foreach($payload['warnings'] as $warning)<li>{{ $warning }}</li>@endforeach
                 </ul>
@@ -92,7 +92,7 @@
         @endif
 
         <section class="mt-8 border-t border-zinc-200 pt-6">
-            <h2 class="font-mono text-xs uppercase tracking-widest text-zinc-500">Provenance</h2>
+            <h2 class="text-sm font-semibold text-zinc-500">Provenance</h2>
             <p class="mt-2 text-sm text-zinc-600">AI-drafted with {{ $report->run->model ?? 'unknown model' }} and approved by the project maintainers on {{ $report->reviewed_at?->toDateString() ?? '—' }}. Published {{ $report->published_at?->diffForHumans() ?? '' }}.</p>
             @if($versions->count() > 1)
                 <h3 class="mt-4 text-sm font-bold">Earlier published assessments</h3>

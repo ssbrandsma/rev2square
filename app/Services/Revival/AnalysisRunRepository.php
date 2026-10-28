@@ -88,9 +88,10 @@ class AnalysisRunRepository
         });
     }
 
-    public function recordInputManifest(AnalysisRun $run, array $included, array $excluded): void
+    public function recordInputManifest(AnalysisRun $run, array $included, array $excluded, ?string $commitSha): void
     {
         $manifest = [
+            'commit_sha' => $commitSha,
             'included' => array_map(fn ($i) => ['source_id' => $i['source_id'], 'path' => $i['path']], $included),
             'excluded' => $excluded,
         ];

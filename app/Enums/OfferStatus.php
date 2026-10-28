@@ -7,6 +7,7 @@ enum OfferStatus: string
     case Pending = 'pending';
     case Accepted = 'accepted';
     case Declined = 'declined';
+    case Withdrawn = 'withdrawn';
 
     public function label(): string
     {
@@ -14,6 +15,7 @@ enum OfferStatus: string
             self::Pending => 'Pending',
             self::Accepted => 'Accepted',
             self::Declined => 'Declined',
+            self::Withdrawn => 'Withdrawn',
         };
     }
 }

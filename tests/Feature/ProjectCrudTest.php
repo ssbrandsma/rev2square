@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Enums\ProjectActivity;
 use App\Enums\ProjectPhase;
 use App\Enums\PublicationStatus;
+use App\Models\Device;
 use App\Models\Project;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -17,6 +18,7 @@ class ProjectCrudTest extends TestCase
     public function test_visitor_can_browse_published_projects(): void
     {
         $project = Project::factory()->create();
+        $project->devices()->sync([Device::factory()->create()->id => ['device_variant_id' => null]]);
 
         $this->get(route('home'))->assertOk()->assertSee($project->title);
         $this->get(route('projects.index'))->assertOk()->assertSeeLivewire('projects.explorer');

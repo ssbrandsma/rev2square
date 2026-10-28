@@ -2,7 +2,7 @@
 <div class="rounded-xl border border-zinc-200 bg-white p-5">
     <p class="font-bold">{{ $experiment['question'] }}</p>
     <p class="mt-1 text-sm italic text-zinc-600">Hypothesis: {{ $experiment['hypothesis'] }}</p>
-    <p class="mt-2 font-mono text-[11px] uppercase tracking-wider text-zinc-500">Proposed test — not yet performed</p>
+    <p class="mt-2 text-xs font-semibold text-zinc-500">Proposed test — not yet performed</p>
     <ol class="mt-2 list-decimal space-y-1 pl-5 text-sm text-zinc-700">
         @foreach($experiment['procedure'] ?? [] as $step)<li>{{ $step }}</li>@endforeach
     </ol>

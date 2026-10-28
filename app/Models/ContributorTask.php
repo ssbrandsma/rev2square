@@ -2,10 +2,13 @@
 
 namespace App\Models;
 
+use App\Enums\ContentOrigin;
 use App\Enums\TaskStatus;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class ContributorTask extends Model
 {
@@ -18,12 +21,14 @@ class ContributorTask extends Model
         'description',
         'skills',
         'status',
+        'assigned_to_user_id',
         'definition_of_done',
         'requires_hardware',
         'import_key',
         'origin_report_id',
         'last_seen_report_id',
         'manually_edited',
+        'origin',
     ];
 
     protected function casts(): array
@@ -33,7 +38,14 @@ class ContributorTask extends Model
             'status' => TaskStatus::class,
             'requires_hardware' => 'boolean',
             'manually_edited' => 'boolean',
+            'origin' => ContentOrigin::class,
         ];
+    }
+
+    /** @param Builder<ContributorTask> $query */
+    public function scopeActive(Builder $query): Builder
+    {
+        return $query->where('status', '!=', TaskStatus::Retired);
     }
 
     /** @return BelongsTo<Project, $this> */
@@ -46,6 +58,18 @@ class ContributorTask extends Model
     public function milestone(): BelongsTo
     {
         return $this->belongsTo(Milestone::class);
+    }
+
+    /** @return BelongsTo<User, $this> */
+    public function assignee(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'assigned_to_user_id');
+    }
+
+    /** @return HasMany<DiscussionPost, $this> */
+    public function discussionPosts(): HasMany
+    {
+        return $this->hasMany(DiscussionPost::class, 'contributor_task_id');
     }
 
     /** @return list<string> */

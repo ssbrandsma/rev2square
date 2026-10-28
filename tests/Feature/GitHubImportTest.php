@@ -313,6 +313,7 @@ class GitHubImportTest extends TestCase
 
     public function test_job_processes_successful_import(): void
     {
+        config(['revival.github.import_driver' => 'rest']);
         $this->fakeGitHub(['README.md' => 'queued']);
         $repository = $this->repository();
 

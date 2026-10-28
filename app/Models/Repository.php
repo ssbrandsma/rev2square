@@ -21,6 +21,9 @@ class Repository extends Model
         'last_commit_sha',
         'import_status',
         'import_error',
+        'import_started_at',
+        'next_retry_at',
+        'import_stage',
         'meta',
         'last_import_summary',
         'last_synced_at',
@@ -31,6 +34,8 @@ class Repository extends Model
         return [
             'meta' => 'array',
             'last_import_summary' => 'array',
+            'import_started_at' => 'datetime',
+            'next_retry_at' => 'datetime',
             'last_synced_at' => 'datetime',
         ];
     }

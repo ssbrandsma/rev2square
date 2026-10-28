@@ -41,6 +41,19 @@ return [
         // Bounded fallback when the recursive tree response is truncated:
         // at most this many per-subtree fetches are attempted.
         'max_subtree_fetches' => (int) env('GITHUB_MAX_SUBTREE_FETCHES', 20),
+        // Retrieval driver: 'archive' (one source archive per revision) or
+        // 'rest' (one API content request per file). Archive-first keeps
+        // per-file traffic off the REST quota entirely.
+        'import_driver' => env('GITHUB_IMPORT_DRIVER', 'archive'),
+        // Archive pipeline budgets. The archive is checksummed and cached by
+        // immutable revision; entries are streamed out of the zip, never
+        // extracted to disk, and nothing is executed.
+        'archive_timeout' => (int) env('GITHUB_ARCHIVE_TIMEOUT', 120),
+        'max_archive_bytes' => (int) env('GITHUB_MAX_ARCHIVE_BYTES', 100000000),
+        'max_expanded_bytes' => (int) env('GITHUB_MAX_EXPANDED_BYTES', 512000000),
+        'max_archive_entries' => (int) env('GITHUB_MAX_ARCHIVE_ENTRIES', 20000),
+        'max_archive_ratio' => (int) env('GITHUB_MAX_ARCHIVE_RATIO', 200),
+        'archive_cache_days' => (int) env('GITHUB_ARCHIVE_CACHE_DAYS', 30),
 
         'include_extensions' => [
             'md', 'markdown', 'txt', 'py', 'json', 'yml', 'yaml',
@@ -62,5 +75,12 @@ return [
         'max_attempts' => 10,
         'per_minutes' => 60,
     ],
+
+    // Stuck-import sweep (revival:sweep-stuck-imports, every 5 minutes).
+    // An import with no queued job older than the grace is failed; a queued
+    // import that never started older than the timeout is failed so a
+    // missing worker surfaces instead of hanging on Importing forever.
+    'import_stuck_grace_minutes' => (int) env('IMPORT_STUCK_GRACE_MINUTES', 15),
+    'import_start_timeout_minutes' => (int) env('IMPORT_START_TIMEOUT_MINUTES', 30),
 
 ];

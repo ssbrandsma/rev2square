@@ -140,10 +140,10 @@ class GitHubClient
             throw new RepositoryNotFoundException('Repository not found or not public.');
         }
 
-        if ($status === 429 || ($status === 403 && $this->rateLimitRemaining($response) === 0)) {
+        if (self::isRateLimited($response)) {
             throw new RateLimitedException(
                 'GitHub API rate limit exceeded. Try again later or configure a GITHUB_TOKEN.',
-                $this->rateLimitReset($response)
+                self::rateLimitResetsAt($response)
             );
         }
 
@@ -175,16 +175,35 @@ class GitHubClient
         return $headers;
     }
 
-    private function rateLimitRemaining(Response $response): ?int
+    /**
+     * Shared rate-limit classification for REST and archive downloads.
+     * A 429 is always a rate limit. A 403 is one when the primary quota
+     * is exhausted (remaining == 0) or when GitHub sends Retry-After
+     * (secondary limits); other statuses keep their own error.
+     */
+    public static function isRateLimited(Response $response): bool
     {
-        $value = $response->header('x-ratelimit-remaining');
+        $status = $response->status();
 
-        return is_numeric($value) ? (int) $value : null;
+        return $status === 429
+            || ($status === 403 && self::headerInt($response, 'x-ratelimit-remaining') === 0)
+            || ($status === 403 && self::headerInt($response, 'retry-after') !== null);
     }
 
-    private function rateLimitReset(Response $response): ?int
+    public static function rateLimitResetsAt(Response $response): ?int
     {
-        $value = $response->header('x-ratelimit-reset');
+        // Prefer an explicit pause over the quota window: same precedence
+        // as the Meta AI provider (MetaAIProvider 429 branch).
+        if (($retryAfter = self::headerInt($response, 'retry-after')) !== null) {
+            return time() + $retryAfter;
+        }
+
+        return self::headerInt($response, 'x-ratelimit-reset');
+    }
+
+    private static function headerInt(Response $response, string $name): ?int
+    {
+        $value = $response->header($name);
 
         return is_numeric($value) ? (int) $value : null;
     }

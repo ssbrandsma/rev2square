@@ -90,6 +90,9 @@ class EvidenceManifestBuilder
             'last_commit_sha' => $commitSha,
             'import_status' => 'ready',
             'import_error' => null,
+            'import_started_at' => null,
+            'next_retry_at' => null,
+            'import_stage' => null,
             'last_import_summary' => array_merge([
                 'files' => count($manifest),
                 'total_bytes' => $totalBytes,

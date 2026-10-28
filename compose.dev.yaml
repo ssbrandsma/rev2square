@@ -42,6 +42,10 @@ services:
     build:
       context: .
       dockerfile: docker/php/Dockerfile
+    # --max-time exits 0 hourly by design; the restart policy brings the
+    # worker back, same as production (an exited worker silently strands
+    # queued imports otherwise).
+    restart: unless-stopped
     command: ["php", "artisan", "queue:work", "--sleep=3", "--tries=3", "--max-time=3600"]
     volumes:
       - .:/var/www
@@ -54,6 +58,7 @@ services:
     build:
       context: .
       dockerfile: docker/php/Dockerfile
+    restart: unless-stopped
     command: ["php", "artisan", "schedule:work"]
     volumes:
       - .:/var/www
@@ -69,6 +74,17 @@ services:
     ports:
       - "5173:5173"
     command: ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "5173"]
+
+  # Self-hosted WebSocket server for chat + presence. Browsers reach it
+  # through nginx (/app/* proxy), so no host port is published.
+  reverb:
+    build:
+      context: .
+      dockerfile: docker/php/Dockerfile
+    restart: unless-stopped
+    command: ["php", "artisan", "reverb:start", "--host=0.0.0.0", "--port=8080"]
+    volumes:
+      - .:/var/www
 
 volumes:
   db-data:

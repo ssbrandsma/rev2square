@@ -1,7 +1,33 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/forms";
 
+/* Self-hosted Source Sans 3 (SIL OFL 1.1, @fontsource/source-sans-3):
+   body 400, navigation 500, semibold 600, strong 700. No external font
+   requests. */
+@import "@fontsource/source-sans-3/400.css";
+@import "@fontsource/source-sans-3/500.css";
+@import "@fontsource/source-sans-3/600.css";
+@import "@fontsource/source-sans-3/700.css";
+
 @theme {
-    --font-sans: "Figtree", ui-sans-serif, system-ui, sans-serif,
+    --font-sans: "Source Sans 3", ui-sans-serif, system-ui, sans-serif,
         "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+}
+
+@layer base {
+    /* 17px root: body copy lands around 17px with a relaxed measure. */
+    html {
+        font-size: 17px;
+    }
+
+    body {
+        line-height: 1.6;
+    }
+
+    /* Visible keyboard focus everywhere; calmer must not mean vaguer. */
+    :focus-visible {
+        outline: 2px solid var(--color-emerald-600);
+        outline-offset: 2px;
+        border-radius: 2px;
+    }
 }

@@ -17,6 +17,8 @@ class EvidenceController extends Controller
         return view('projects.evidence', [
             'project' => $project,
             'repository' => $repository,
+            'observations' => $project->observations()->with(['author', 'variant.device', 'verifiedBy'])->latest()->get(),
+            'testReports' => $project->testReports()->with(['author', 'variant.device', 'confirmedBy'])->latest()->get(),
         ]);
     }
 }

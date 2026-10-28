@@ -249,6 +249,20 @@ Behavior contract (what each line is for):
   websocket server (verified: no Reverb/Pusher/Echo/broadcast usage;
   `BROADCAST_CONNECTION=log`).
 
+Before pasting (Gate 2 pre-cutover inspection, read-only): dump the live
+`:443` vhost and confirm no conflicting proxy/rewrite rules. Expected on
+this host (verified Oct 2026): `ProxyPass /.well-known !` (keep),
+webmail/admin `RewriteRule` redirects (keep — they redirect before
+proxying), and a `FilesMatch \.php$` host-FPM handler (harmless: app
+URLs never end in `.php`; literal `*.php` probes keep 404ing on the
+host). Our snippet adds no `RewriteRule` and no second `.well-known`
+exclusion, so it composes with all three. Do NOT touch other vhosts.
+
+```sh
+[root]# httpd -S 2>&1 | grep -A3 'port 443 namevhost <domain>'
+[root]# sed -n '<first-line>,/<\/VirtualHost>/p' /etc/httpd/conf/httpd.conf | grep -nE 'ProxyPass|RewriteRule|SetHandler|ServerName|ServerAlias'
+```
+
 Verify (as root, after `apachectl configtest && systemctl reload httpd`):
 
 ```sh
@@ -287,9 +301,13 @@ change in the Apache snippet), `DOCKER_PLATFORM=linux/arm64`.
 ## 9. Initial installation
 
 ```sh
-[root]# git clone git@github.com:ssbrandsma/rev2square.git /srv/rev2square
+[root]# git ls-remote https://github.com/ssbrandsma/rev2square.git HEAD
+# expect: a line ending "HEAD" (anonymous read of the public repo; if this
+# fails, fix network/GitHub access before continuing)
+[root]# git clone https://github.com/ssbrandsma/rev2square.git /srv/rev2square
 [root]# cd /srv/rev2square
-[root]# git checkout main   # or the release SHA from the release notes
+[root]# git checkout <release-sha-from-release-notes>   # never an unreviewed main
+[root]# git rev-parse --short HEAD   # record in the release notes
 
 [root]# cp .env.virtualmin.example .env.virtualmin
 [root]# chmod 600 .env.virtualmin
@@ -309,7 +327,14 @@ change in the Apache snippet), `DOCKER_PLATFORM=linux/arm64`.
 [root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin up -d
 [root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin exec -T app php artisan migrate --force
 [root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin exec -T app php artisan db:seed --force
-[root]# ./docker/ops/status.sh --variant virtualmin
+# The seeder creates maintainer@rev2square.test with a PUBLISHED password
+# (see README). The stack is still loopback-only, so neutralize it
+# immediately, before any cutover ever exposes it:
+[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin exec -T app php artisan tinker --execute="App\Models\User::where('email','maintainer@rev2square.test')->firstOrFail()->forceFill(['password'=>Illuminate\Support\Facades\Hash::make(Illuminate\Support\Str::random(32))])->save(); echo 'seed password randomized'.PHP_EOL;"
+[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin exec -T app php artisan tinker --execute="echo 'known password still valid: '.(Illuminate\Support\Facades\Hash::check('password',App\Models\User::where('email','maintainer@rev2square.test')->firstOrFail()->password)?'YES-BAD':'no-good').PHP_EOL;"
+# expect: "seed password randomized" then "known password still valid: no-good"
+# (Re-running db:seed is safe: firstOrCreate never resets the password.)
+[root]# ./docker/ops/status.sh --variant virtualmin --url http://127.0.0.1:8081
 ```
 
 Then add the Apache snippet (section 7) and run its verification. The
@@ -346,9 +371,12 @@ inside the Compose network only.
 [root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin restart queue scheduler  # workers
 ```
 
-`down -v` deletes the database volume: never run it without a verified
-backup (section 13). Container logs are rotation-capped (10 MB x 3 per
-container, both variants) so `up`/`restart` cycles cannot fill the disk.
+Routine stop/start/retreat ALWAYS preserves volumes (`stop` or plain
+`down`). `down -v` DESTROYS the database volume: never run it unless
+explicitly authorized for that specific occasion, and never without a
+verified backup (section 13). Container logs are rotation-capped
+(10 MB x 3 per container, both variants) so `up`/`restart` cycles
+cannot fill the disk.
 
 ## 12. Application upgrades
 
@@ -428,6 +456,15 @@ from git, always reproducible):
 [root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin up -d
 [root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin exec -T app php artisan migrate --force
 [root]# ./docker/ops/status.sh --variant virtualmin
+```
+
+Full retreat (pre-cutover): plain `down` preserves the database volume
+for later inspection — prefer it over destroying anything:
+
+```sh
+[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin down
+# volumes kept. Destroy them ONLY with explicit authorization:
+# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin down -v
 ```
 
 Database rollback = `restore.sh --variant virtualmin` of a pre-upgrade

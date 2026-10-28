@@ -36,7 +36,7 @@ class ContributionOfferTest extends TestCase
                 'contributor_task_id' => $task->id,
                 'message' => 'I have the hardware and can run this test.',
             ])
-            ->assertRedirect(route('projects.show', $project));
+            ->assertRedirect(route('projects.offers.show', [$project, ContributionOffer::firstOrFail()]));
 
         $offer = ContributionOffer::firstOrFail();
         $this->assertSame($project->id, $offer->project_id);
