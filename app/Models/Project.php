@@ -12,6 +12,9 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
+use Illuminate\Database\Eloquent\Relations\MorphMany;
+use Illuminate\Support\Collection;
 
 class Project extends Model
 {
@@ -26,6 +29,7 @@ class Project extends Model
         'phase',
         'activity',
         'publication_status',
+        'discussion_open',
     ];
 
     protected function casts(): array
@@ -34,6 +38,7 @@ class Project extends Model
             'phase' => ProjectPhase::class,
             'activity' => ProjectActivity::class,
             'publication_status' => PublicationStatus::class,
+            'discussion_open' => 'boolean',
         ];
     }
 
@@ -46,6 +51,30 @@ class Project extends Model
     public function owner(): BelongsTo
     {
         return $this->belongsTo(User::class, 'owner_id');
+    }
+
+    /**
+     * Historical creator. Defaults to the owner at creation; ownership
+     * transfers (not yet implemented) must leave this untouched.
+     *
+     * @return BelongsTo<User, $this>
+     */
+    public function creator(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'created_by_user_id');
+    }
+
+    /** @return HasMany<SavedProject, $this> */
+    public function saves(): HasMany
+    {
+        return $this->hasMany(SavedProject::class);
+    }
+
+    protected static function booted(): void
+    {
+        static::creating(function (Project $project): void {
+            $project->created_by_user_id ??= $project->owner_id;
+        });
     }
 
     /** @return BelongsToMany<Device, $this> */
@@ -65,6 +94,12 @@ class Project extends Model
     public function repositories(): HasMany
     {
         return $this->hasMany(Repository::class);
+    }
+
+    /** @return HasOne<Repository, $this> */
+    public function repository(): HasOne
+    {
+        return $this->hasOne(Repository::class)->latestOfMany();
     }
 
     /** @return HasMany<AnalysisRun, $this> */
@@ -97,15 +132,85 @@ class Project extends Model
         return $this->hasMany(ContributorTask::class);
     }
 
+    /** @return HasMany<DiscussionPost, $this> */
+    public function discussionPosts(): HasMany
+    {
+        return $this->hasMany(DiscussionPost::class);
+    }
+
+    /** @return HasMany<DiscussionPost, $this> */
+    public function discussionThreads(): HasMany
+    {
+        return $this->hasMany(DiscussionPost::class)->whereNull('parent_id');
+    }
+
+    /** @return HasMany<ChatMessage, $this> */
+    public function chatMessages(): HasMany
+    {
+        return $this->hasMany(ChatMessage::class);
+    }
+
+    /** @return MorphMany<Follow, $this> */
+    public function follows(): MorphMany
+    {
+        return $this->morphMany(Follow::class, 'followable');
+    }
+
+    /** @return HasMany<Observation, $this> */
+    public function observations(): HasMany
+    {
+        return $this->hasMany(Observation::class);
+    }
+
+    /** @return HasMany<TestReport, $this> */
+    public function testReports(): HasMany
+    {
+        return $this->hasMany(TestReport::class);
+    }
+
     /** @param Builder<$this> $query */
     public function scopePublished(Builder $query): Builder
     {
         return $query->where('publication_status', PublicationStatus::Published->value);
     }
 
+    /**
+     * Homepage feature policy: published, not archived, and investigating a
+     * concrete linked device — matching the "Real devices" heading. Newest
+     * first; fewer than two eligible projects simply shows fewer cards.
+     *
+     * @param  Builder<$this>  $query
+     */
+    public function scopeFeaturable(Builder $query): Builder
+    {
+        return $query->published()
+            ->where('activity', '!=', ProjectActivity::Archived->value)
+            ->whereHas('devices');
+    }
+
     public function isPublished(): bool
     {
         return $this->publication_status === PublicationStatus::Published;
+    }
+
+    /**
+     * Owner plus active owner/maintainer members: everyone who should hear
+     * maintainer-side events (new offers, verification requests, ...).
+     *
+     * @return Collection<int, User>
+     */
+    public function managers(): Collection
+    {
+        $users = collect([$this->owner])->filter();
+
+        $memberUsers = $this->members()->with('user')
+            ->where('status', 'active')
+            ->whereIn('role', [ProjectRole::Owner->value, ProjectRole::Maintainer->value])
+            ->get()
+            ->pluck('user')
+            ->filter();
+
+        return $users->concat($memberUsers)->unique('id')->values();
     }
 
     public function managedBy(?User $user): bool

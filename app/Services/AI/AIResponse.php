@@ -12,6 +12,8 @@ class AIResponse
         public readonly ?int $outputTokens = null,
         public readonly int $durationMs = 0,
         public readonly ?string $finishReason = null,
+        /** @var list<AIToolCall>|null Model-requested tool invocations. */
+        public readonly ?array $toolCalls = null,
     ) {}
 
     public function totalTokens(): ?int

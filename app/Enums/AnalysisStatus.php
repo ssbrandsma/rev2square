@@ -9,6 +9,7 @@ enum AnalysisStatus: string
     case Ingesting = 'INGESTING';
     case Analyzing = 'ANALYZING';
     case ReadyForReview = 'READY_FOR_REVIEW';
+    case Ready = 'READY';
     case Published = 'PUBLISHED';
     case FailedIngest = 'FAILED_INGEST';
     case FailedModel = 'FAILED_MODEL';
@@ -23,6 +24,7 @@ enum AnalysisStatus: string
             self::Ingesting => 'Ingesting',
             self::Analyzing => 'Analyzing',
             self::ReadyForReview => 'Ready for review',
+            self::Ready => 'Ready',
             self::Published => 'Published',
             self::FailedIngest => 'Ingest failed',
             self::FailedModel => 'Model call failed',

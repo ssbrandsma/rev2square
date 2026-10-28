@@ -13,6 +13,9 @@ use Illuminate\Support\Facades\Log;
  * Request/response facts verified against https://dev.meta.ai/docs:
  * POST {base}/chat/completions, Bearer [REDACTED] auth,
  * response_format {type: json_schema}, content at choices[0].message.content.
+ * Native tool calling (tools / tool_calls / tool messages) is implemented
+ * against the documented protocol and covered by mocked tests only — it has
+ * NOT been verified against the live API in this delivery.
  * Exactly one structured entry per request (info on success, warning on
  * failure). Only non-sensitive metadata is logged — never keys, prompts,
  * completions or response bodies.
@@ -53,14 +56,26 @@ class MetaAIProvider implements AIProviderInterface
 
         $this->assertBaseUrl();
 
+        if ($request->tools !== null && $request->jsonSchema !== null) {
+            throw new AIProviderException('Meta Model API requests cannot combine tool calling with a JSON schema response format.');
+        }
+
         $payload = [
             'model' => $this->model,
-            'messages' => [
+            'messages' => $request->messages ?? [
                 ['role' => 'system', 'content' => $request->system],
                 ['role' => 'user', 'content' => $request->user],
             ],
             'max_completion_tokens' => $request->maxCompletionTokens ?? $this->maxCompletionTokens,
         ];
+
+        if ($request->tools !== null) {
+            // Native tool calling per the Chat Completions tool protocol:
+            // tools functions, tool_calls answers, tool messages.
+            // Serial calls keep the turn loop deterministic.
+            $payload['tools'] = $request->tools;
+            $payload['parallel_tool_calls'] = false;
+        }
 
         if ($request->jsonSchema !== null) {
             $payload['response_format'] = [
@@ -196,11 +211,17 @@ class MetaAIProvider implements AIProviderInterface
         }
 
         $content = $choices[0]['message']['content'] ?? null;
+        $rawToolCalls = $choices[0]['message']['tool_calls'] ?? null;
 
-        if (! is_string($content) || $content === '') {
-            throw new AIProviderException(
-                'Meta Model API returned an empty completion (finish_reason='.($choices[0]['finish_reason'] ?? 'unknown').').'
-            );
+        if ($rawToolCalls === null) {
+            if (! is_string($content) || $content === '') {
+                throw new AIProviderException(
+                    'Meta Model API returned an empty completion (finish_reason='.($choices[0]['finish_reason'] ?? 'unknown').').'
+                );
+            }
+        } elseif (! is_string($content)) {
+            // Tool-call turns legitimately carry empty content.
+            $content = '';
         }
 
         $usage = $data['usage'] ?? [];
@@ -213,7 +234,37 @@ class MetaAIProvider implements AIProviderInterface
             outputTokens: isset($usage['completion_tokens']) ? (int) $usage['completion_tokens'] : null,
             durationMs: $durationMs,
             finishReason: $choices[0]['finish_reason'] ?? null,
+            toolCalls: $rawToolCalls === null ? null : self::parseToolCalls($rawToolCalls),
         );
+    }
+
+    /** @return list<AIToolCall> */
+    private static function parseToolCalls(mixed $raw): array
+    {
+        if (! is_array($raw) || ! array_is_list($raw) || $raw === []) {
+            throw new AIProviderException('Meta Model API returned malformed tool_calls (expected a non-empty list).');
+        }
+
+        if (count($raw) > 8) {
+            throw new AIProviderException('Meta Model API returned too many tool_calls (max 8 per turn step).');
+        }
+
+        $calls = [];
+
+        foreach ($raw as $i => $entry) {
+            $id = is_array($entry) ? ($entry['id'] ?? null) : null;
+            $function = is_array($entry) ? ($entry['function'] ?? null) : null;
+            $name = is_array($function) ? ($function['name'] ?? null) : null;
+            $arguments = is_array($function) ? ($function['arguments'] ?? null) : null;
+
+            if (! is_string($id) || $id === '' || ! is_string($name) || $name === '' || ! is_string($arguments)) {
+                throw new AIProviderException("Meta Model API returned a malformed tool_calls entry at index {$i}.");
+            }
+
+            $calls[] = new AIToolCall($id, $name, $arguments);
+        }
+
+        return $calls;
     }
 
     /**
