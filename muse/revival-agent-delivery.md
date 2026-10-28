@@ -88,15 +88,14 @@ shell/SQL/URL/hardware/firmware capabilities anywhere in the tool surface.
 
 ## 3. Branch, baseline, and commit identifiers
 
-- Branch: `main` (unchanged — see below).
+- Branch: `main`.
 - Baseline: `72a3461` ("Rev2Square: fix evidence re-import consistency and
   improve Meta API diagnostics").
-- No new commits. The checkout held ~191 changed/untracked paths from prior
-  work (assignments 1–4, uncommitted) before this assignment started; creating
-  a branch or committing would either sweep unrelated work into the delivery
-  or risk disturbing it. Per WORKFLOW.md step 1, the baseline/cleanup decision
-  requires the owner. All AI-01/AI-02 changes are preserved in the working
-  tree, listed in §4.
+- Commit A (prior work, assignments 1–4): `d3d37f1`.
+- Commit B (this delivery, AI-01/AI-02): `ca57b23`.
+- This report's SHA record: see follow-up commit on `main`.
+- All AI-01/AI-02 changes are listed in §4 and contained in commit B
+  (plus this SHA-record update).
 
 ## 4. Explicit list of changed files
 
