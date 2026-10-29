@@ -34,7 +34,16 @@
             <a href="{{ route('dashboard') }}#saved" role="menuitem" class="block rounded-lg px-3 py-2 text-sm hover:bg-zinc-50">Saved projects</a>
             <a href="{{ route('inbox.index') }}" role="menuitem" class="block rounded-lg px-3 py-2 text-sm hover:bg-zinc-50">Inbox @if($unreadCount() > 0)({{ $unreadCount() }} unread)@endif</a>
             <a href="{{ route('dashboard') }}#applications" role="menuitem" class="block rounded-lg px-3 py-2 text-sm hover:bg-zinc-50">My applications</a>
+            <a href="{{ route('my-usage.show') }}" role="menuitem" class="block rounded-lg px-3 py-2 text-sm hover:bg-zinc-50">My AI usage</a>
             <a href="{{ route('profile.edit') }}" role="menuitem" class="block rounded-lg px-3 py-2 text-sm hover:bg-zinc-50">Edit profile &amp; account settings</a>
+            @can('admin')
+                <a href="{{ route('admin.dashboard') }}" role="menuitem" class="block rounded-lg px-3 py-2 text-sm font-semibold text-emerald-700 hover:bg-zinc-50">Administration</a>
+            @endcan
+            @can('moderate')
+                @cannot('admin')
+                    <a href="{{ route('admin.moderation.index') }}" role="menuitem" class="block rounded-lg px-3 py-2 text-sm font-semibold text-emerald-700 hover:bg-zinc-50">Moderation queue</a>
+                @endcannot
+            @endcan
         </div>
         <div class="mt-1 border-t border-zinc-100 pt-1">
             <form method="POST" action="{{ route('logout') }}" data-logout>

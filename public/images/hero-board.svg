@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 520" role="img" aria-labelledby="heroBoardTitle">
+  <title id="heroBoardTitle">Traced circuit paths converging on a chip</title>
+  <!-- Depth lines -->
+  <path d="M40 508 H600" stroke="#27272a" stroke-width="3" fill="none"/>
+  <path d="M614 130 V400" stroke="#27272a" stroke-width="3" fill="none"/>
+  <!-- Chip -->
+  <rect x="250" y="180" width="140" height="140" rx="8" fill="none" stroke="#3f3f46" stroke-width="3"/>
+  <path d="M250 200 H234 M250 228 H234 M250 256 H234 M250 284 H234 M390 200 H406 M390 228 H406 M390 256 H406 M390 284 H406 M270 180 V164 M298 180 V164 M326 180 V164 M354 180 V164 M270 320 V336 M298 320 V336 M326 320 V336 M354 320 V336" stroke="#3f3f46" stroke-width="3" fill="none"/>
+  <circle cx="264" cy="194" r="4" fill="#fbbf24"/>
+  <!-- Traces -->
+  <g stroke="#10b981" stroke-width="3" fill="none" opacity="0.55">
+    <path d="M234 200 H150 L110 160 H60"/>
+    <path d="M234 228 H120"/>
+    <path d="M234 256 H170 L130 296 H70"/>
+    <path d="M234 284 H160 L120 324 H80"/>
+    <path d="M406 200 H490 L530 160 H590"/>
+    <path d="M406 228 H520"/>
+    <path d="M406 256 H470 L510 296 H570"/>
+    <path d="M406 284 H480 L520 324 H580"/>
+    <path d="M270 164 V110 L300 80 H380"/>
+    <path d="M326 164 V100 H440"/>
+    <path d="M270 336 V400 L310 440 H420"/>
+    <path d="M298 336 V380 H200 L160 420 V470"/>
+    <path d="M326 336 V420 H380"/>
+    <path d="M354 336 V360 H450 L480 390 V410"/>
+    <path d="M490 452 V476 L504 490"/>
+    <path d="M530 452 V490"/>
+  </g>
+  <!-- End pads -->
+  <g fill="#18181b" stroke="#10b981" stroke-width="3">
+    <circle cx="60" cy="160" r="7"/>
+    <circle cx="120" cy="228" r="7"/>
+    <circle cx="70" cy="296" r="7"/>
+    <circle cx="80" cy="324" r="7"/>
+    <circle cx="590" cy="160" r="7"/>
+    <circle cx="520" cy="228" r="7"/>
+    <circle cx="570" cy="296" r="7"/>
+    <circle cx="580" cy="324" r="7"/>
+    <circle cx="380" cy="80" r="7"/>
+    <circle cx="440" cy="100" r="7"/>
+    <circle cx="420" cy="440" r="7"/>
+    <circle cx="160" cy="470" r="7"/>
+    <circle cx="380" cy="420" r="7"/>
+    <circle cx="504" cy="490" r="7"/>
+    <circle cx="530" cy="490" r="7"/>
+  </g>
+  <!-- Vias -->
+  <g fill="#18181b" stroke="#10b981" stroke-width="2.5">
+    <circle cx="190" cy="200" r="4"/>
+    <circle cx="450" cy="200" r="4"/>
+    <circle cx="240" cy="380" r="4"/>
+    <circle cx="326" cy="132" r="4"/>
+    <circle cx="480" cy="410" r="4"/>
+  </g>
+  <!-- Debug header -->
+  <g>
+    <rect x="470" y="420" width="12" height="12" rx="2" fill="#fbbf24"/>
+    <rect x="490" y="420" width="12" height="12" rx="2" fill="#3f3f46"/>
+    <rect x="510" y="420" width="12" height="12" rx="2" fill="#3f3f46"/>
+    <rect x="530" y="420" width="12" height="12" rx="2" fill="#3f3f46"/>
+    <rect x="550" y="420" width="12" height="12" rx="2" fill="#3f3f46"/>
+    <rect x="470" y="436" width="12" height="12" rx="2" fill="#3f3f46"/>
+    <rect x="490" y="436" width="12" height="12" rx="2" fill="#3f3f46"/>
+    <rect x="510" y="436" width="12" height="12" rx="2" fill="#3f3f46"/>
+    <rect x="530" y="436" width="12" height="12" rx="2" fill="#3f3f46"/>
+    <rect x="550" y="436" width="12" height="12" rx="2" fill="#3f3f46"/>
+  </g>
+  <!-- Test points -->
+  <circle cx="540" cy="368" r="5" fill="#fbbf24"/>
+  <circle cx="100" cy="420" r="5" fill="#fbbf24"/>
+  <circle cx="300" cy="470" r="5" fill="#fbbf24"/>
+  <!-- Labels -->
+  <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" fill="#a1a1aa">
+    <text x="552" y="372">TP1</text>
+    <text x="112" y="424">TP2</text>
+    <text x="312" y="474">3V3</text>
+    <text x="148" y="494">GND</text>
+  </g>
+  <text x="470" y="410" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" fill="#71717a">DBG</text>
+</svg>

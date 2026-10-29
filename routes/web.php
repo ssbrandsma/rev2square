@@ -1,9 +1,17 @@
 <?php
 
+use App\Http\Controllers\Admin\AuditController as AdminAuditController;
+use App\Http\Controllers\Admin\DashboardController as AdminDashboardController;
+use App\Http\Controllers\Admin\ModerationController as AdminModerationController;
+use App\Http\Controllers\Admin\SettingController as AdminSettingController;
+use App\Http\Controllers\Admin\UsageController as AdminUsageController;
+use App\Http\Controllers\Admin\UserController as AdminUserController;
 use App\Http\Controllers\AgentController;
 use App\Http\Controllers\ArchitectureController;
+use App\Http\Controllers\ArtifactController;
 use App\Http\Controllers\AttachmentController;
 use App\Http\Controllers\AvatarController;
+use App\Http\Controllers\BinaryAnalysisController;
 use App\Http\Controllers\ChatController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\DiscussionController;
@@ -11,8 +19,10 @@ use App\Http\Controllers\EvidenceController;
 use App\Http\Controllers\ExportController;
 use App\Http\Controllers\FollowController;
 use App\Http\Controllers\InboxController;
+use App\Http\Controllers\MediaController;
 use App\Http\Controllers\MilestoneController;
 use App\Http\Controllers\ModerationController;
+use App\Http\Controllers\MyUsageController;
 use App\Http\Controllers\ObservationController;
 use App\Http\Controllers\OfferController;
 use App\Http\Controllers\ProfileController;
@@ -29,12 +39,13 @@ use App\Models\Project;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
-    $featured = Project::featurable()->with(['devices', 'tasks'])->latest()->take(2)->get();
+    $featured = Project::featurable()->with(['devices', 'tasks', 'cover'])->latest()->take(2)->get();
 
     return view('welcome', ['featured' => $featured]);
 })->name('home');
 
 Route::view('/about', 'about')->name('about');
+Route::view('/suspended', 'suspended')->name('suspended');
 
 Route::get('/projects', [ProjectController::class, 'index'])->name('projects.index');
 
@@ -50,6 +61,8 @@ Route::get('/projects/{project}', [ProjectController::class, 'show'])->name('pro
 
 Route::get('/projects/{project}/evidence', [EvidenceController::class, 'show'])
     ->middleware('auth')->name('projects.evidence');
+Route::get('/projects/{project}/evidence/{source}', [EvidenceController::class, 'showSource'])
+    ->middleware('auth')->name('projects.evidence.show');
 Route::get('/projects/{project}/architecture', [ArchitectureController::class, 'show'])
     ->name('projects.architecture.show');
 Route::post('/projects/{project}/architecture', [ArchitectureController::class, 'store'])
@@ -64,6 +77,28 @@ Route::post('/projects/{project}/agent/{conversation}/messages', [AgentControlle
     ->middleware('auth')->name('projects.agent.message');
 Route::post('/projects/{project}/agent/messages/{message}/save', [AgentController::class, 'save'])
     ->middleware('auth')->name('projects.agent.save');
+Route::post('/projects/{project}/agent/investigate', [AgentController::class, 'investigate'])
+    ->middleware('auth')->name('projects.agent.investigate');
+Route::post('/projects/{project}/agent/{conversation}/withdraw-consent', [AgentController::class, 'withdrawConsent'])
+    ->middleware('auth')->name('projects.agent.withdraw-consent');
+Route::get('/projects/{project}/artifacts', [ArtifactController::class, 'index'])
+    ->middleware('auth')->name('projects.artifacts.index');
+Route::post('/projects/{project}/artifacts', [ArtifactController::class, 'store'])
+    ->middleware('auth')->name('projects.artifacts.store');
+Route::get('/projects/{project}/artifacts/{artifact}', [ArtifactController::class, 'show'])
+    ->middleware('auth')->name('projects.artifacts.show');
+Route::post('/projects/{project}/artifacts/{artifact}/retry', [ArtifactController::class, 'retry'])
+    ->middleware('auth')->name('projects.artifacts.retry');
+Route::delete('/projects/{project}/artifacts/{artifact}', [ArtifactController::class, 'destroy'])
+    ->middleware('auth')->name('projects.artifacts.destroy');
+Route::post('/projects/{project}/artifacts/{artifact}/analyses', [BinaryAnalysisController::class, 'store'])
+    ->middleware('auth')->name('projects.artifacts.analyses.store');
+Route::get('/projects/{project}/artifacts/{artifact}/analyses/{analysis}', [BinaryAnalysisController::class, 'show'])
+    ->middleware('auth')->name('projects.artifacts.analyses.show');
+Route::post('/projects/{project}/artifacts/{artifact}/analyses/{analysis}/cancel', [BinaryAnalysisController::class, 'cancel'])
+    ->middleware('auth')->name('projects.artifacts.analyses.cancel');
+Route::post('/projects/{project}/artifacts/{artifact}/analyses/{analysis}/retry', [BinaryAnalysisController::class, 'retry'])
+    ->middleware('auth')->name('projects.artifacts.analyses.retry');
 
 Route::get('/projects/{project}/reports/{report}', [ReportController::class, 'show'])
     ->name('projects.reports.show');
@@ -207,5 +242,60 @@ Route::middleware('auth')->group(function () {
 Route::get('/avatars/{user}', [AvatarController::class, 'show'])->name('avatars.show');
 Route::get('/u/{handle}', [PublicProfileController::class, 'byHandle'])
     ->where('handle', '[A-Za-z0-9_-]+')->name('users.handle');
+
+Route::get('/my/ai-usage', [MyUsageController::class, 'show'])
+    ->middleware('auth')->name('my-usage.show');
+
+Route::post('/projects/{project}/media/images', [MediaController::class, 'storeImage'])
+    ->middleware('auth')->name('projects.media.store-image');
+Route::post('/projects/{project}/media/files', [MediaController::class, 'storeFile'])
+    ->middleware('auth')->name('projects.media.store-file');
+Route::patch('/projects/{project}/media/{media}', [MediaController::class, 'update'])
+    ->middleware('auth')->name('projects.media.update');
+Route::post('/projects/{project}/media/reorder', [MediaController::class, 'reorder'])
+    ->middleware('auth')->name('projects.media.reorder');
+Route::post('/projects/{project}/media/{media}/cover', [MediaController::class, 'setCover'])
+    ->middleware('auth')->name('projects.media.cover');
+Route::post('/projects/{project}/media/{media}/retry', [MediaController::class, 'retry'])
+    ->middleware('auth')->name('projects.media.retry');
+Route::delete('/projects/{project}/media/cover', [MediaController::class, 'removeCover'])
+    ->middleware('auth')->name('projects.media.cover.destroy');
+Route::delete('/projects/{project}/media/{media}', [MediaController::class, 'destroy'])
+    ->middleware('auth')->name('projects.media.destroy');
+Route::get('/projects/{project}/media/{media}', [MediaController::class, 'show'])
+    ->name('projects.media.show');
+Route::get('/projects/{project}/media/{media}/download', [MediaController::class, 'download'])
+    ->name('projects.media.download');
+Route::patch('/projects/{project}/story', [ProjectController::class, 'updateStory'])
+    ->middleware('auth')->name('projects.story.update');
+
+// Admin area: every route re-authorizes server-side (hiding navigation
+// never secures a route). Consequential mutations additionally require
+// a recent password confirmation. No MFA facility exists in this
+// application (documented in the delivery report).
+Route::middleware(['auth', 'can:admin'])->prefix('admin')->name('admin.')->group(function () {
+    Route::get('/', [AdminDashboardController::class, 'index'])->name('dashboard');
+    Route::get('/users', [AdminUserController::class, 'index'])->name('users.index');
+    Route::get('/users/{user}', [AdminUserController::class, 'show'])->name('users.show');
+    Route::get('/users/{user}/edit', [AdminUserController::class, 'edit'])->name('users.edit');
+    Route::patch('/users/{user}', [AdminUserController::class, 'update'])->middleware('password.confirm')->name('users.update');
+    Route::post('/users/{user}/suspend', [AdminUserController::class, 'suspend'])->middleware('password.confirm')->name('users.suspend');
+    Route::post('/users/{user}/reactivate', [AdminUserController::class, 'reactivate'])->middleware('password.confirm')->name('users.reactivate');
+    Route::get('/settings', [AdminSettingController::class, 'index'])->name('settings.index');
+    Route::patch('/settings', [AdminSettingController::class, 'update'])->middleware('password.confirm')->name('settings.update');
+    Route::get('/settings/secrets', [AdminSettingController::class, 'secrets'])->name('settings.secrets');
+    Route::patch('/settings/secrets', [AdminSettingController::class, 'updateSecret'])->middleware('password.confirm')->name('settings.secrets.update');
+    Route::delete('/settings/secrets', [AdminSettingController::class, 'destroySecret'])->middleware('password.confirm')->name('settings.secrets.destroy');
+    Route::post('/settings/test-connection', [AdminSettingController::class, 'testConnection'])->middleware('password.confirm')->name('settings.test');
+    Route::get('/usage', [AdminUsageController::class, 'index'])->name('usage.index');
+    Route::get('/usage/export', [AdminUsageController::class, 'export'])->name('usage.export');
+    Route::get('/usage/users/{user}', [AdminUsageController::class, 'user'])->name('usage.user');
+    Route::get('/audit', [AdminAuditController::class, 'index'])->name('audit.index');
+});
+
+Route::middleware(['auth', 'can:moderate'])->prefix('admin')->name('admin.')->group(function () {
+    Route::get('/moderation', [AdminModerationController::class, 'index'])->name('moderation.index');
+    Route::post('/moderation/{report}', [AdminModerationController::class, 'review'])->name('moderation.review');
+});
 
 require __DIR__.'/auth.php';

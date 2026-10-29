@@ -62,6 +62,12 @@ class RevivalAnalysisService
             user: AnalysisPrompt::user($project, $deviceLine, $goal, $selection['included'], $context),
             jsonSchema: ReportSchema::jsonSchema(),
             correlationId: 'analysis-run-'.$run->id,
+            usage: [
+                'user_id' => $run->user_id,
+                'project_id' => $run->project_id,
+                'feature' => 'revival_investigator',
+                'operation' => 'analysis-run-'.$run->id,
+            ],
         );
 
         try {

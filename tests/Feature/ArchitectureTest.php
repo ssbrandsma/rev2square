@@ -9,10 +9,14 @@ use App\Models\EvidenceSource;
 use App\Models\Project;
 use App\Models\Repository;
 use App\Models\User;
+use App\Services\AI\AIProviderInterface;
 use App\Services\AI\AIRateLimitedException;
 use App\Services\AI\AITimeoutException;
+use App\Services\AI\MetaAIProvider;
 use App\Services\Revival\ArchitectureService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Http\Client\Request;
+use Illuminate\Support\Facades\Http;
 use Tests\Support\MockAIProvider;
 use Tests\TestCase;
 
@@ -88,6 +92,126 @@ class ArchitectureTest extends TestCase
         $page->assertOk();
         $page->assertSee('CLI entry point');
         $page->assertSee('data-architecture-diagram', false);
+        $page->assertSee('Entry imports helper');
+    }
+
+    public function test_real_provider_sends_strict_compatible_schema(): void
+    {
+        // End-to-end request-shape proof: the real Meta provider (HTTP
+        // faked) must accept the Investigator schema its own pre-send
+        // guard enforces, reach Ready, and render the diagram.
+        config(['ai.default' => 'meta']);
+        $this->app->bind(AIProviderInterface::class, fn () => new MetaAIProvider(
+            baseUrl: 'https://api.meta.ai/v1',
+            apiKey: 'test-key-value',
+            model: 'muse-spark-1.3',
+            timeout: 30,
+            maxCompletionTokens: 16000,
+        ));
+
+        [$project, , $owner] = $this->seedProject('ready', [
+            'main.py' => "import os\nprint('hi')\n",
+            'lib/util.py' => "def run():\n    return 1\n",
+        ]);
+        $payload = MockAIProvider::architecturePayload($this->cite($project));
+
+        Http::fake(['*' => Http::response([
+            'id' => 'chatcmpl-test',
+            'object' => 'chat.completion',
+            'created' => 1714502400,
+            'model' => 'muse-spark-1.3',
+            'choices' => [
+                [
+                    'message' => ['role' => 'assistant', 'content' => json_encode($payload)],
+                    'finish_reason' => 'stop',
+                ],
+            ],
+            'usage' => ['prompt_tokens' => 100, 'completion_tokens' => 50, 'total_tokens' => 150],
+        ], 200)]);
+
+        $this->actingAs($owner)->post(route('projects.architecture.store', $project));
+
+        $snapshot = ArchitectureSnapshot::where('project_id', $project->id)->latest('id')->first();
+        $this->assertNotNull($snapshot);
+        $this->assertSame(AnalysisStatus::Ready, $snapshot->status);
+
+        Http::assertSent(function (Request $request) {
+            $schema = $request['response_format']['json_schema']['schema'] ?? null;
+
+            return is_array($schema) && $this->schemaIsStrict($schema);
+        });
+
+        $page = $this->actingAs($owner)->get(route('projects.architecture.show', $project));
+        $page->assertOk();
+        $page->assertSee('data-architecture-diagram', false);
+        $page->assertSee('CLI entry point');
+    }
+
+    /** Mirror of the provider strict-subset rules, checked on the wire payload. */
+    private function schemaIsStrict(mixed $node): bool
+    {
+        if (! is_array($node)) {
+            return true;
+        }
+
+        if (($node['type'] ?? null) === 'object' || isset($node['properties'])) {
+            if (($node['additionalProperties'] ?? null) !== false) {
+                return false;
+            }
+
+            if (isset($node['properties']) && is_array($node['properties'])
+                && array_diff(array_keys($node['properties']), $node['required'] ?? []) !== []) {
+                return false;
+            }
+        }
+
+        foreach ($node as $child) {
+            if (! $this->schemaIsStrict($child)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    public function test_empty_hashes_bind_to_manifest_and_render_diagram(): void
+    {
+        // End-to-end proof for the live retry failure: a model that
+        // honestly omits hashes still reaches a clickable diagram whose
+        // evidence carries trusted manifest hashes.
+        [$project, , $owner] = $this->seedProject('ready', [
+            'main.py' => "import os\nprint('hi')\n",
+            'lib/util.py' => "def run():\n    return 1\n",
+        ]);
+        $payload = MockAIProvider::architecturePayload($this->cite($project));
+
+        foreach (['components', 'relationships'] as $section) {
+            foreach ($payload[$section] as &$node) {
+                foreach ($node['evidence'] as &$ref) {
+                    $ref['content_hash'] = '';
+                }
+                unset($ref);
+            }
+            unset($node);
+        }
+
+        MockAIProvider::fake([$payload]);
+
+        $this->actingAs($owner)->post(route('projects.architecture.store', $project));
+
+        $snapshot = ArchitectureSnapshot::where('project_id', $project->id)->latest('id')->first();
+        $this->assertNotNull($snapshot);
+        $this->assertSame(AnalysisStatus::Ready, $snapshot->status);
+        $this->assertSame(
+            hash('sha256', "import os\nprint('hi')\n"),
+            $snapshot->payload['components'][0]['evidence'][0]['content_hash']
+        );
+
+        $page = $this->actingAs($owner)->get(route('projects.architecture.show', $project));
+        $page->assertOk();
+        $page->assertSee('data-architecture-diagram', false);
+        $page->assertSee('CLI entry point');
+        $page->assertSee('main.py');
         $page->assertSee('Entry imports helper');
     }
 

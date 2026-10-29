@@ -19,7 +19,18 @@ class AgentConversation extends Model
         'project_id',
         'user_id',
         'title',
+        'artifact_ids',
+        'device_context',
+        'artifact_consent_at',
     ];
+
+    protected function casts(): array
+    {
+        return [
+            'artifact_ids' => 'array',
+            'artifact_consent_at' => 'datetime',
+        ];
+    }
 
     /** @return BelongsTo<Project, $this> */
     public function project(): BelongsTo

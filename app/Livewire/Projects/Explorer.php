@@ -90,7 +90,7 @@ class Explorer extends Component
     public function render()
     {
         $projects = Project::published()
-            ->with(['devices', 'tasks'])
+            ->with(['devices', 'tasks', 'cover'])
             ->when($this->search !== '', fn ($query) => $query->where(function ($query) {
                 $query->where('title', 'like', '%'.$this->search.'%')
                     ->orWhere('pitch', 'like', '%'.$this->search.'%')

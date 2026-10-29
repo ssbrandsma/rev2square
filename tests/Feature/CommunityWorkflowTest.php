@@ -272,6 +272,38 @@ class CommunityWorkflowTest extends TestCase
             ->assertDontSee('Offer help →', false);
     }
 
+    public function test_draft_hides_task_offer_links_but_keeps_details(): void
+    {
+        $project = Project::factory()->draft()->create();
+        $task = ContributorTask::factory()->create(['project_id' => $project->id]);
+
+        $this->actingAs($project->owner)->get(route('projects.show', $project))
+            ->assertOk()
+            ->assertSee('This project is not published.')
+            ->assertSee('Details →', false)
+            ->assertDontSee('Offer help →', false)
+            ->assertDontSee(route('projects.offers.create', [$project, 'task' => $task->id]), false);
+    }
+
+    public function test_open_task_offers_help_on_published_projects(): void
+    {
+        $project = Project::factory()->create();
+        $task = ContributorTask::factory()->create(['project_id' => $project->id]);
+
+        $this->get(route('projects.show', $project))
+            ->assertOk()
+            ->assertSee(route('projects.offers.create', [$project, 'task' => $task->id]), false);
+    }
+
+    public function test_empty_roadmap_names_both_creation_paths(): void
+    {
+        $project = Project::factory()->create();
+
+        $this->get(route('projects.show', $project))
+            ->assertOk()
+            ->assertSee('Maintainers can add them directly, or run an AI analysis and approve the roadmap to generate them.');
+    }
+
     public function test_anonymous_contribute_returns_after_login(): void
     {
         $project = Project::factory()->create();

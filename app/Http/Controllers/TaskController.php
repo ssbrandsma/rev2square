@@ -42,6 +42,7 @@ class TaskController extends Controller
             'project' => $project,
             'task' => $task,
             'history' => $history,
+            'assignees' => AuditEvent::assigneeMap($history),
             'transitions' => $transitions,
             'candidates' => $candidates,
             'canManage' => auth()->check() && $project->managedBy(auth()->user()),

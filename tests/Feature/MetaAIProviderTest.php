@@ -212,6 +212,75 @@ class MetaAIProviderTest extends TestCase
         }
     }
 
+    public function test_400_schema_rejection_matches_observed_live_failure(): void
+    {
+        // Regression fixture for the live 28 Oct 2026 architecture failure:
+        // the provider rejected a strict schema whose objects omitted
+        // additionalProperties (param: schema).
+        Http::fake(['*' => Http::response([
+            'error' => ['message' => "'additionalProperties' is required to be supplied and to be false.", 'type' => 'invalid_request_error', 'param' => 'schema', 'code' => null],
+        ], 400)]);
+
+        try {
+            $this->provider()->complete($this->request());
+            $this->fail('Expected AIProviderException.');
+        } catch (AIProviderException $e) {
+            $this->assertStringContainsString('additionalProperties', $e->getMessage());
+            $this->assertStringContainsString('(param: schema)', $e->getMessage());
+        }
+    }
+
+    public function test_open_schema_is_refused_before_any_http_call(): void
+    {
+        Http::fake(['*' => Http::response($this->completion(), 200)]);
+
+        $openNested = [
+            'type' => 'object',
+            'additionalProperties' => false,
+            'required' => ['items'],
+            'properties' => [
+                'items' => [
+                    'type' => 'array',
+                    'items' => [
+                        'type' => 'object',
+                        'required' => ['a'],
+                        'properties' => ['a' => ['type' => 'string']],
+                    ],
+                ],
+            ],
+        ];
+
+        try {
+            $this->provider()->complete(new AIRequest(system: 's', user: 'u', jsonSchema: $openNested));
+            $this->fail('Expected AIProviderException.');
+        } catch (AIProviderException $e) {
+            $this->assertStringContainsString('additionalProperties', $e->getMessage());
+        }
+
+        Http::assertNothingSent();
+    }
+
+    public function test_schema_missing_a_required_property_is_refused_before_any_http_call(): void
+    {
+        Http::fake(['*' => Http::response($this->completion(), 200)]);
+
+        $partialRequired = [
+            'type' => 'object',
+            'additionalProperties' => false,
+            'required' => ['a'],
+            'properties' => ['a' => ['type' => 'string'], 'b' => ['type' => 'string']],
+        ];
+
+        try {
+            $this->provider()->complete(new AIRequest(system: 's', user: 'u', jsonSchema: $partialRequired));
+            $this->fail('Expected AIProviderException.');
+        } catch (AIProviderException $e) {
+            $this->assertStringContainsString('must require every property', $e->getMessage());
+        }
+
+        Http::assertNothingSent();
+    }
+
     public function test_retryable_server_errors_bubble_as_timeout(): void
     {
         // 503 (e.g. inconclusive model-registry lookup) must be retried

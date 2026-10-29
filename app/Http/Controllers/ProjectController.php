@@ -10,8 +10,11 @@ use App\Models\AuditEvent;
 use App\Models\Device;
 use App\Models\DeviceVariant;
 use App\Models\Project;
+use App\Models\ProjectMedia;
 use App\Services\Community\ProjectActionPolicy;
+use App\Services\Media\StoryDocument;
 use Illuminate\Http\RedirectResponse;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Str;
 use Illuminate\View\View;
@@ -27,7 +30,7 @@ class ProjectController extends Controller
     {
         Gate::authorize('view', $project);
 
-        $project->load(['devices', 'repositories']);
+        $project->load(['devices', 'repositories', 'cover', 'gallery']);
 
         $showRetired = request()->boolean('show_retired');
 
@@ -38,18 +41,21 @@ class ProjectController extends Controller
             ->when(! $showRetired, fn ($query) => $query->active())
             ->get();
 
+        $historyEvents = AuditEvent::where('project_id', $project->id)
+            ->whereIn('event', ExportController::PUBLIC_HISTORY)
+            ->with('user')
+            ->latest()
+            ->take(20)
+            ->get();
+
         return view('projects.show', [
             'project' => $project,
             'milestones' => $milestones,
             'tasks' => $tasks,
             'observations' => $project->observations()->with(['author', 'task', 'variant.device', 'verifiedBy', 'corrections.author', 'attachments.uploader', 'attachments.reviewedBy'])->latest()->get(),
             'testReports' => $project->testReports()->with(['author', 'task', 'variant.device', 'confirmedBy', 'attachments'])->latest()->get(),
-            'historyEvents' => AuditEvent::where('project_id', $project->id)
-                ->whereIn('event', ExportController::PUBLIC_HISTORY)
-                ->with('user')
-                ->latest()
-                ->take(20)
-                ->get(),
+            'historyEvents' => $historyEvents,
+            'assignees' => AuditEvent::assigneeMap($historyEvents),
             'openTasks' => $project->tasks()->active()->orderBy('title')->get(),
             'variants' => DeviceVariant::with('device')->whereIn('device_id', $project->devices()->pluck('devices.id'))->get(),
             'retiredMilestoneCount' => $showRetired ? 0 : $project->milestones()->whereNotNull('retired_at')->count(),
@@ -82,13 +88,32 @@ class ProjectController extends Controller
     {
         Gate::authorize('update', $project);
 
-        return view('projects.edit', ['project' => $project]);
+        $project->load(['cover', 'media']);
+
+        $storyIds = $project->hasRichStory()
+            ? StoryDocument::mediaIds($project->story_document)
+            : [];
+
+        return view('projects.edit', [
+            'project' => $project,
+            'images' => $project->media->where('kind', ProjectMedia::KIND_IMAGE)->values(),
+            'files' => $project->media->where('kind', ProjectMedia::KIND_FILE)->values(),
+            'storyMediaIds' => $storyIds,
+        ]);
     }
 
     public function update(UpdateProjectRequest $request, Project $project): RedirectResponse
     {
         $wasOpen = $project->discussion_open;
-        $project->fill($request->validated());
+        $validated = $request->validated();
+
+        // The rich document is authoritative once set: the legacy body
+        // field can never overwrite it through the basics form.
+        if ($project->hasRichStory()) {
+            unset($validated['body']);
+        }
+
+        $project->fill($validated);
 
         // Shelving a project closes new conversation by default; posting
         // resumes only when a maintainer deliberately reopens it. Ordinary
@@ -119,6 +144,46 @@ class ProjectController extends Controller
 
         return redirect()->route('dashboard')
             ->with('status', 'Project deleted.');
+    }
+
+    /**
+     * Save the rich story document. Optimistic concurrency on
+     * presentation_version prevents silent lost updates; the legacy
+     * body is refreshed as a derived plain-text fallback so search
+     * and compatibility readers never see stale content.
+     */
+    public function updateStory(Request $request, Project $project): RedirectResponse
+    {
+        Gate::authorize('update', $project);
+
+        $data = $request->validate([
+            'story_document' => ['required', 'string', 'max:200000'],
+            'presentation_version' => ['required', 'integer'],
+        ]);
+
+        if ((int) $data['presentation_version'] !== $project->presentation_version) {
+            return back()->withInput()->with('error', 'Someone else changed the presentation while you were editing. Your draft was kept — review the current version, then save again.');
+        }
+
+        $decoded = json_decode($data['story_document'], true);
+        if (! is_array($decoded)) {
+            return back()->withInput()->with('error', 'The story document could not be read. Your draft was kept.');
+        }
+
+        $result = StoryDocument::validate($decoded, $project);
+        if (! $result['ok']) {
+            return back()->withInput()->with('error', $result['error']);
+        }
+
+        $project->forceFill([
+            'story_document' => $result['document'],
+            'story_format' => 'rich',
+            'body' => Str::limit(StoryDocument::toPlainText($result['document']), 20000, ''),
+            'presentation_version' => $project->presentation_version + 1,
+        ])->save();
+
+        return redirect()->route('projects.edit', $project)
+            ->with('status', 'Story saved.');
     }
 
     /**

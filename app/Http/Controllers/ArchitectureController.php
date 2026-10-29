@@ -6,6 +6,7 @@ use App\Enums\AnalysisStatus;
 use App\Jobs\AnalyzeArchitectureJob;
 use App\Models\ArchitectureSnapshot;
 use App\Models\Project;
+use App\Services\Admin\AiBudgets;
 use App\Services\Revival\ArchitecturePrompt;
 use App\Services\Revival\ArchitectureSchema;
 use Illuminate\Http\RedirectResponse;
@@ -62,6 +63,10 @@ class ArchitectureController extends Controller
 
         if ($repository === null || ! $repository->isReady()) {
             return back()->with('error', 'Import repository evidence before running an architecture analysis.');
+        }
+
+        if ($denied = AiBudgets::precheck(auth()->user())) {
+            return back()->with('error', $denied);
         }
 
         $key = 'arch-analyze:'.$project->id.':'.auth()->id();

@@ -13,6 +13,28 @@
             <p class="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-800">{{ session('error') }}</p>
         @endif
 
+        @if($conversation->artifact_consent_at !== null)
+            <section class="mb-4 rounded-xl border border-sky-200 bg-sky-50 p-4 text-sm">
+                <p class="font-semibold text-sky-900">Upload investigation</p>
+                <p class="mt-1 text-sky-900">
+                    Files:
+                    @forelse($selectedArtifacts as $selected)
+                        <a href="{{ route('projects.artifacts.show', [$project, $selected->id, 'from' => 'agent:'.$conversation->id]) }}" class="font-mono font-semibold hover:underline">[A{{ $selected->id }}]</a> {{ $selected->original_name }} ({{ $selected->state }})@if(!$loop->last), @endif
+                    @empty
+                        <span class="text-sky-800">The selected files are no longer available.</span>
+                    @endforelse
+                </p>
+                @if($conversation->device_context)
+                    <p class="mt-1 text-sky-900"><span class="font-semibold">Device context:</span> {{ $conversation->device_context }}</p>
+                @endif
+                <p class="mt-1 text-xs text-sky-800">Redacted evidence from these files was shared with the AI provider with your confirmation on {{ $conversation->artifact_consent_at->format('Y-m-d H:i') }}.</p>
+                <form method="POST" action="{{ route('projects.agent.withdraw-consent', [$project, $conversation]) }}" class="mt-2" onsubmit="return confirm('Withdraw AI access to these files for this conversation? Future questions here will no longer send their evidence to the AI provider.');">
+                    @csrf
+                    <button type="submit" class="rounded-lg border border-sky-300 px-3 py-1.5 text-xs font-semibold text-sky-900 hover:bg-sky-100">Withdraw evidence consent</button>
+                </form>
+            </section>
+        @endif
+
         <div class="space-y-4">
             @foreach($conversation->messages as $message)
                 @if($message->isUser())
@@ -35,8 +57,18 @@
                                     @foreach($message->citations as $citation)
                                         <li class="font-mono">
                                             <span class="font-semibold">{{ $citation['marker'] }}</span>
-                                            @if($citation['verified'] && isset($paths[$citation['source_id']]))
-                                                <span class="text-zinc-600">{{ $paths[$citation['source_id']] }}</span>
+                                            @if(isset($citation['artifact_id']))
+                                                @if($citation['verified'] && isset($artifactNames[$citation['artifact_id']]))
+                                                    <a href="{{ route('projects.artifacts.show', [$project, $citation['artifact_id'], 'from' => 'agent:'.$conversation->id]) }}" class="text-sky-700 hover:underline">{{ $artifactNames[$citation['artifact_id']] }}</a>
+                                                @else
+                                                    <span class="font-semibold text-red-700">not verified this turn</span>
+                                                @endif
+                                            @elseif($citation['verified'] && isset($paths[$citation['source_id']]))
+                                                @can('update', $project)
+                                                    <a href="{{ route('projects.evidence.show', [$project, $citation['source_id'], 'from' => 'agent:'.$conversation->id]) }}" class="text-emerald-700 hover:underline">{{ $paths[$citation['source_id']] }}</a>
+                                                @else
+                                                    <span class="text-zinc-600">{{ $paths[$citation['source_id']] }}</span>
+                                                @endcan
                                             @else
                                                 <span class="font-semibold text-red-700">not verified this turn</span>
                                             @endif
@@ -44,6 +76,17 @@
                                     @endforeach
                                 </ul>
                             </div>
+                        @endif
+
+                        @if(! empty($message->token_usage))
+                            <p class="mt-3 text-xs text-zinc-400">
+                                @if(($message->token_usage['input'] ?? null) !== null || ($message->token_usage['output'] ?? null) !== null)
+                                    {{ number_format((int) ($message->token_usage['input'] ?? 0)) }} in / {{ number_format((int) ($message->token_usage['output'] ?? 0)) }} out tokens
+                                @else
+                                    ≈{{ number_format((int) ($message->token_usage['estimated'] ?? 0)) }} tokens (estimated)
+                                @endif
+                                @if($message->duration_ms) · {{ number_format($message->duration_ms / 1000, 1) }}s @endif
+                            </p>
                         @endif
 
                         @if(! empty($message->tool_trace))

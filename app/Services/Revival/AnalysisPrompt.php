@@ -23,6 +23,7 @@ class AnalysisPrompt
             - Every factual assertion must cite evidence by its SOURCE id. A valid citation resolves to one of the SOURCE entries provided; never invent source ids.
             - Locators look like "path/to/file.md:L12-L20" and their path part must equal the cited source's path.
             - Classify every finding: SUPPORTED (directly backed), INFERRED (reasonable from evidence), UNVERIFIED (no direct evidence), CONTRADICTED (sources disagree), UNKNOWN (cannot tell).
+            - UNKNOWN means the evidence you examined cannot answer the question: always cite the examined evidence ids and explain why they cannot tell in limitations. When no evidence exists at all for a question, do not emit a finding — record the gap in unknowns[] instead.
             - Where sources conflict, say so explicitly and keep both sides visible.
             - Some sources may be PARTIAL excerpts with recorded line ranges. Never present excerpt content as the whole file and never claim to have inspected lines outside the quoted ranges.
             - A REPOSITORY CONTEXT block may describe inventory files you did NOT receive. Never imply that you inspected those files.

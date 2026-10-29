@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" role="img" aria-labelledby="spotCommunityTitle">
+  <title id="spotCommunityTitle">Connected contributors</title>
+  <g stroke="#3f3f46" stroke-width="4">
+    <path d="M60 60 L60 26"/>
+    <path d="M60 60 L91 51"/>
+    <path d="M60 60 L78 89"/>
+    <path d="M60 60 L42 89"/>
+    <path d="M60 60 L29 51"/>
+  </g>
+  <g fill="#10b981">
+    <circle cx="60" cy="22" r="7"/>
+    <circle cx="93" cy="49" r="7"/>
+    <circle cx="79" cy="93" r="7"/>
+    <circle cx="41" cy="93" r="7"/>
+    <circle cx="27" cy="49" r="7"/>
+  </g>
+  <circle cx="60" cy="60" r="10" fill="#fbbf24"/>
+</svg>

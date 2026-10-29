@@ -38,6 +38,14 @@ return [
             'report' => false,
         ],
 
+        'artifacts' => [
+            'driver' => 'local',
+            'root' => storage_path('app/artifacts'),
+            'serve' => false,
+            'throw' => true,
+            'report' => false,
+        ],
+
         'public' => [
             'driver' => 'local',
             'root' => storage_path('app/public'),

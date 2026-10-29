@@ -26,7 +26,7 @@ class ShowcaseSeeder extends Seeder
         $owner = User::firstOrCreate(
             ['email' => 'maintainer@rev2square.test'],
             [
-                'name' => 'Rev2Square Maintainer',
+                'name' => 'Rev²Square Maintainer',
                 'password' => Hash::make('password'),
             ]
         );

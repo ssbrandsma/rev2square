@@ -9,7 +9,16 @@
 
 ## Story
 
-{{ $data['story'] ?? 'No story written yet.' }}
+{{ $data['story_markdown'] ?? $data['story'] ?? 'No story written yet.' }}
+
+@if(! empty($data['media']))
+## Presentation media
+
+@forelse($data['media'] as $item)
+- **{{ $item['title'] }}** ({{ $item['kind'] }}/{{ $item['category'] }})@if($item['caption']) — {{ $item['caption'] }}@endif
+@empty
+@endforelse
+@endif
 
 ## Devices
 

@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Auth;
 
 use App\Http\Controllers\Controller;
 use App\Models\User;
+use App\Services\Admin\AppSettings;
 use Illuminate\Auth\Events\Registered;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
@@ -20,6 +21,10 @@ class RegisteredUserController extends Controller
      */
     public function create(): View
     {
+        if (! AppSettings::get('registration.open')) {
+            abort(403, 'Registration is currently closed.');
+        }
+
         return view('auth.register');
     }
 
@@ -30,6 +35,10 @@ class RegisteredUserController extends Controller
      */
     public function store(Request $request): RedirectResponse
     {
+        if (! AppSettings::get('registration.open')) {
+            abort(403, 'Registration is currently closed.');
+        }
+
         $request->validate([
             'name' => ['required', 'string', 'max:255'],
             'email' => ['required', 'string', 'lowercase', 'email', 'max:255', 'unique:'.User::class],

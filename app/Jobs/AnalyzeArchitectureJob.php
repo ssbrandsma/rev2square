@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Enums\AnalysisStatus;
 use App\Models\ArchitectureSnapshot;
+use App\Services\Admin\AiBudgets;
 use App\Services\AI\AIRateLimitedException;
 use App\Services\AI\AITimeoutException;
 use App\Services\Revival\ArchitectureService;
@@ -32,6 +33,13 @@ class AnalyzeArchitectureJob implements ShouldQueue
     public function handle(ArchitectureService $service): void
     {
         $snapshot = ArchitectureSnapshot::findOrFail($this->snapshotId);
+
+        $initiator = $snapshot->user;
+        if ($initiator !== null && ($denied = AiBudgets::precheck($initiator)) !== null) {
+            $service->markFailed($snapshot, AnalysisStatus::FailedModel, 'ACCESS_REVOKED', $denied);
+
+            return;
+        }
 
         try {
             $service->analyze($snapshot);

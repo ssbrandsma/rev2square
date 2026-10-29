@@ -1,7 +1,7 @@
 # CASE_STUDIES.md — Showcase Provenance Inventory
 
 Tracks source material for the authentic demonstration cases. Nothing below is
-presented as hackathon-built Rev2Square functionality; the platform code that
+presented as hackathon-built Rev²Square functionality; the platform code that
 imports, analyzes, and displays these cases is the hackathon work (see
 `HACKATHON.md`).
 
@@ -16,7 +16,7 @@ imports, analyzes, and displays these cases is the hackathon work (see
 
 - Status (WP0): no material imported yet. Seeding only if time allows (WP5).
 - Existing Squeezebox software/history is background context, never presented
-  as new Rev2Square functionality.
+  as new Rev²Square functionality.
 - To record at seed time: source, rights/permission, license, limitations.
 
 ## Rules

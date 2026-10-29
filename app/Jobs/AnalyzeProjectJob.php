@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Enums\AnalysisStatus;
 use App\Models\AnalysisRun;
+use App\Services\Admin\AiBudgets;
 use App\Services\AI\AIRateLimitedException;
 use App\Services\AI\AITimeoutException;
 use App\Services\Revival\AnalysisRunRepository;
@@ -33,6 +34,16 @@ class AnalyzeProjectJob implements ShouldQueue
     public function handle(RevivalAnalysisService $service, AnalysisRunRepository $runs): void
     {
         $run = AnalysisRun::findOrFail($this->runId);
+
+        // Recheck the initiating user's access immediately before any
+        // provider call: suspension or AI restriction fails the run
+        // without spending anything.
+        $initiator = $run->user;
+        if ($initiator !== null && ($denied = AiBudgets::precheck($initiator)) !== null) {
+            $runs->markFailed($run, AnalysisStatus::FailedModel, 'ACCESS_REVOKED', $denied);
+
+            return;
+        }
 
         try {
             $service->analyze($run);

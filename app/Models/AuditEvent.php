@@ -52,4 +52,34 @@ class AuditEvent extends Model
             'metadata' => $metadata === [] ? null : $metadata,
         ]);
     }
+
+    /**
+     * Resolve assignees named by task.assigned events in one query.
+     *
+     * @param  iterable<AuditEvent>  $events
+     * @return array<int, array{name: string, url: string}> keyed by user id.
+     */
+    public static function assigneeMap(iterable $events): array
+    {
+        $ids = [];
+
+        foreach ($events as $event) {
+            if ($event->event === 'task.assigned' && is_int($event->metadata['assignee_id'] ?? null)) {
+                $ids[] = $event->metadata['assignee_id'];
+            }
+        }
+
+        $ids = array_values(array_unique($ids));
+
+        if ($ids === []) {
+            return [];
+        }
+
+        return User::whereIn('id', $ids)->get()
+            ->mapWithKeys(fn (User $user): array => [$user->id => [
+                'name' => $user->name,
+                'url' => $user->profileUrl(),
+            ]])
+            ->all();
+    }
 }

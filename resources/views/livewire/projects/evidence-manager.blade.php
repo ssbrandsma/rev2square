@@ -81,7 +81,7 @@
                     <tbody class="divide-y divide-zinc-200 bg-white">
                         @foreach($evidence as $source)
                             <tr>
-                                <td class="whitespace-nowrap px-4 py-2.5 font-mono text-xs font-bold">S{{ $source->id }}</td>
+                                <td class="whitespace-nowrap px-4 py-2.5 font-mono text-xs font-bold"><a href="{{ route('projects.evidence.show', [$project, $source->id]) }}" class="hover:text-emerald-700" title="Open stored content">S{{ $source->id }}</a></td>
                                 <td class="px-4 py-2.5"><a href="{{ $source->url }}" target="_blank" rel="noopener" class="font-mono text-xs hover:text-emerald-700">{{ $source->path }}</a></td>
                                 <td class="hidden whitespace-nowrap px-4 py-2.5 text-zinc-600 sm:table-cell">{{ number_format($source->byteSize()) }} B</td>
                                 <td class="hidden whitespace-nowrap px-4 py-2.5 lg:table-cell">
@@ -187,6 +187,7 @@
                         <span class="text-zinc-600">
                             Run #{{ $run->id }} · {{ $run->created_at->diffForHumans() }}
                             @if($run->report) · <span class="font-semibold text-zinc-900">report v{{ $run->report->version_number }}</span>@endif
+                            @if(($run->token_usage['total'] ?? 0) > 0) · {{ number_format((int) $run->token_usage['total']) }} tokens @endif
                         </span>
                         <span class="flex items-center gap-3">
                             @if($run->report)
@@ -205,6 +206,9 @@
                     </li>
                     @if($run->error_message)
                         <li class="-mt-1 pb-2 text-xs text-red-700">{{ $run->error_message }}</li>
+                    @endif
+                    @if($run->error_code === 'SCHEMA_VIOLATION')
+                        <li class="-mt-1 pb-2 text-xs text-zinc-600">No draft was created and your evidence is unchanged. The model returned a report that failed evidence checks — running the analysis again often succeeds.</li>
                     @endif
                 @endforeach
             </ul>

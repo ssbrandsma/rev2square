@@ -39,6 +39,7 @@ class Project extends Model
             'activity' => ProjectActivity::class,
             'publication_status' => PublicationStatus::class,
             'discussion_open' => 'boolean',
+            'story_document' => 'array',
         ];
     }
 
@@ -106,6 +107,46 @@ class Project extends Model
     public function analysisRuns(): HasMany
     {
         return $this->hasMany(AnalysisRun::class);
+    }
+
+    /** @return HasMany<ProjectArtifact, $this> */
+    public function artifacts(): HasMany
+    {
+        return $this->hasMany(ProjectArtifact::class);
+    }
+
+    /** @return HasMany<AgentConversation, $this> */
+    public function agentConversations(): HasMany
+    {
+        return $this->hasMany(AgentConversation::class);
+    }
+
+    /** @return HasMany<ProjectMedia, $this> */
+    public function media(): HasMany
+    {
+        return $this->hasMany(ProjectMedia::class)->orderBy('id');
+    }
+
+    /** @return HasMany<ProjectMedia, $this> */
+    public function gallery(): HasMany
+    {
+        return $this->hasMany(ProjectMedia::class)
+            ->where('kind', ProjectMedia::KIND_IMAGE)
+            ->where('in_gallery', true)
+            ->orderBy('gallery_order')
+            ->orderBy('id');
+    }
+
+    /** @return BelongsTo<ProjectMedia, $this> */
+    public function cover(): BelongsTo
+    {
+        return $this->belongsTo(ProjectMedia::class, 'cover_media_id');
+    }
+
+    /** The rich document is authoritative only when explicitly set. */
+    public function hasRichStory(): bool
+    {
+        return $this->story_format === 'rich' && is_array($this->story_document);
     }
 
     /** @return HasMany<AnalysisReport, $this> */

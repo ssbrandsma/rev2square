@@ -338,6 +338,7 @@ class OfferController extends Controller
 
                 AuditEvent::record('task.assigned', $request->user(), $project, $task, [
                     'assignee_id' => $offer->user_id,
+                    'assignee' => $offer->user->name,
                     'offer_id' => $offer->id,
                 ]);
             }

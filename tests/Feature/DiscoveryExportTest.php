@@ -90,6 +90,16 @@ class DiscoveryExportTest extends TestCase
         $this->get(route('tasks.index'))->assertOk()->assertSee('Find a task', false);
     }
 
+    public function test_directory_describes_all_status_scope(): void
+    {
+        // The default view lists every active status (not only Open), so
+        // the header must say so instead of promising "open work".
+        $this->get(route('tasks.index'))
+            ->assertOk()
+            ->assertSee('Contributor tasks across published revival projects, newest first.')
+            ->assertDontSee('Open work across published revival projects.');
+    }
+
     public function test_export_includes_evidence_and_excludes_private_data(): void
     {
         $project = $this->publishedProject();

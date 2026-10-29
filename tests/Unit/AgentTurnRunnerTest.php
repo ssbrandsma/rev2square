@@ -194,6 +194,223 @@ class AgentTurnRunnerTest extends TestCase
         $this->assertFalse($result->toolTrace[0]['ok']);
     }
 
+    public function test_third_consecutive_search_is_blocked_until_a_read(): void
+    {
+        $executed = [];
+        $runner = new AgentTurnRunner(
+            new MockAIProvider,
+            function (string $name, ?array $args) use (&$executed): ToolResult {
+                $executed[] = $name;
+
+                return match ($name) {
+                    'search_evidence' => ToolResult::ok(['results' => [['source_id' => 5], ['source_id' => 9]]], [5, 9]),
+                    'read_evidence' => ToolResult::ok(['source_id' => 5, 'content' => 'evidence'], [5]),
+                    default => ToolResult::error('unknown_tool', 'nope'),
+                };
+            },
+            [],
+            ['search_evidence', 'read_evidence'],
+        );
+        MockAIProvider::fake([
+            ['__tool_calls' => [['id' => 'c1', 'name' => 'search_evidence', 'arguments' => ['query' => 'one']]], 'content' => ''],
+            ['__tool_calls' => [['id' => 'c2', 'name' => 'search_evidence', 'arguments' => ['query' => 'two']]], 'content' => ''],
+            ['__tool_calls' => [['id' => 'c3', 'name' => 'search_evidence', 'arguments' => ['query' => 'three']]], 'content' => ''],
+            ['__tool_calls' => [['id' => 'c4', 'name' => 'read_evidence', 'arguments' => ['source_id' => 5]]], 'content' => ''],
+            'Read [S5] and done.',
+        ]);
+
+        $result = $runner->run('system', 'What?', [], 'test-12');
+
+        $this->assertSame('complete', $result->stoppedReason);
+        // The blocked search still used budget but never dispatched.
+        $this->assertSame(['search_evidence', 'search_evidence', 'read_evidence'], $executed);
+        $this->assertCount(4, $result->toolTrace);
+        $this->assertFalse($result->toolTrace[2]['ok']);
+
+        $blocked = null;
+        foreach (MockAIProvider::$requests as $request) {
+            foreach ($request->messages as $message) {
+                if (($message['role'] ?? null) === 'tool' && ($message['tool_call_id'] ?? null) === 'c3') {
+                    $blocked = (string) $message['content'];
+                }
+            }
+        }
+
+        $this->assertNotNull($blocked);
+        $this->assertStringContainsString('read_before_searching', $blocked);
+        $this->assertStringContainsString('[S5]', $blocked);
+        $this->assertStringContainsString('[S9]', $blocked);
+    }
+
+    public function test_empty_searches_do_not_trigger_the_read_block(): void
+    {
+        $executed = [];
+        $runner = new AgentTurnRunner(
+            new MockAIProvider,
+            function (string $name) use (&$executed): ToolResult {
+                $executed[] = $name;
+
+                return ToolResult::ok(['results' => []]);
+            },
+            [],
+            ['search_evidence'],
+        );
+        MockAIProvider::fake([
+            ['__tool_calls' => [['id' => 'c1', 'name' => 'search_evidence', 'arguments' => ['query' => 'one']]], 'content' => ''],
+            ['__tool_calls' => [['id' => 'c2', 'name' => 'search_evidence', 'arguments' => ['query' => 'two']]], 'content' => ''],
+            ['__tool_calls' => [['id' => 'c3', 'name' => 'search_evidence', 'arguments' => ['query' => 'three']]], 'content' => ''],
+            ['__tool_calls' => [['id' => 'c4', 'name' => 'search_evidence', 'arguments' => ['query' => 'four']]], 'content' => ''],
+            'Nothing matched anywhere.',
+        ]);
+
+        $result = $runner->run('system', 'What?', [], 'test-13');
+
+        $this->assertSame('complete', $result->stoppedReason);
+        $this->assertCount(4, $executed);
+        $this->assertTrue($result->toolTrace[3]['ok']);
+    }
+
+    public function test_a_read_resets_the_search_streak(): void
+    {
+        $executed = [];
+        $runner = new AgentTurnRunner(
+            new MockAIProvider,
+            function (string $name) use (&$executed): ToolResult {
+                $executed[] = $name;
+
+                return $name === 'search_evidence'
+                    ? ToolResult::ok(['results' => [['source_id' => 5]]], [5])
+                    : ToolResult::ok(['source_id' => 5, 'content' => 'evidence'], [5]);
+            },
+            [],
+            ['search_evidence', 'read_evidence'],
+        );
+        MockAIProvider::fake([
+            ['__tool_calls' => [['id' => 'c1', 'name' => 'search_evidence', 'arguments' => ['query' => 'one']]], 'content' => ''],
+            ['__tool_calls' => [['id' => 'c2', 'name' => 'search_evidence', 'arguments' => ['query' => 'two']]], 'content' => ''],
+            ['__tool_calls' => [['id' => 'c3', 'name' => 'read_evidence', 'arguments' => ['source_id' => 5]]], 'content' => ''],
+            ['__tool_calls' => [['id' => 'c4', 'name' => 'search_evidence', 'arguments' => ['query' => 'three']]], 'content' => ''],
+            ['__tool_calls' => [['id' => 'c5', 'name' => 'search_evidence', 'arguments' => ['query' => 'four']]], 'content' => ''],
+            'Done.',
+        ]);
+
+        $result = $runner->run('system', 'What?', [], 'test-14');
+
+        $this->assertSame('complete', $result->stoppedReason);
+        $this->assertCount(5, $executed);
+        foreach ($result->toolTrace as $step) {
+            $this->assertTrue($step['ok']);
+        }
+    }
+
+    public function test_missing_snapshot_counts_as_no_progress(): void
+    {
+        // s, s, arch(unavailable): the snapshot call yields nothing, so
+        // the next search is the third non-progress call and is blocked
+        // while unread sources remain.
+        $executed = [];
+        $runner = new AgentTurnRunner(
+            new MockAIProvider,
+            function (string $name) use (&$executed): ToolResult {
+                $executed[] = $name;
+
+                return match ($name) {
+                    'search_evidence' => ToolResult::ok(['results' => [['source_id' => 5]]], [5]),
+                    'get_architecture' => ToolResult::ok(['available' => false]),
+                    'read_evidence' => ToolResult::ok(['source_id' => 5], [5]),
+                    default => ToolResult::error('unknown_tool', 'nope'),
+                };
+            },
+            [],
+            ['search_evidence', 'read_evidence', 'get_architecture'],
+        );
+        MockAIProvider::fake([
+            ['__tool_calls' => [['id' => 'c1', 'name' => 'search_evidence', 'arguments' => ['query' => 'one']]], 'content' => ''],
+            ['__tool_calls' => [['id' => 'c2', 'name' => 'search_evidence', 'arguments' => ['query' => 'two']]], 'content' => ''],
+            ['__tool_calls' => [['id' => 'c3', 'name' => 'get_architecture', 'arguments' => []]], 'content' => ''],
+            ['__tool_calls' => [['id' => 'c4', 'name' => 'search_evidence', 'arguments' => ['query' => 'three']]], 'content' => ''],
+            ['__tool_calls' => [['id' => 'c5', 'name' => 'read_evidence', 'arguments' => ['source_id' => 5]]], 'content' => ''],
+            'Done.',
+        ]);
+
+        $result = $runner->run('system', 'What?', [], 'test-15');
+
+        $this->assertSame('complete', $result->stoppedReason);
+        $this->assertSame(['search_evidence', 'search_evidence', 'get_architecture', 'read_evidence'], $executed);
+        $this->assertFalse($result->toolTrace[3]['ok']);
+    }
+
+    public function test_examined_snapshot_counts_as_progress(): void
+    {
+        $executed = [];
+        $runner = new AgentTurnRunner(
+            new MockAIProvider,
+            function (string $name) use (&$executed): ToolResult {
+                $executed[] = $name;
+
+                return match ($name) {
+                    'search_evidence' => ToolResult::ok(['results' => [['source_id' => 5]]], [5]),
+                    'get_architecture' => ToolResult::ok(['available' => true]),
+                    default => ToolResult::error('unknown_tool', 'nope'),
+                };
+            },
+            [],
+            ['search_evidence', 'get_architecture'],
+        );
+        MockAIProvider::fake([
+            ['__tool_calls' => [['id' => 'c1', 'name' => 'search_evidence', 'arguments' => ['query' => 'one']]], 'content' => ''],
+            ['__tool_calls' => [['id' => 'c2', 'name' => 'search_evidence', 'arguments' => ['query' => 'two']]], 'content' => ''],
+            ['__tool_calls' => [['id' => 'c3', 'name' => 'get_architecture', 'arguments' => []]], 'content' => ''],
+            ['__tool_calls' => [['id' => 'c4', 'name' => 'search_evidence', 'arguments' => ['query' => 'three']]], 'content' => ''],
+            'Done.',
+        ]);
+
+        $result = $runner->run('system', 'What?', [], 'test-16');
+
+        $this->assertSame('complete', $result->stoppedReason);
+        $this->assertCount(4, $executed);
+        foreach ($result->toolTrace as $step) {
+            $this->assertTrue($step['ok']);
+        }
+    }
+
+    public function test_search_results_flag_sources_read_this_turn(): void
+    {
+        $runner = new AgentTurnRunner(
+            new MockAIProvider,
+            fn (string $name): ToolResult => match ($name) {
+                'search_evidence' => ToolResult::ok(['results' => [['source_id' => 5], ['source_id' => 9]]], [5, 9]),
+                'read_evidence' => ToolResult::ok(['source_id' => 5], [5]),
+                default => ToolResult::error('unknown_tool', 'nope'),
+            },
+            [],
+            ['search_evidence', 'read_evidence'],
+        );
+        MockAIProvider::fake([
+            ['__tool_calls' => [['id' => 'c1', 'name' => 'search_evidence', 'arguments' => ['query' => 'one']]], 'content' => ''],
+            ['__tool_calls' => [['id' => 'c2', 'name' => 'read_evidence', 'arguments' => ['source_id' => 5]]], 'content' => ''],
+            ['__tool_calls' => [['id' => 'c3', 'name' => 'search_evidence', 'arguments' => ['query' => 'two']]], 'content' => ''],
+            'Done.',
+        ]);
+
+        $result = $runner->run('system', 'What?', [], 'test-17');
+
+        $this->assertSame('complete', $result->stoppedReason);
+
+        $second = null;
+        foreach (MockAIProvider::$requests as $request) {
+            foreach ($request->messages as $message) {
+                if (($message['role'] ?? null) === 'tool' && ($message['tool_call_id'] ?? null) === 'c3') {
+                    $second = json_decode((string) $message['content'], true);
+                }
+            }
+        }
+
+        $this->assertNotNull($second);
+        $this->assertTrue($second['results'][0]['already_read']);
+        $this->assertFalse($second['results'][1]['already_read']);
+    }
+
     public function test_history_is_bounded(): void
     {
         $history = [];

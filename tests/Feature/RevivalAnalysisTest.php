@@ -267,6 +267,42 @@ class RevivalAnalysisTest extends TestCase
         $this->assertSame('NO_EVIDENCE', $run->error_code);
     }
 
+    public function test_validation_failure_shows_next_action_hint(): void
+    {
+        ['project' => $project, 'repository' => $repository] = $this->seedEvidence([
+            'README.md' => 'Device docs.',
+        ]);
+        $run = $this->makeRun($project, $repository);
+        $run->forceFill([
+            'status' => AnalysisStatus::FailedValidation,
+            'error_code' => 'SCHEMA_VIOLATION',
+            'error_message' => 'Report failed validation: findings[3] with status UNKNOWN must cite at least one evidence id.',
+            'completed_at' => now(),
+        ])->save();
+
+        Livewire::actingAs($project->owner)
+            ->test(EvidenceManager::class, ['project' => $project->fresh()])
+            ->assertSee('Report failed validation')
+            ->assertSee('No draft was created and your evidence is unchanged.');
+    }
+
+    public function test_runs_list_shows_recorded_tokens(): void
+    {
+        ['project' => $project, 'repository' => $repository] = $this->seedEvidence([
+            'README.md' => 'Device docs.',
+        ]);
+        MockAIProvider::fake([MockAIProvider::reportPayload($this->sourceRefs($repository))]);
+
+        $run = $this->makeRun($project, $repository);
+        app(RevivalAnalysisService::class)->analyze($run->fresh());
+
+        // Mock provider reports 100 in / 50 out = 150 total; no cost shown.
+        Livewire::actingAs($project->owner)
+            ->test(EvidenceManager::class, ['project' => $project->fresh()])
+            ->assertSee('150 tokens', false)
+            ->assertDontSee('EUR', false);
+    }
+
     public function test_analyze_action_requires_evidence_and_dispatches(): void
     {
         Queue::fake();

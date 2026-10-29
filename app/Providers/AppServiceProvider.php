@@ -2,13 +2,18 @@
 
 namespace App\Providers;
 
+use App\Models\User;
+use App\Services\Admin\AppSettings;
+use App\Services\Admin\Permissions;
 use App\Services\AI\AIProviderInterface;
 use App\Services\AI\MetaAIProvider;
+use App\Services\AI\MeteredAIProvider;
 use App\Services\GitHub\ArchiveDownloader;
 use App\Services\GitHub\GitHubClient;
 use App\Services\Revival\ArchiveRepositoryImporter;
 use App\Services\Revival\EvidenceManifestBuilder;
 use App\Services\Revival\GitHubRepositoryImporter;
+use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\URL;
 use Illuminate\Support\ServiceProvider;
 use Tests\Support\MockAIProvider;
@@ -39,10 +44,10 @@ class AppServiceProvider extends ServiceProvider
                     throw new \RuntimeException('The mock AI provider is available for automated tests only.');
                 }
 
-                return new MockAIProvider;
+                return new MeteredAIProvider(new MockAIProvider);
             }
 
-            return app(MetaAIProvider::class);
+            return new MeteredAIProvider(app(MetaAIProvider::class));
         });
     }
 
@@ -59,5 +64,17 @@ class AppServiceProvider extends ServiceProvider
         if ($this->app->environment('production')) {
             URL::forceScheme('https');
         }
+
+        // Global role gates. Suspended users fail every gate; project
+        // powers stay separate (see ProjectPolicy).
+        Gate::define('admin', fn (?User $user) => Permissions::allows($user, 'admin.access'));
+        Gate::define('moderate', fn (?User $user) => Permissions::allows($user, 'moderate.reports'));
+        Gate::define('view-my-usage', fn (?User $viewer, User $target) => $viewer !== null && ! $viewer->isSuspended() && $viewer->id === $target->id);
+
+        // Database-managed settings override file config unless the
+        // matching environment variable locks the value. Runs on every
+        // boot (web request and each queue job), so admin changes
+        // propagate to workers without restarts or root access.
+        AppSettings::applyToConfig();
     }
 }

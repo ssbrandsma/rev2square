@@ -4,6 +4,7 @@ namespace App\Services\Agent;
 
 use App\Enums\AnalysisStatus;
 use App\Models\ArchitectureSnapshot;
+use App\Services\Revival\FileClassifier;
 
 /**
  * The Revival Agent's read-only tools: search_evidence, read_evidence,
@@ -99,6 +100,10 @@ final class EvidenceTools
             return ToolResult::error('forbidden', 'You no longer have access to this project.');
         }
 
+        if ($context->repository === null) {
+            return ToolResult::error('not_ready', 'This project has no imported repository evidence. Investigate the uploaded artifacts instead.');
+        }
+
         if ($context->repository->project_id !== $context->project->id) {
             return ToolResult::error('forbidden', 'Repository does not belong to this project.');
         }
@@ -153,7 +158,7 @@ final class EvidenceTools
             })
             ->orderBy('path')
             ->limit(60)
-            ->get(['id', 'path', 'content', 'is_partial']);
+            ->get(['id', 'path', 'content', 'is_partial', 'language', 'relevance_score']);
 
         $scored = [];
         foreach ($candidates as $row) {
@@ -164,14 +169,23 @@ final class EvidenceTools
                 if (str_contains($lowerPath, $term)) {
                     $score += 3;
                 }
-                $score += min(5, substr_count($lowerContent, $term));
+                // Capped low: a README repeating a keyword must not
+                // outrank the implementation file that mentions it once.
+                $score += min(2, substr_count($lowerContent, $term));
+            }
+            // Implementation over prose when both match the same query.
+            $kind = FileClassifier::classify($row->path)['kind'];
+            if (in_array($kind, ['source', 'script'], true)) {
+                $score += 3;
             }
             if ($score > 0) {
-                $scored[] = ['row' => $row, 'score' => $score];
+                $scored[] = ['row' => $row, 'score' => $score, 'kind' => $kind];
             }
         }
 
-        usort($scored, fn ($a, $b) => [$b['score'], $a['row']->path] <=> [$a['score'], $b['row']->path]);
+        // Score, then import-time relevance, then path — deterministic.
+        usort($scored, fn ($a, $b) => [$b['score'], $b['row']->relevance_score ?? -1, $a['row']->path]
+            <=> [$a['score'], $a['row']->relevance_score ?? -1, $b['row']->path]);
         $top = array_slice($scored, 0, $limit);
 
         $results = [];
@@ -183,16 +197,93 @@ final class EvidenceTools
                 'source_id' => $row->id,
                 'path' => $row->path,
                 'score' => $entry['score'],
+                'kind' => $entry['kind'],
+                'language' => $row->language,
                 'is_partial' => (bool) $row->is_partial,
                 'snippet' => self::snippet((string) $row->content, $terms),
             ];
         }
 
-        return ToolResult::ok([
+        $imported = $context->repository->currentEvidence()->count();
+        $discovered = $context->repository->last_import_summary['inventory']['blobs'] ?? null;
+
+        $data = [
             'query' => $query,
             'results' => $results,
             'candidates_capped' => count($candidates) >= 60,
-        ], $seen);
+            'imported_files' => $imported,
+        ];
+
+        $notImported = self::notImportedMatches($context, $terms);
+        if ($notImported !== []) {
+            // Relevant paths the model can name precisely as
+            // not-imported instead of implying they were inspected.
+            $data['not_imported_matches'] = $notImported;
+        }
+
+        if ($results === []) {
+            // Missing imported code is not proof of absent repository code:
+            // most discovered files are never imported.
+            $data['hint'] = is_int($discovered) && $discovered > $imported
+                ? "No imported file matched. Only {$imported} of {$discovered} discovered files were imported — the code may exist in the repository without being imported."
+                : 'No imported file matched these terms.';
+        }
+
+        return ToolResult::ok($data, $seen);
+    }
+
+    /**
+     * Discovered-but-not-imported paths matching the query terms, so the
+     * model can name them precisely as missing instead of implying it
+     * inspected them or that they do not exist.
+     *
+     * @param  list<string>  $terms
+     * @return list<array{path: string, reason: string}>
+     */
+    private static function notImportedMatches(ToolContext $context, array $terms): array
+    {
+        $summary = $context->repository->last_import_summary ?? [];
+        $matches = [];
+
+        foreach (['missing_relevant', 'skipped'] as $key) {
+            $items = $summary[$key] ?? [];
+
+            if (! is_array($items)) {
+                continue;
+            }
+
+            foreach ($items as $item) {
+                $path = is_array($item) ? ($item['path'] ?? null) : null;
+
+                if (! is_string($path) || $path === '') {
+                    continue;
+                }
+
+                $lower = strtolower($path);
+                $hit = false;
+
+                foreach ($terms as $term) {
+                    if (str_contains($lower, $term)) {
+                        $hit = true;
+
+                        break;
+                    }
+                }
+
+                if ($hit) {
+                    $matches[] = [
+                        'path' => $path,
+                        'reason' => is_array($item) && isset($item['reason']) ? (string) $item['reason'] : 'not imported',
+                    ];
+
+                    if (count($matches) >= 5) {
+                        return $matches;
+                    }
+                }
+            }
+        }
+
+        return $matches;
     }
 
     /** @param  list<string>  $terms */
@@ -308,7 +399,7 @@ final class EvidenceTools
         if ($snapshot === null || ! $snapshot->isReady()) {
             return ToolResult::ok([
                 'available' => false,
-                'reason' => 'No architecture snapshot yet. Ask a maintainer to run the architecture analysis first.',
+                'reason' => 'No validated architecture snapshot exists for this repository (analysis never ran or failed). It cannot substitute for code — use read_evidence on the most relevant unread source instead.',
             ]);
         }
 

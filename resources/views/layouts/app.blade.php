@@ -7,7 +7,15 @@
     @auth
         <meta name="user-id" content="{{ auth()->id() }}">
     @endauth
-    <title>{{ ($title ?? null) ? $title.' — ' : '' }}Rev2Square</title>
+    <title>{{ ($title ?? null) ? $title.' — ' : '' }}Rev²Square</title>
+    <meta name="description" content="Rev²Square — Reverse Engineer. Revive. Together. Bring abandoned hardware and software back to life with AI-assisted reverse engineering and an open-source community.">
+    <meta name="theme-color" content="#09090b">
+    <meta property="og:site_name" content="Rev²Square">
+    <meta property="og:type" content="website">
+    <meta property="og:title" content="{{ ($title ?? null) ? $title.' — ' : '' }}Rev²Square">
+    <meta property="og:description" content="Reverse Engineer. Revive. Together. A community platform for reviving abandoned hardware and software.">
+    <meta name="twitter:card" content="summary">
+    <link rel="icon" type="image/svg+xml" href="{{ asset('favicon.svg') }}">
     <!-- Type is self-hosted (Source Sans 3 via Fontsource); no external font requests. -->
     @vite(['resources/css/app.css', 'resources/js/app.js'])
     @livewireStyles
@@ -24,8 +32,8 @@
                     <rect x="16" y="16" width="13" height="13" rx="2" fill="#fbbf24"/>
                 </svg>
                 <span class="leading-tight">
-                    <span class="block text-lg font-semibold tracking-tight">Rev2Square</span>
-                    <span class="block text-xs font-semibold text-zinc-400">Reverse. Revive. Together.</span>
+                    <span class="block text-lg font-semibold tracking-tight">Rev²Square</span>
+                    <span class="hidden text-xs font-semibold text-zinc-400 sm:block">Reverse Engineer. Revive. Together.</span>
                 </span>
             </a>
             <div class="hidden items-center gap-6 md:flex">
@@ -87,8 +95,8 @@
     <footer class="bg-zinc-950 text-zinc-400">
         <div class="mx-auto flex max-w-6xl flex-col gap-6 px-4 py-10 sm:px-6 md:flex-row md:items-end md:justify-between">
             <div>
-                <p class="text-lg font-semibold tracking-tight text-white">Rev2Square</p>
-                <p class="mt-1 text-xs font-medium text-zinc-400">Reverse. Revive. Together.</p>
+                <p class="text-lg font-semibold tracking-tight text-white">Rev²Square</p>
+                <p class="mt-1 text-xs font-medium text-zinc-400">Reverse Engineer. Revive. Together.</p>
                 <p class="mt-3 max-w-md text-sm">A community for reverse engineering, restoring, and sustaining abandoned hardware.</p>
             </div>
             <div class="flex gap-6 text-sm">

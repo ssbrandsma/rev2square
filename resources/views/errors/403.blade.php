@@ -1,5 +1,5 @@
 <x-app-layout>
-    <x-slot name="title">Not allowed — Rev2Square</x-slot>
+    <x-slot name="title">Not allowed — Rev²Square</x-slot>
     <div class="mx-auto max-w-2xl px-4 py-20 text-center sm:px-6">
         <p class="text-sm font-semibold text-emerald-700">403</p>
         <h1 class="mt-2 text-3xl font-semibold tracking-tight">Maintainers only.</h1>

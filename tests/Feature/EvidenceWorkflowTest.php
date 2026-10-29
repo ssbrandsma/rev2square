@@ -5,10 +5,12 @@ namespace Tests\Feature;
 use App\Enums\AnalysisStatus;
 use App\Jobs\ImportRepositoryJob;
 use App\Livewire\Projects\EvidenceManager;
+use App\Models\AgentConversation;
 use App\Models\AnalysisRun;
 use App\Models\EvidenceSource;
 use App\Models\Project;
 use App\Models\Repository;
+use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Artisan;
@@ -88,6 +90,106 @@ class EvidenceWorkflowTest extends TestCase
 
             return Http::response(null, 404);
         });
+    }
+
+    public function test_source_viewer_shows_file_commit_and_content(): void
+    {
+        [$project] = $this->seedProject('ready', [
+            'cmd/soundtouch-backup/README.md' => "# Backup\nRestore steps.\n",
+        ]);
+        $source = EvidenceSource::where('project_id', $project->id)->first();
+
+        $page = $this->actingAs($project->owner)
+            ->get(route('projects.evidence.show', [$project, $source]));
+
+        $page->assertOk();
+        $page->assertSee('cmd/soundtouch-backup/README.md');
+        $page->assertSee(substr($source->commit_sha, 0, 12));
+        $page->assertSee(substr($source->content_hash, 0, 16));
+        $page->assertSee('Restore steps.');
+        $page->assertSee('Complete file');
+        $page->assertSee('Evidence manifest');
+        $page->assertDontSee('Earlier import');
+    }
+
+    public function test_source_viewer_marks_earlier_import_and_links_back_to_conversation(): void
+    {
+        [$project] = $this->seedProject('ready', ['main.py' => "x = 1\n"]);
+        $source = EvidenceSource::where('project_id', $project->id)->first();
+        $source->forceFill(['commit_sha' => str_repeat('b', 40)])->save();
+
+        $conversation = AgentConversation::create([
+            'project_id' => $project->id,
+            'user_id' => $project->owner->id,
+            'title' => 'Cloud question',
+        ]);
+
+        $page = $this->actingAs($project->owner)->get(
+            route('projects.evidence.show', [$project, $source, 'from' => 'agent:'.$conversation->id])
+        );
+
+        $page->assertOk();
+        $page->assertSee('Earlier import');
+        $page->assertSee('Back to conversation');
+        $page->assertSee(route('projects.agent.show', [$project, $conversation]), false);
+
+        // Forged or foreign return targets are ignored, never followed.
+        $other = Project::factory()->create();
+        $foreign = AgentConversation::create([
+            'project_id' => $other->id,
+            'user_id' => $other->owner->id,
+            'title' => 'Elsewhere',
+        ]);
+
+        $this->actingAs($project->owner)->get(
+            route('projects.evidence.show', [$project, $source, 'from' => 'agent:'.$foreign->id])
+        )->assertOk()->assertDontSee('Back to conversation');
+
+        $this->actingAs($project->owner)->get(
+            route('projects.evidence.show', [$project, $source, 'from' => 'agent:999999'])
+        )->assertOk()->assertDontSee('Back to conversation');
+    }
+
+    public function test_source_viewer_reports_partial_ranges_honestly(): void
+    {
+        [$project] = $this->seedProject('ready', ['big.go' => "package big\n"]);
+        $source = EvidenceSource::where('project_id', $project->id)->first();
+        $source->forceFill([
+            'is_partial' => true,
+            'line_ranges' => [['start' => 10, 'end' => 30]],
+            'original_lines' => 200,
+        ])->save();
+
+        $this->actingAs($project->owner)
+            ->get(route('projects.evidence.show', [$project, $source]))
+            ->assertOk()
+            ->assertSee('Partial excerpt')
+            ->assertSee('L10–L30')
+            ->assertSee('200 original lines');
+
+        $source->forceFill(['line_ranges' => null, 'original_lines' => null])->save();
+
+        $this->actingAs($project->owner)
+            ->get(route('projects.evidence.show', [$project, $source]))
+            ->assertOk()
+            ->assertSee('Original line numbers unavailable for this excerpt.');
+    }
+
+    public function test_source_viewer_requires_maintainer_and_own_project(): void
+    {
+        [$project] = $this->seedProject('ready', ['main.py' => "x = 1\n"]);
+        $source = EvidenceSource::where('project_id', $project->id)->first();
+        $stranger = User::factory()->create();
+
+        $this->actingAs($stranger)
+            ->get(route('projects.evidence.show', [$project, $source]))
+            ->assertForbidden();
+
+        [$other] = $this->seedProject('ready', ['other.py' => "y = 2\n"]);
+
+        $this->actingAs($other->owner)
+            ->get(route('projects.evidence.show', [$other, $source]))
+            ->assertNotFound();
     }
 
     public function test_reimport_prefills_tracked_url(): void

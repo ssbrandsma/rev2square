@@ -1,4 +1,4 @@
-# Rev2Square — Reverse. Revive. Together.
+# Rev²Square — Reverse Engineer. Revive. Together.
 
 Hackathon project for the Meta Global AI Developer Hackathon 2026 (Indie Developer track):
 turn scattered technical evidence about abandoned hardware into a transparent,

@@ -1,7 +1,7 @@
 <x-app-layout>
     <x-slot name="header">
         <p class="text-sm font-semibold text-emerald-700">Methodology</p>
-        <h1 class="mt-1 text-[1.75rem] font-semibold leading-tight tracking-tight sm:text-3xl">How Rev2Square revivals work</h1>
+        <h1 class="mt-1 text-[1.75rem] font-semibold leading-tight tracking-tight sm:text-3xl">How Rev²Square revivals work</h1>
     </x-slot>
     <div class="mx-auto max-w-3xl px-4 py-12 sm:px-6">
         <div class="space-y-8 text-zinc-700">

@@ -9,7 +9,7 @@
         @endif
 
         <div class="mb-4 flex items-center justify-between">
-            <p class="text-sm text-zinc-500">{{ auth()->user()->unreadNotifications()->count() }} unread. Rev2Square only notifies you in-app; no emails are sent.</p>
+            <p class="text-sm text-zinc-500">{{ auth()->user()->unreadNotifications()->count() }} unread. Rev²Square only notifies you in-app; no emails are sent.</p>
             <form method="POST" action="{{ route('inbox.read-all') }}" class="inline">
                 @csrf
                 @method('PATCH')

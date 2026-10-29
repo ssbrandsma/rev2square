@@ -7,6 +7,7 @@ use App\Jobs\AnalyzeProjectJob;
 use App\Jobs\ImportRepositoryJob;
 use App\Models\Project;
 use App\Models\Repository;
+use App\Services\Admin\AiBudgets;
 use App\Services\GitHub\GitHubUrl;
 use App\Services\GitHub\InvalidGitHubUrlException;
 use App\Services\Revival\AnalysisRunRepository;
@@ -104,6 +105,12 @@ class EvidenceManager extends Component
     public function analyze(): void
     {
         Gate::authorize('update', $this->project);
+
+        if ($denied = AiBudgets::precheck(auth()->user())) {
+            $this->addError('analyze', $denied);
+
+            return;
+        }
 
         $limits = config('ai.rate_limit');
         $key = 'analyze:'.$this->project->id.':'.auth()->id();

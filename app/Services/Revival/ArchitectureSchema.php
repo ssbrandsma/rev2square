@@ -81,23 +81,29 @@ final class ArchitectureSchema
     /**
      * JSON schema handed to the provider for structured output.
      *
+     * Strict-mode subset only: every object sets additionalProperties
+     * false and requires all of its properties (the provider rejects
+     * anything else with 400 before the model runs). Bounds such as
+     * maxItems/minimum and free-text descriptions stay in the
+     * server-side validator and the prompt instead — see validate()
+     * and ArchitecturePrompt::system().
+     *
+     * content_hash stays a required string but may be empty: the model
+     * is never shown hashes, so omitted values bind to the trusted
+     * snapshot manifest while supplied values must match it.
+     *
      * @return array<string, mixed>
      */
     public static function jsonSchema(): array
     {
         $evidenceRef = [
             'type' => 'object',
+            'additionalProperties' => false,
             'required' => ['source_id', 'locator', 'content_hash'],
             'properties' => [
-                'source_id' => ['type' => 'integer', 'minimum' => 1],
-                'locator' => [
-                    'type' => 'string',
-                    'description' => 'Repository path, optionally with an original line span: path/to/file.go or path/to/file.go:L10-L40.',
-                ],
-                'content_hash' => [
-                    'type' => 'string',
-                    'description' => 'Full sha256 content hash printed beside the source, or its leading hex prefix (at least 12 chars).',
-                ],
+                'source_id' => ['type' => 'integer'],
+                'locator' => ['type' => 'string'],
+                'content_hash' => ['type' => 'string'],
             ],
         ];
 
@@ -105,15 +111,16 @@ final class ArchitectureSchema
 
         return [
             'type' => 'object',
+            'additionalProperties' => false,
             'required' => ['schema_version', 'summary', 'components', 'relationships', 'unknowns', 'coverage_note'],
             'properties' => [
-                'schema_version' => ['type' => 'string', 'const' => self::VERSION],
+                'schema_version' => ['type' => 'string', 'enum' => [self::VERSION]],
                 'summary' => ['type' => 'string'],
                 'components' => [
                     'type' => 'array',
-                    'maxItems' => self::MAX_COMPONENTS,
                     'items' => [
                         'type' => 'object',
+                        'additionalProperties' => false,
                         'required' => ['id', 'type', 'label', 'explanation', 'certainty', 'evidence'],
                         'properties' => [
                             'id' => ['type' => 'string'],
@@ -121,15 +128,15 @@ final class ArchitectureSchema
                             'label' => ['type' => 'string'],
                             'explanation' => ['type' => 'string'],
                             'certainty' => $certainty,
-                            'evidence' => ['type' => 'array', 'maxItems' => self::MAX_EVIDENCE_REFS, 'items' => $evidenceRef],
+                            'evidence' => ['type' => 'array', 'items' => $evidenceRef],
                         ],
                     ],
                 ],
                 'relationships' => [
                     'type' => 'array',
-                    'maxItems' => self::MAX_RELATIONSHIPS,
                     'items' => [
                         'type' => 'object',
+                        'additionalProperties' => false,
                         'required' => ['id', 'from', 'to', 'type', 'label', 'explanation', 'certainty', 'evidence'],
                         'properties' => [
                             'id' => ['type' => 'string'],
@@ -139,15 +146,15 @@ final class ArchitectureSchema
                             'label' => ['type' => 'string'],
                             'explanation' => ['type' => 'string'],
                             'certainty' => $certainty,
-                            'evidence' => ['type' => 'array', 'maxItems' => self::MAX_EVIDENCE_REFS, 'items' => $evidenceRef],
+                            'evidence' => ['type' => 'array', 'items' => $evidenceRef],
                         ],
                     ],
                 ],
                 'unknowns' => [
                     'type' => 'array',
-                    'maxItems' => self::MAX_UNKNOWNS,
                     'items' => [
                         'type' => 'object',
+                        'additionalProperties' => false,
                         'required' => ['id', 'question', 'why_it_matters'],
                         'properties' => [
                             'id' => ['type' => 'string'],
@@ -446,11 +453,17 @@ final class ArchitectureSchema
             $errors[] = "{$where}.locator is required.";
         }
 
+        // The model is never shown content hashes, so an omitted hash is
+        // honest: it binds to the trusted snapshot metadata below. Only a
+        // supplied value is checked — malformed or mismatched hashes are
+        // rejected as fabricated, never silently corrected.
         $hash = $ref['content_hash'] ?? null;
-        if (! is_string($hash) || ! preg_match('/^[0-9a-fA-F]{12,64}$/', $hash)) {
-            $errors[] = "{$where}.content_hash must be at least 12 hex characters.";
-        } elseif (! str_starts_with(strtolower($entry['content_hash']), strtolower($hash))) {
-            $errors[] = "{$where}.content_hash does not match the stored source.";
+        if ($hash !== null && (! is_string($hash) || trim($hash) !== '')) {
+            if (! is_string($hash) || ! preg_match('/^[0-9a-fA-F]{12,64}$/', $hash)) {
+                $errors[] = "{$where}.content_hash must be at least 12 hex characters.";
+            } elseif (! str_starts_with(strtolower($entry['content_hash']), strtolower($hash))) {
+                $errors[] = "{$where}.content_hash does not match the stored source.";
+            }
         }
 
         $from = null;
@@ -471,7 +484,7 @@ final class ArchitectureSchema
             'source_id' => $sourceId,
             'path' => $path,
             'locator' => $locator,
-            'content_hash' => strtolower((string) $hash),
+            'content_hash' => strtolower($entry['content_hash']),
             'from_line' => $from,
             'to_line' => $to,
             'is_partial' => $entry['is_partial'],

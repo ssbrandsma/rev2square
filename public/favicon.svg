@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 30 30" role="img" aria-labelledby="faviconTitle">
+  <title id="faviconTitle">Rev²Square</title>
+  <rect x="1" y="1" width="13" height="13" rx="2" fill="#10b981"/>
+  <rect x="16" y="1" width="13" height="13" rx="2" fill="#3f3f46"/>
+  <rect x="1" y="16" width="13" height="13" rx="2" fill="#3f3f46"/>
+  <rect x="16" y="16" width="13" height="13" rx="2" fill="#fbbf24"/>
+</svg>

@@ -227,6 +227,59 @@ class ArchitectureSchemaTest extends TestCase
         $this->assertNotSame([], $errors);
     }
 
+    public function test_omitted_hash_binds_to_manifest(): void
+    {
+        // The model is never shown content hashes: an empty value is
+        // honest omission, bound server-side to the trusted manifest.
+        [$errors, $normalized] = ArchitectureSchema::validate(
+            MockAIProvider::architecturePayload($this->sources(), [
+                'components' => [['evidence' => [['content_hash' => '']]]],
+            ]),
+            $this->index()
+        );
+
+        $this->assertSame([], $errors);
+        $this->assertSame(
+            hash('sha256', 'whole file'),
+            $normalized['components'][0]['evidence'][0]['content_hash']
+        );
+    }
+
+    public function test_prefix_hash_binds_to_full_manifest_hash(): void
+    {
+        [$errors, $normalized] = ArchitectureSchema::validate(
+            MockAIProvider::architecturePayload($this->sources(), [
+                'components' => [['evidence' => [['content_hash' => substr(hash('sha256', 'whole file'), 0, 16)]]]],
+            ]),
+            $this->index()
+        );
+
+        $this->assertSame([], $errors);
+        $this->assertSame(
+            hash('sha256', 'whole file'),
+            $normalized['components'][0]['evidence'][0]['content_hash']
+        );
+    }
+
+    public function test_malformed_hash_reproduces_live_failure(): void
+    {
+        // Regression for the live 28 Oct 2026 retry failure: a supplied
+        // but non-hex hash is rejected, never silently corrected.
+        $payload = MockAIProvider::architecturePayload($this->sources());
+        $ref = $payload['components'][0]['evidence'][0];
+        $payload['components'][0]['evidence'] = [
+            array_merge($ref, ['content_hash' => 'unknown']),
+            array_merge($ref, ['content_hash' => 'n/a']),
+            array_merge($ref, ['content_hash' => 'sha?']),
+        ];
+
+        [$errors] = ArchitectureSchema::validate($payload, $this->index());
+
+        $this->assertContains('components[0].evidence[0].content_hash must be at least 12 hex characters.', $errors);
+        $this->assertContains('components[0].evidence[1].content_hash must be at least 12 hex characters.', $errors);
+        $this->assertContains('components[0].evidence[2].content_hash must be at least 12 hex characters.', $errors);
+    }
+
     public function test_whole_file_line_ranges_are_checked(): void
     {
         [$errors, $normalized] = ArchitectureSchema::validate(
@@ -294,5 +347,50 @@ class ArchitectureSchemaTest extends TestCase
         [$errors] = ArchitectureSchema::validate($payload, $this->index());
 
         $this->assertNotSame([], $errors);
+    }
+
+    public function test_json_schema_is_non_recursive(): void
+    {
+        $schema = json_encode(ArchitectureSchema::jsonSchema());
+
+        $this->assertStringNotContainsString('$ref', $schema);
+        $this->assertStringNotContainsString('$recursive', $schema);
+    }
+
+    public function test_json_schema_objects_deny_additional_properties(): void
+    {
+        // The provider rejects strict schemas whose objects omit
+        // additionalProperties (observed live 400, 28 Oct 2026).
+        $this->assertObjectsAreClosed(ArchitectureSchema::jsonSchema());
+    }
+
+    public function test_json_schema_objects_require_all_properties(): void
+    {
+        // Strict mode rejects objects whose required list omits a property.
+        $this->assertObjectsAreClosed(ArchitectureSchema::jsonSchema(), true);
+    }
+
+    private function assertObjectsAreClosed(mixed $node, bool $checkRequired = false): void
+    {
+        if (! is_array($node)) {
+            return;
+        }
+
+        if (($node['type'] ?? null) === 'object') {
+            $this->assertFalse(
+                $node['additionalProperties'] ?? null,
+                'Object node must set additionalProperties: false.'
+            );
+
+            if ($checkRequired && isset($node['properties'])) {
+                $missing = array_diff(array_keys($node['properties']), $node['required'] ?? []);
+
+                $this->assertSame([], array_values($missing), 'Required must list every property.');
+            }
+        }
+
+        foreach ($node as $child) {
+            $this->assertObjectsAreClosed($child, $checkRequired);
+        }
     }
 }

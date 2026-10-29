@@ -69,7 +69,11 @@ class ModerationController extends Controller
 
     public function review(Request $request, Project $project, Report $report): RedirectResponse
     {
-        Gate::authorize('update', $project);
+        // Project managers review their own queue; global moderators
+        // (and admins) may review any queue by explicit permission.
+        if (! $request->user()->can('update', $project) && ! $request->user()->can('moderate')) {
+            abort(403);
+        }
         abort_unless($report->project()?->id === $project->id, 404);
         abort_unless($report->status === ReportStatus::Pending, 422, 'This report was already reviewed.');
 

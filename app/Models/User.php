@@ -3,6 +3,8 @@
 namespace App\Models;
 
 // use Illuminate\Contracts\Auth\MustVerifyEmail;
+use App\Enums\AccountStatus;
+use App\Enums\GlobalRole;
 use Database\Factories\UserFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Attributes\Hidden;
@@ -32,7 +34,37 @@ class User extends Authenticatable
             'notification_preferences' => 'array',
             'skills' => 'array',
             'links' => 'array',
+            'global_role' => GlobalRole::class,
+            'account_status' => AccountStatus::class,
+            'suspended_at' => 'datetime',
+            'ai_enabled' => 'boolean',
+            'ai_unlimited' => 'boolean',
         ];
+    }
+
+    /**
+     * NOTE: global_role, account_status, and AI-limit columns are
+     * deliberately absent from #[Fillable]: privileged fields are only
+     * ever written through explicit admin actions, never mass assignment.
+     */
+    public function isAdmin(): bool
+    {
+        return $this->global_role === GlobalRole::Admin;
+    }
+
+    public function isModerator(): bool
+    {
+        return $this->global_role === GlobalRole::Moderator || $this->isAdmin();
+    }
+
+    public function isSuspended(): bool
+    {
+        return $this->account_status === AccountStatus::Suspended;
+    }
+
+    public function aiDisabled(): bool
+    {
+        return ! $this->ai_enabled;
     }
 
     /**

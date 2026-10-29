@@ -60,15 +60,20 @@
                     <ul class="mt-3 space-y-3">
                         @foreach($sections[$key]['items'] as $card)
                             <li class="rounded-xl border border-zinc-200 bg-white p-5">
-                                <div class="flex items-start justify-between gap-3">
-                                    <a href="{{ route('projects.show', $card['project']) }}" class="font-bold hover:text-emerald-700">{{ $card['project']->title }}</a>
-                                    <span class="shrink-0 rounded-full bg-zinc-100 px-2.5 py-0.5 text-xs font-semibold text-zinc-700">{{ $card['role'] }}</span>
-                                </div>
+                                <div class="flex items-start gap-3">
+                                    @include('projects._thumb', ['project' => $card['project']])
+                                    <div class="min-w-0 flex-1">
+                                        <div class="flex items-start justify-between gap-3">
+                                            <a href="{{ route('projects.show', $card['project']) }}" class="font-bold hover:text-emerald-700">{{ $card['project']->title }}</a>
+                                            <span class="shrink-0 rounded-full bg-zinc-100 px-2.5 py-0.5 text-xs font-semibold text-zinc-700">{{ $card['role'] }}</span>
+                                        </div>
                                 <p class="mt-1 text-sm text-zinc-600">{{ $card['project']->pitch }}</p>
                                 <p class="mt-1 text-xs text-zinc-500">{{ $card['project']->phase->label() }} · {{ $card['project']->activity->label() }}@if($card['is_creator'] && $key !== 'started') · Started by this member @endif</p>
                                 @if($card['assigned_task'])
                                     <p class="mt-1 text-xs text-zinc-600">Assigned: <a href="{{ route('projects.tasks.show', [$card['project'], $card['assigned_task']]) }}" class="font-semibold text-emerald-700 hover:text-emerald-600">{{ $card['assigned_task']->title }}</a> ({{ $card['assigned_task']->status->label() }})</p>
                                 @endif
+                                    </div>
+                                </div>
                             </li>
                         @endforeach
                     </ul>

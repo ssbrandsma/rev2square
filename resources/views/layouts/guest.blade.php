@@ -4,7 +4,10 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="csrf-token" content="{{ csrf_token() }}">
-    <title>{{ ($title ?? null) ? $title.' — ' : '' }}Rev2Square</title>
+    <title>{{ ($title ?? null) ? $title.' — ' : '' }}Rev²Square</title>
+    <meta name="description" content="Rev²Square — Reverse Engineer. Revive. Together. Bring abandoned hardware and software back to life with AI-assisted reverse engineering and an open-source community.">
+    <meta name="theme-color" content="#09090b">
+    <link rel="icon" type="image/svg+xml" href="{{ asset('favicon.svg') }}">
     <!-- Type is self-hosted (Source Sans 3 via Fontsource); no external font requests. -->
     @vite(['resources/css/app.css', 'resources/js/app.js'])
 </head>
@@ -18,15 +21,15 @@
             <rect x="16" y="16" width="13" height="13" rx="2" fill="#fbbf24"/>
         </svg>
         <span class="leading-tight">
-            <span class="block text-xl font-semibold tracking-tight text-white">Rev2Square</span>
-            <span class="block text-xs font-semibold text-zinc-400">Reverse. Revive. Together.</span>
+            <span class="block text-xl font-semibold tracking-tight text-white">Rev²Square</span>
+            <span class="block text-xs font-semibold text-zinc-400">Reverse Engineer. Revive. Together.</span>
         </span>
     </a>
     <div class="mt-6 w-full max-w-md overflow-hidden rounded-xl bg-white px-6 py-8 shadow-2xl sm:px-8">
         {{ $slot }}
     </div>
     <p class="mt-6 text-center text-xs text-zinc-500">
-        <a href="{{ route('home') }}" class="underline hover:text-zinc-300">Back to Rev2Square</a>
+        <a href="{{ route('home') }}" class="underline hover:text-zinc-300">Back to Rev²Square</a>
     </p>
 </div>
 </body>

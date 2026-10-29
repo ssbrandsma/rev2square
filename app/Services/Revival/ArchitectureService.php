@@ -77,6 +77,12 @@ class ArchitectureService
             jsonSchema: ArchitectureSchema::jsonSchema(),
             maxCompletionTokens: (int) config('ai.architecture_token_budget'),
             correlationId: 'architecture-snapshot-'.$snapshot->id,
+            usage: [
+                'user_id' => $snapshot->user_id,
+                'project_id' => $snapshot->project_id,
+                'feature' => 'architecture_investigator',
+                'operation' => 'architecture-snapshot-'.$snapshot->id,
+            ],
         );
 
         try {
@@ -226,7 +232,7 @@ class ArchitectureService
         ])->save();
     }
 
-    private function markFailed(ArchitectureSnapshot $snapshot, AnalysisStatus $status, string $code, string $message): void
+    public function markFailed(ArchitectureSnapshot $snapshot, AnalysisStatus $status, string $code, string $message): void
     {
         $snapshot->forceFill([
             'status' => $status,

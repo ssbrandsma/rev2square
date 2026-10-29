@@ -5,9 +5,12 @@ use App\Models\User;
 use App\Services\Presence\MemberInfo;
 use Illuminate\Support\Facades\Broadcast;
 
-Broadcast::channel('chat.lounge', fn (User $user): bool => true);
+Broadcast::channel('chat.lounge', fn (User $user): bool => ! $user->isSuspended());
 
 Broadcast::channel('chat.project.{projectId}', function (User $user, int $projectId): bool {
+    if ($user->isSuspended()) {
+        return false;
+    }
     $project = Project::find($projectId);
 
     return $project !== null && $user->can('view', $project);
@@ -19,14 +22,14 @@ Broadcast::channel('chat.project.{projectId}', function (User $user, int $projec
 // strips the prefix before matching. Presence names stay distinct from the
 // private chat.* message channels so message delivery (all signed-in users)
 // and roster visibility (opted-in users only) enforce different rules.
-Broadcast::channel('online', fn (User $user): array|false => $user->show_presence ? MemberInfo::for($user) : false);
+Broadcast::channel('online', fn (User $user): array|false => $user->isSuspended() || ! $user->show_presence ? false : MemberInfo::for($user));
 
-Broadcast::channel('roster.lounge', fn (User $user): array|false => $user->show_presence ? MemberInfo::for($user) : false);
+Broadcast::channel('roster.lounge', fn (User $user): array|false => $user->isSuspended() || ! $user->show_presence ? false : MemberInfo::for($user));
 
 Broadcast::channel('roster.project.{projectId}', function (User $user, int $projectId): array|false {
     $project = Project::find($projectId);
 
-    if ($project === null || ! $user->can('view', $project) || ! $user->show_presence) {
+    if ($project === null || $user->isSuspended() || ! $user->can('view', $project) || ! $user->show_presence) {
         return false;
     }
 

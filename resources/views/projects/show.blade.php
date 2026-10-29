@@ -1,7 +1,8 @@
 <x-app-layout>
     <x-slot name="title">{{ $project->title }}</x-slot>
-    <section class="bg-zinc-950 text-white">
+    <section class="bg-zinc-950 bg-no-repeat text-white" style="background-image: url('{{ asset('images/card-pattern.svg') }}'); background-position: right center; background-size: 800px auto;">
         <div class="mx-auto max-w-6xl px-4 py-12 sm:px-6">
+            @include('projects._cover', ['project' => $project])
             <p class="text-sm font-semibold text-zinc-400">{{ $project->devices->first()?->displayName() ?? 'Device to be linked' }}</p>
             <h1 class="mt-2 text-3xl font-semibold tracking-tight sm:text-4xl">{{ $project->title }}</h1>
             @if($project->pitch)
@@ -78,17 +79,9 @@
                     <p class="mt-3 text-sm"><a href="{{ route('projects.reports.show', [$project, $publishedReport]) }}" class="font-semibold text-emerald-700 hover:text-emerald-600">Read the full assessment with sources →</a></p>
                 </section>
             @endif
-            <section>
-                <h2 class="text-sm font-semibold text-zinc-500">Project story</h2>
-                <div class="mt-3 max-w-[70ch] space-y-3 leading-relaxed text-zinc-700">
-                    @foreach(preg_split('/\n\s*\n/', trim($project->body ?? '')) ?: [] as $paragraph)
-                        <p>{{ $paragraph }}</p>
-                    @endforeach
-                    @if(blank($project->body))
-                        <p class="text-zinc-500">The maintainer has not written the project story yet.</p>
-                    @endif
-                </div>
-            </section>
+            @include('projects._story', ['project' => $project])
+            @include('projects._gallery', ['project' => $project])
+            @include('projects._media-files', ['project' => $project])
 
             <section id="roadmap">
                 <div class="flex items-center justify-between gap-2">
@@ -133,7 +126,7 @@
                             @endcan
                         </div>
                     @empty
-                        <p class="rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-6 text-sm text-zinc-600">No milestones yet. When the maintainers run an AI analysis and approve the roadmap, milestones appear here.</p>
+                        <p class="rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-6 text-sm text-zinc-600">No milestones yet. Maintainers can add them directly, or run an AI analysis and approve the roadmap to generate them.</p>
                     @endforelse
                 </div>
                 @if($retiredMilestoneCount > 0)
@@ -179,7 +172,7 @@
                             @endif
                             <p class="mt-3 flex flex-wrap gap-4">
                                 <a href="{{ route('projects.tasks.show', [$project, $task]) }}" class="text-sm font-semibold text-emerald-700 hover:text-emerald-600">Details →</a>
-                                @if($task->status === \App\Enums\TaskStatus::Open)
+                                @if($task->status === \App\Enums\TaskStatus::Open && ! $contributionDenial)
                                     <a href="{{ route('projects.offers.create', [$project, 'task' => $task->id]) }}" class="text-sm font-semibold text-emerald-700 hover:text-emerald-600">Offer help →</a>
                                 @endif
                             </p>
@@ -220,7 +213,7 @@
                             <p class="mt-2 max-w-[70ch] whitespace-pre-line text-zinc-700">{{ $observation->body }}</p>
                             @if($observation->source_url)
                                 <p class="mt-2 text-sm"><a href="{{ $observation->source_url }}" target="_blank" rel="noopener" class="font-semibold text-emerald-700 hover:text-emerald-600">Referenced document ↗</a>
-                                    <span class="text-xs text-zinc-500">(external link, stored as a reference — Rev2Square does not fetch it)</span></p>
+                                    <span class="text-xs text-zinc-500">(external link, stored as a reference — Rev²Square does not fetch it)</span></p>
                             @endif
                             @include('projects._attachments', ['project' => $project, 'attachments' => $observation->attachments, 'uploadRoute' => route('projects.observations.attachments.store', [$project, $observation]), 'parentId' => 'obs-'.$observation->id])
                             @if($observation->corrections->isNotEmpty())
@@ -418,7 +411,7 @@
                                         moved a task from <strong>{{ \App\Enums\TaskStatus::tryFrom($event->metadata['from'] ?? '')?->label() ?? '—' }}</strong>
                                         to <strong>{{ \App\Enums\TaskStatus::tryFrom($event->metadata['to'] ?? '')?->label() ?? '—' }}</strong>
                                         @break
-                                    @case('task.assigned') assigned a task to <strong>{{ $event->metadata['assignee'] ?? 'someone' }}</strong> @break
+                                    @case('task.assigned') assigned a task to @include('projects._history-assignee', ['event' => $event]) @break
                                     @case('task.unassigned') unassigned a task @break
                                     @case('milestone.created') created a milestone @break
                                     @case('milestone.updated') updated a milestone @break

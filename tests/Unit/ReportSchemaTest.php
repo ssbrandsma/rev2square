@@ -101,6 +101,46 @@ class ReportSchemaTest extends TestCase
         $this->assertSame([], ReportSchema::validate($payload, $this->sources()));
     }
 
+    public function test_unknown_finding_with_examined_evidence_passes(): void
+    {
+        // UNKNOWN = examined evidence cannot answer: citation required,
+        // explanation in limitations.
+        $payload = $this->payload();
+        $payload['findings'][0]['status'] = 'UNKNOWN';
+        $payload['findings'][0]['limitations'] = 'E1 shows the file exists but not whether the API runs.';
+
+        $this->assertSame([], ReportSchema::validate($payload, $this->sources()));
+    }
+
+    public function test_unknown_finding_without_evidence_fails(): void
+    {
+        // The observed live failure (Run #10, 28 Oct 2026): an uncited
+        // UNKNOWN finding must be rejected, not silently accepted.
+        // Gaps with no evidence at all belong in unknowns[], not findings[].
+        $payload = $this->payload();
+        $payload['findings'][0]['status'] = 'UNKNOWN';
+        $payload['findings'][0]['evidence_ids'] = [];
+
+        $errors = ReportSchema::validate($payload, $this->sources());
+
+        $this->assertContains('findings[0] with status UNKNOWN must cite at least one evidence id.', $errors);
+    }
+
+    public function test_missing_evidence_is_represented_as_unknowns_without_findings(): void
+    {
+        // Genuinely missing evidence: no findings, gaps recorded in
+        // unknowns[] (which requires no citations).
+        $payload = $this->payload();
+        $payload['findings'] = [];
+        $payload['evidence'] = [];
+        $payload['source_manifest_ids'] = [];
+        $payload['revival_paths'][0]['supporting_evidence_ids'] = [];
+        $payload['revival_paths'][0]['feasibility'] = 'INSUFFICIENT_EVIDENCE';
+        $payload['experiments'] = [];
+
+        $this->assertSame([], ReportSchema::validate($payload, $this->sources()));
+    }
+
     public function test_unknown_task_reference_fails(): void
     {
         $payload = $this->payload();

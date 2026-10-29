@@ -6,7 +6,7 @@ submission were built during the event. Presented features, code, and
 functionality must have been built during the hackathon; anything reused must
 be disclosed here.
 
-## Built during the hackathon (Rev2Square implementation)
+## Built during the hackathon (Rev²Square implementation)
 
 - WP0 (27 Oct 2026): Laravel 13 + Docker Compose dev stack (`app`, `nginx`,
   `db`, `queue`, `scheduler`, `node`), Breeze Blade auth, Livewire + Flux +

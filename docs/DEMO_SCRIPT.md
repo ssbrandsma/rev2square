@@ -1,4 +1,4 @@
-# Rev2Square — 3-minute demo script
+# Rev²Square — 3-minute demo script
 
 Target: a reviewer who has never seen the app. Total: ~3:00.
 Base URL: `http://localhost:8080`. All data below is real local state unless marked optional.
@@ -24,7 +24,7 @@ Action: landing page `http://localhost:8080/`, scroll hero → how-it-works → 
 
 Narration: "Good hardware dies when its company does. The Bublcam — a 360°
 camera from a 2013 Kickstarter — lost its cloud, its app, and its docs. What
-survives is scattered across a GitHub repo. Rev2Square turns that scattered
+survives is scattered across a GitHub repo. Rev²Square turns that scattered
 evidence into a revival plan a community can actually execute."
 
 Fallback: if the landing page fails, start at `/projects` and narrate the same

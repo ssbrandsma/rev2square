@@ -60,6 +60,10 @@ class MetaAIProvider implements AIProviderInterface
             throw new AIProviderException('Meta Model API requests cannot combine tool calling with a JSON schema response format.');
         }
 
+        if ($request->jsonSchema !== null) {
+            $this->assertStrictSchema($request->jsonSchema);
+        }
+
         $payload = [
             'model' => $this->model,
             'messages' => $request->messages ?? [
@@ -121,6 +125,48 @@ class MetaAIProvider implements AIProviderInterface
         $this->logSuccess($response, $durationMs, $request);
 
         return $result;
+    }
+
+    /**
+     * Refuse to send a structured-output schema the provider would reject
+     * with 400 before the model runs. Every object must opt out of
+     * undeclared keys (additionalProperties false) and require every
+     * declared property. Deterministic and free: no HTTP is attempted.
+     *
+     * @param  array<string, mixed>  $schema
+     */
+    private function assertStrictSchema(array $schema): void
+    {
+        $this->assertStrictNode($schema, 'schema');
+    }
+
+    private function assertStrictNode(mixed $node, string $path): void
+    {
+        if (! is_array($node)) {
+            return;
+        }
+
+        if (($node['type'] ?? null) === 'object' || isset($node['properties'])) {
+            if (($node['additionalProperties'] ?? null) !== false) {
+                throw new AIProviderException(
+                    "Refusing to send a JSON schema the Meta Model API would reject: object at '{$path}' must set additionalProperties false."
+                );
+            }
+
+            if (isset($node['properties']) && is_array($node['properties'])) {
+                $missing = array_diff(array_keys($node['properties']), $node['required'] ?? []);
+
+                if ($missing !== []) {
+                    throw new AIProviderException(
+                        "Refusing to send a JSON schema the Meta Model API would reject: object at '{$path}' must require every property (missing: ".implode(', ', $missing).').'
+                    );
+                }
+            }
+        }
+
+        foreach ($node as $key => $child) {
+            $this->assertStrictNode($child, $path.'.'.$key);
+        }
     }
 
     /**

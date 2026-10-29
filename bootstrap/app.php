@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Middleware\CheckAccountStatus;
 use App\Support\TrustedHostPatterns;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
@@ -37,6 +38,10 @@ return Application::configure(basePath: dirname(__DIR__))
             at: TrustedHostPatterns::fromEnv(env('TRUSTED_HOSTS'), env('APP_URL')),
             subdomains: false,
         );
+
+        // Suspended accounts lose access on every request, including
+        // already-established sessions.
+        $middleware->appendToGroup('web', CheckAccountStatus::class);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(

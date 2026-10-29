@@ -25,5 +25,11 @@ class AIRequest
          * @var list<array{type: string, function: array{name: string, description: string, parameters: array<string, mixed>}}|null>
          */
         public readonly ?array $tools = null,
+        /**
+         * Usage attribution, consumed by the metering decorator only.
+         *
+         * @var array{user_id?: ?int, project_id?: ?int, feature?: string, operation?: string}|null
+         */
+        public readonly ?array $usage = null,
     ) {}
 }

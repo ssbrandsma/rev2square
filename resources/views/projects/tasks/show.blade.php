@@ -129,7 +129,7 @@
                                     to <strong>{{ \App\Enums\TaskStatus::tryFrom($event->metadata['to'] ?? '')?->label() ?? '—' }}</strong>@if(!empty($event->metadata['note'])) — “{{ $event->metadata['note'] }}”@endif
                                     @break
                                 @case('task.assigned')
-                                    assigned this task to <strong>{{ $event->metadata['assignee'] ?? 'someone' }}</strong>
+                                    assigned this task to @include('projects._history-assignee', ['event' => $event])
                                     @break
                                 @case('task.unassigned')
                                     unassigned this task

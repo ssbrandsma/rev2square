@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Enums\DiscussionType;
 use App\Models\AuditEvent;
 use App\Models\Project;
+use App\Services\Media\StoryRenderer;
 use Illuminate\Support\Facades\Gate;
 use Symfony\Component\HttpFoundation\Response;
 
@@ -93,6 +94,29 @@ class ExportController extends Controller
             'title' => $project->title,
             'pitch' => $project->pitch,
             'story' => $project->body,
+            'story_markdown' => $project->hasRichStory()
+                ? StoryRenderer::toMarkdown($project->story_document, $project)
+                : $project->body,
+            'story_format' => $project->story_format,
+            'story_document' => $project->hasRichStory() ? $project->story_document : null,
+            'cover' => $project->cover && $project->cover->isReady() ? [
+                'alt' => $project->cover->altText(),
+                'caption' => $project->cover->caption,
+                'credit' => $project->cover->credit,
+                'license' => $project->cover->license,
+            ] : null,
+            'media' => $project->media->map(fn ($item): array => [
+                'kind' => $item->kind,
+                'category' => $item->category,
+                'title' => $item->displayTitle(),
+                'caption' => $item->caption,
+                'alt' => $item->alt,
+                'credit' => $item->credit,
+                'license' => $item->license,
+                'in_gallery' => $item->in_gallery,
+                'mime' => $item->mime,
+                'size' => $item->size,
+            ])->all(),
             'phase' => $project->phase->label(),
             'activity' => $project->activity->label(),
             'publication_status' => $project->publication_status->label(),
