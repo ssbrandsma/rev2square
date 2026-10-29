@@ -26,7 +26,7 @@
             $hasAttention = $invitations->isNotEmpty() || count($joinableOfferIds) > 0 || $blockedTasks->isNotEmpty() || $unreadCount > 0;
             @endphp
             @if(! $hasAttention)
-                <p class="rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-6 text-sm text-zinc-600">Nothing waiting. Your applications, invitations, blocked tasks, and unread notifications will surface here.</p>
+                <p class="rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-6 text-sm text-zinc-600">Nothing waiting.</p>
             @else
                 <ul class="space-y-3">
                     @foreach($invitations as $invitation)
@@ -107,7 +107,7 @@
 
         <h2 class="mb-3 mt-10 text-lg font-semibold tracking-tight">Working on <span class="text-sm font-semibold text-zinc-400">({{ $sections['working_on']['total'] }})</span></h2>
         @if($sections['working_on']['items']->isEmpty())
-            <p class="rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-6 text-sm text-zinc-600">No team memberships or task assignments yet. Accepted help requests show a Join button above; task claims assign you on acceptance.</p>
+            <p class="rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-6 text-sm text-zinc-600">No team memberships or task assignments yet.</p>
         @else
             <ul class="space-y-3">
                 @foreach($sections['working_on']['items'] as $card)
@@ -172,7 +172,7 @@
 
         <h2 id="saved" class="mb-3 mt-10 text-lg font-semibold tracking-tight">Saved projects <span class="text-sm font-semibold text-zinc-400">({{ $saved->count() }})</span></h2>
         @if($saved->isEmpty())
-            <p class="rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-6 text-sm text-zinc-600">Nothing saved yet. Saving bookmarks a project privately; it is not a follow and not a contribution.</p>
+            <p class="rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-6 text-sm text-zinc-600">Nothing saved yet.</p>
         @else
             <ul class="space-y-3">
                 @foreach($saved as $save)
@@ -196,7 +196,7 @@
 
         <h2 class="mb-3 mt-10 text-lg font-semibold tracking-tight">My contributions <span class="text-sm font-semibold text-zinc-400">({{ $sections['contributions']['total'] }})</span></h2>
         @if($sections['contributions']['items']->isEmpty())
-            <p class="rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-6 text-sm text-zinc-600">No recorded work yet. Observations, hardware tests, and assigned tasks you complete appear here with their review status.</p>
+            <p class="rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-6 text-sm text-zinc-600">No recorded work yet.</p>
         @else
             <ul class="space-y-3">
                 @foreach($sections['contributions']['items'] as $contribution)
@@ -220,7 +220,7 @@
             <a href="{{ route('inbox.index') }}" class="text-sm font-semibold text-emerald-700 hover:text-emerald-600">Open inbox @if($unreadCount > 0)({{ $unreadCount }} unread)@endif</a>
         </div>
         @if($activity->isEmpty())
-            <p class="rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-6 text-sm text-zinc-600">No activity yet. Decisions, assignments, replies, and followed updates land here; this is the same inbox, not a second feed.</p>
+            <p class="rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-6 text-sm text-zinc-600">No activity yet.</p>
         @else
             <ul class="space-y-3">
                 @foreach($activity as $notification)

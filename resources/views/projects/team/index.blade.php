@@ -38,7 +38,7 @@
             <h2 class="text-sm font-semibold text-zinc-500">Maintainers</h2>
             <ul class="mt-3 divide-y divide-zinc-100">
                 <li class="flex items-center justify-between gap-2 py-2 text-sm">
-                    <span><a href="{{ $project->owner->profileUrl() }}" class="font-semibold hover:text-emerald-700">{{ $project->owner->name }}</a> <span class="text-zinc-500">· Owner — always retains access</span></span>
+                    <span><a href="{{ $project->owner->profileUrl() }}" class="font-semibold hover:text-emerald-700">{{ $project->owner->name }}</a> <span class="text-zinc-500">· Owner</span></span>
                 </li>
                 @foreach($members as $member)
                     <li class="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
@@ -77,7 +77,7 @@
                     </div>
                     <button type="submit" class="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500">Send invitation</button>
                 </form>
-                <p class="mt-2 text-xs text-zinc-500">Invitations expire 14 days after sending. The Owner role is never granted by invitation.</p>
+                <p class="mt-2 text-xs text-zinc-500">Invitations expire 14 days after sending. The Owner role is never granted by invitation; the owner always retains access.</p>
             </div>
         @endif
 

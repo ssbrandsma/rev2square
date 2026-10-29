@@ -150,7 +150,7 @@
             </div>
         @endif
     @else
-        <p class="mt-6 rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-8 text-center text-sm text-zinc-600">No repository linked yet. Import one above to build the evidence manifest.</p>
+        <p class="mt-6 rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-8 text-center text-sm text-zinc-600">No repository linked yet.</p>
     @endif
 
     <div class="mt-8 rounded-xl border border-zinc-200 bg-white p-6">
@@ -213,7 +213,7 @@
                 @endforeach
             </ul>
         @else
-            <p class="mt-4 text-sm text-zinc-600">No analyses yet. Import evidence above, then run the first AI analysis.</p>
+            <p class="mt-4 text-sm text-zinc-600">No analyses yet.</p>
         @endif
     </div>
 </div>

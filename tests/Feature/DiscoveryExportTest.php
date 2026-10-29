@@ -96,7 +96,7 @@ class DiscoveryExportTest extends TestCase
         // the header must say so instead of promising "open work".
         $this->get(route('tasks.index'))
             ->assertOk()
-            ->assertSee('Contributor tasks across published revival projects, newest first.')
+            ->assertSee('Contributor tasks across published revival projects.')
             ->assertDontSee('Open work across published revival projects.');
     }
 

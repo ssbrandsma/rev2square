@@ -33,7 +33,7 @@
                     <p class="mt-2 text-xs text-zinc-500">{{ $notification->created_at->diffForHumans() }}</p>
                 </a>
             @empty
-                <p class="rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-6 text-sm text-zinc-600">Nothing here yet. Offers, task assignments, discussion replies, mentions, and project updates will appear here.</p>
+                <p class="rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-6 text-sm text-zinc-600">Nothing here yet.</p>
             @endforelse
         </div>
 

@@ -9,12 +9,12 @@
     data-user-name="{{ auth()->user()->name ?? '' }}"
     class="grid gap-6 lg:grid-cols-3">
 
-    <div class="lg:col-span-2">
+    <div class="@auth lg:col-span-2 @else lg:col-span-3 @endauth">
         <div data-chat-status class="mb-3 hidden rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900" role="status"></div>
 
         <div data-chat-scroll class="h-[28rem] space-y-4 overflow-y-auto rounded-xl border border-zinc-200 bg-white p-5">
             @if($messages->isEmpty())
-                <p class="rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-6 text-sm text-zinc-600" data-chat-empty>No messages yet. Say hello — and keep it kind.</p>
+                <p class="rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-6 text-sm text-zinc-600" data-chat-empty>No messages yet.@if($canPost ?? false) Say hello.@endif</p>
             @endif
             @foreach($messages as $message)
                 <div data-chat-message data-message-id="{{ $message->id }}" id="message-{{ $message->id }}" class="flex items-start gap-3">
@@ -84,6 +84,7 @@
         @endauth
     </div>
 
+    @auth
     <aside class="lg:col-span-1">
         <div class="rounded-xl border border-zinc-200 bg-white p-5" data-presence-roster data-channel="presence-roster.{{ $room }}">
             <h2 class="text-sm font-semibold text-zinc-500">Here now</h2>
@@ -93,4 +94,5 @@
             <p class="mt-3 text-xs text-zinc-500">Only members who opted in to presence appear here. <a href="{{ route('profile.edit') }}" class="font-semibold text-emerald-700 hover:text-emerald-600">Presence settings</a></p>
         </div>
     </aside>
+    @endauth
 </div>

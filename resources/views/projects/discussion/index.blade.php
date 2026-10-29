@@ -30,15 +30,15 @@
             </div>
         @endcan
 
-        <div class="mb-6 rounded-xl border border-zinc-200 bg-white p-5 text-sm text-zinc-600">
-            <p class="font-semibold text-zinc-900">How discussion works here</p>
+        <details class="mb-6 rounded-xl border border-zinc-200 bg-white p-5 text-sm text-zinc-600">
+            <summary class="cursor-pointer font-semibold text-zinc-900">Discussion help</summary>
             <ul class="mt-2 list-disc space-y-1 pl-5">
                 <li>One level of replies; threads sort by latest activity, replies read oldest first.</li>
                 <li>Links and <code class="rounded bg-zinc-100 px-1 font-mono text-[13px]">code</code> are welcome; everything else is plain safe text.</li>
                 <li>Authors can edit (marked Edited) or remove their posts; threads with replies stay as placeholders.</li>
                 <li>Unverified posts are conversation, not verified hardware claims. Never share credentials or personal data.</li>
             </ul>
-        </div>
+        </details>
 
         @auth
             @unless($denial)
@@ -69,7 +69,8 @@
                             </div>
                         @endcan
                     </div>
-                    <div class="mt-3 flex justify-end">
+                    <div class="mt-3 flex flex-wrap items-center justify-between gap-2">
+                        <p class="text-xs text-zinc-500">Posts are unverified conversation — never share credentials or personal data.</p>
                         <button type="submit" data-disable-on-submit class="rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-emerald-500">Post discussion</button>
                     </div>
                 </form>
@@ -105,7 +106,11 @@
                     </div>
                 </article>
             @empty
-                <p class="rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-8 text-center text-sm text-zinc-600">No discussions yet. Start the first one above.</p>
+                @auth
+                    <p class="rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-8 text-center text-sm text-zinc-600">No discussions yet. Start the first one above.</p>
+                @else
+                    <p class="rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-8 text-center text-sm text-zinc-600">No discussions yet.</p>
+                @endauth
             @endforelse
         </div>
 

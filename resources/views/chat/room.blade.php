@@ -4,7 +4,7 @@
             <a href="{{ route('projects.show', $project) }}" class="hover:underline">{{ $project->title }}</a> · Chat
         </p>
         <h1 class="mt-1 text-[1.75rem] font-semibold leading-tight tracking-tight sm:text-3xl">{{ $roomLabel }}</h1>
-        <p class="mt-1 text-sm text-zinc-600">Ephemeral coordination, not decisions: conclusions belong in the discussion or a task.</p>
+        <p class="mt-1 text-sm text-zinc-600">Quick coordination. Record decisions in discussions or tasks.</p>
     </x-slot>
 
     @include('projects._nav', ['project' => $project, 'active' => 'chat'])

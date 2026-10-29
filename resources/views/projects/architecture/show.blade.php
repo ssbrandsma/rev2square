@@ -15,9 +15,9 @@
 
         @if($repository === null || ! $repository->isReady())
             <section class="rounded-xl border border-zinc-200 bg-white p-6">
-                <h2 class="font-semibold">No architecture yet</h2>
-                <p class="mt-1 text-sm text-zinc-600">The Architecture Investigator maps components and relationships from imported repository evidence. Import a repository first, then run the analysis.</p>
+                <h2 class="font-semibold">No architecture published yet</h2>
                 @can('update', $project)
+                    <p class="mt-1 text-sm text-zinc-600">Import repository evidence first, then run the analysis.</p>
                     <p class="mt-4"><a href="{{ route('projects.evidence', $project) }}" class="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500">Manage evidence</a></p>
                 @endcan
             </section>
@@ -165,15 +165,13 @@
             </section>
         @elseif($latest === null && $repository !== null && $repository->isReady())
             <section class="rounded-xl border border-zinc-200 bg-white p-6">
-                <h2 class="font-semibold">Map this project's architecture</h2>
-                <p class="mt-1 text-sm text-zinc-600">The investigator reads the imported evidence, measures entry points, imports, and configuration files, and produces a validated, clickable diagram with source citations.</p>
+                <h2 class="font-semibold">No architecture published yet</h2>
                 @can('update', $project)
+                    <p class="mt-1 text-sm text-zinc-600">Evidence is ready — run the analysis to map components and relationships.</p>
                     <form method="POST" action="{{ route('projects.architecture.store', $project) }}" class="mt-4">
                         @csrf
                         <button type="submit" class="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500">Run architecture analysis</button>
                     </form>
-                @else
-                    <p class="mt-4 text-sm text-zinc-500">Only maintainers can run the analysis.</p>
                 @endcan
             </section>
         @endif

@@ -27,7 +27,7 @@
 
         <h2 class="mb-3 mt-10 text-sm font-semibold text-zinc-500">Maintainer applications ({{ $maintainerApplications->count() }})</h2>
         @if($maintainerApplications->isEmpty())
-            <p class="rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-8 text-center text-sm text-zinc-600">No maintainer applications. Accepting one sends an invitation; it never grants access directly.</p>
+            <p class="rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-8 text-center text-sm text-zinc-600">No maintainer applications.</p>
         @else
             <ul class="space-y-4">
                 @foreach($maintainerApplications as $offer)

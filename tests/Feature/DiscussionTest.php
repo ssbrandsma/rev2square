@@ -491,4 +491,17 @@ class DiscussionTest extends TestCase
 
         $this->assertFalse($project->follows()->where('user_id', $user->id)->exists());
     }
+
+    public function test_discussion_empty_state_matches_viewer_capability(): void
+    {
+        $project = $this->publishedProject();
+
+        $guest = $this->get(route('projects.discussion.index', $project))->assertOk()->getContent();
+        $this->assertStringContainsString('No discussions yet.', $guest);
+        $this->assertStringNotContainsString('Start the first one above.', $guest);
+
+        $member = $this->actingAs(User::factory()->create())
+            ->get(route('projects.discussion.index', $project))->assertOk()->getContent();
+        $this->assertStringContainsString('No discussions yet. Start the first one above.', $member);
+    }
 }

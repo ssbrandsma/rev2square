@@ -26,7 +26,7 @@
     </div>
 
     <div class="mt-3 flex flex-wrap items-center justify-between gap-2">
-        <p class="text-sm text-zinc-500" role="status">{{ $projects->total() }} {{ Str::plural('project', $projects->total()) }} found. Filters live in the address bar, so this view can be bookmarked or shared.</p>
+        <p class="text-sm text-zinc-500" role="status">{{ $projects->total() }} {{ Str::plural('project', $projects->total()) }} found.</p>
         @if($this->hasActiveFilters)
             <button type="button" wire:click="clearFilters" class="text-sm font-semibold text-emerald-700 hover:text-emerald-600">Clear all filters</button>
         @endif

@@ -295,13 +295,25 @@ class CommunityWorkflowTest extends TestCase
             ->assertSee(route('projects.offers.create', [$project, 'task' => $task->id]), false);
     }
 
-    public function test_empty_roadmap_names_both_creation_paths(): void
+    public function test_empty_roadmap_stays_quiet_for_visitors(): void
     {
         $project = Project::factory()->create();
 
         $this->get(route('projects.show', $project))
             ->assertOk()
-            ->assertSee('Maintainers can add them directly, or run an AI analysis and approve the roadmap to generate them.');
+            ->assertSee('No milestones yet.')
+            ->assertDontSee('run an AI analysis and approve the roadmap', false)
+            ->assertDontSee('Add milestone', false);
+    }
+
+    public function test_empty_roadmap_keeps_maintainer_creation_path(): void
+    {
+        $project = Project::factory()->create();
+
+        $this->actingAs($project->owner)->get(route('projects.show', $project))
+            ->assertOk()
+            ->assertSee('No milestones yet.')
+            ->assertSee('+ Add milestone', false);
     }
 
     public function test_anonymous_contribute_returns_after_login(): void

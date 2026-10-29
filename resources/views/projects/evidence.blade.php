@@ -9,7 +9,7 @@
 
         <section class="mt-6 rounded-xl border border-zinc-200 bg-white p-6">
             <h2 class="font-semibold">Human sources</h2>
-            <p class="mt-1 text-sm text-zinc-600">Owner observations and hardware test reports, recorded without GitHub. Provenance and review status travel with each entry; the AI investigator does not read them yet — reviewers do.</p>
+            <p class="mt-1 text-sm text-zinc-600">Owner observations and hardware test reports. The AI investigator does not read them yet — reviewers do.</p>
 
             <h3 class="mt-5 text-sm font-semibold text-zinc-500">Observations ({{ $observations->count() }})</h3>
             @if($observations->isEmpty())

@@ -15,9 +15,13 @@
 
         <section class="rounded-xl border border-zinc-200 bg-white p-6">
             <h2 class="font-semibold">Ask about this project</h2>
-            <p class="mt-1 max-w-[70ch] text-sm text-zinc-600">The agent investigates with the imported evidence and the architecture snapshot — up to six evidence lookups per turn. Answers cite the sources they used; conversations stay private to you and the maintainers.</p>
+            <p class="mt-1 max-w-[70ch] text-sm text-zinc-600">The agent investigates with the imported evidence and the architecture snapshot. Answers cite the sources they used; conversations stay private to you and the maintainers.</p>
             @if($repository === null || ! $repository->isReady())
-                <p class="mt-4 rounded-lg bg-zinc-100 px-4 py-3 text-sm text-zinc-600">Import repository evidence before chatting with the Revival Agent — or investigate uploaded files below.</p>
+                @can('update', $project)
+                    <p class="mt-4 rounded-lg bg-zinc-100 px-4 py-3 text-sm text-zinc-600">Import repository evidence to enable chat — or investigate uploaded files below.</p>
+                @else
+                    <p class="mt-4 rounded-lg bg-zinc-100 px-4 py-3 text-sm text-zinc-600">No evidence to chat about yet.</p>
+                @endcan
             @else
                 <form method="POST" action="{{ route('projects.agent.store', $project) }}" class="mt-4">
                     @csrf
@@ -38,8 +42,8 @@
             <h2 class="font-semibold">Investigate uploaded files</h2>
             <p class="mt-1 max-w-[70ch] text-sm text-zinc-600">
                 Upload executables (ELF, Windows PE, Mach-O), Android apps (APK/DEX), Java classes, firmware
-                (Intel HEX, S-record, C64 PRG), archives, or network captures (PCAP/PCAPNG); describe the device
-                and your question, then start investigating. Formats are detected from file contents, not extensions.
+                (Intel HEX, S-record, C64 PRG), archives, or network captures (PCAP/PCAPNG).
+                Formats are detected from file contents, not extensions.
                 Limit {{ number_format($maxBytes / 1024 / 1024, 0) }} MB per file, up to 5 files per upload.
             </p>
             <p class="mt-2 max-w-[70ch] rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
@@ -68,7 +72,7 @@
                 @csrf
                 <p class="text-sm font-semibold">2. Select processed files</p>
                 @if($artifacts->isEmpty())
-                    <p class="mt-1 text-sm text-zinc-500">No uploads yet. Files appear here after upload with their extraction state.</p>
+                    <p class="mt-1 text-sm text-zinc-500">No uploads yet.</p>
                 @else
                     <ul class="mt-2 space-y-1">
                         @foreach($artifacts as $artifact)
@@ -113,7 +117,7 @@
                 <textarea id="device-context" name="device_context" rows="2" maxlength="2000"
                     placeholder="e.g. Thermostat firmware v2.1; capture taken during a failed cloud connection after device boot."
                     class="mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm">{{ old('device_context') }}</textarea>
-                <p class="mt-1 text-xs text-zinc-500">Helpful context: what the device is, firmware version, what happened during capture — device boot, login attempt, started recording, cloud connection failed.</p>
+                <p class="mt-1 text-xs text-zinc-500">What the device is, firmware version, and what was happening during capture.</p>
 
                 <label class="mt-4 flex items-start gap-2 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm">
                     <input type="checkbox" name="consent" value="1" required class="mt-0.5 rounded border-zinc-300" />

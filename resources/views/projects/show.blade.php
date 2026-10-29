@@ -19,7 +19,6 @@
                     @php($pendingOffers = $project->offers()->where('status', 'pending')->count())
                     <a href="{{ route('projects.offers.index', $project) }}" class="rounded-full bg-white px-3 py-1 text-xs font-semibold text-zinc-900 hover:bg-zinc-200">{{ $pendingOffers > 0 ? "Offers — {$pendingOffers} pending" : 'Offers' }}</a>
                 @endcan
-                <a href="{{ route('projects.team.index', $project) }}" class="rounded-full bg-white px-3 py-1 text-xs font-semibold text-zinc-900 hover:bg-zinc-200">Team</a>
                 @auth
                     @if($project->follows()->where('user_id', auth()->id())->exists())
                         <form method="POST" action="{{ route('projects.unfollow', $project) }}" class="inline">
@@ -126,7 +125,7 @@
                             @endcan
                         </div>
                     @empty
-                        <p class="rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-6 text-sm text-zinc-600">No milestones yet. Maintainers can add them directly, or run an AI analysis and approve the roadmap to generate them.</p>
+                        <p class="rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-6 text-sm text-zinc-600">No milestones yet.</p>
                     @endforelse
                 </div>
                 @if($retiredMilestoneCount > 0)
@@ -154,7 +153,7 @@
                                 </div>
                             </div>
                             @if($task->description)
-                                <p class="mt-2 text-sm text-zinc-600">{{ $task->description }}</p>
+                                <p class="mt-2 text-sm text-zinc-600">{{ \Illuminate\Support\Str::limit($task->description, 200) }}</p>
                             @endif
                             <div class="mt-3 flex flex-wrap gap-1.5">
                                 @foreach($task->skillTags() as $skill)
@@ -167,13 +166,10 @@
                                     <span class="rounded-full bg-zinc-100 px-2.5 py-0.5 text-[11px] font-semibold text-zinc-700">→ {{ $task->assignee->name }}</span>
                                 @endif
                             </div>
-                            @if($task->definition_of_done)
-                                <p class="mt-3 border-t border-zinc-100 pt-3 text-sm text-zinc-600"><span class="font-semibold text-zinc-900">Done means:</span> {{ $task->definition_of_done }}</p>
-                            @endif
                             <p class="mt-3 flex flex-wrap gap-4">
                                 <a href="{{ route('projects.tasks.show', [$project, $task]) }}" class="text-sm font-semibold text-emerald-700 hover:text-emerald-600">Details →</a>
                                 @if($task->status === \App\Enums\TaskStatus::Open && ! $contributionDenial)
-                                    <a href="{{ route('projects.offers.create', [$project, 'task' => $task->id]) }}" class="text-sm font-semibold text-emerald-700 hover:text-emerald-600">Offer help →</a>
+                                    <a href="{{ route('projects.offers.create', [$project, 'task' => $task->id]) }}" class="text-sm font-semibold text-emerald-700 hover:text-emerald-600">Help with this task →</a>
                                 @endif
                             </p>
                         </div>
@@ -193,7 +189,7 @@
 
             <section id="observations">
                 <h2 class="text-sm font-semibold text-zinc-500">Field observations</h2>
-                <p class="mt-1 text-sm text-zinc-500">What members found on real hardware. Unverified notes are starting points, not facts.</p>
+                <p class="mt-1 text-sm text-zinc-500">What members found on real hardware.</p>
                 <div class="mt-3 space-y-4">
                     @forelse($observations as $observation)
                         <article class="rounded-xl border border-zinc-200 p-5">
@@ -271,7 +267,7 @@
                             </div>
                         </article>
                     @empty
-                        <p class="rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-6 text-sm text-zinc-600">No observations yet. Opened the device, measured something, tried a cable? Write it down.</p>
+                        <p class="rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-6 text-sm text-zinc-600">No observations yet.</p>
                     @endforelse
                 </div>
                 @auth
@@ -389,7 +385,7 @@
                             <p class="mt-3"><a href="{{ route('projects.test-reports.show', [$project, $testReport]) }}" class="text-sm font-semibold text-emerald-700 hover:text-emerald-600">Read full report →</a></p>
                         </article>
                     @empty
-                        <p class="rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-6 text-sm text-zinc-600">No test reports yet. Tried a revival step on hardware? File a report so others can reproduce it.</p>
+                        <p class="rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-6 text-sm text-zinc-600">No test reports yet.</p>
                     @endforelse
                 </div>
             </section>
@@ -397,7 +393,7 @@
             <section id="history">
                 <h2 class="text-sm font-semibold text-zinc-500">Project history</h2>
                 @if($historyEvents->isEmpty())
-                    <p class="mt-3 rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-6 text-sm text-zinc-600">No recorded decisions yet. Task, milestone, observation, and test-report activity appears here.</p>
+                    <p class="mt-3 rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-6 text-sm text-zinc-600">No activity yet.</p>
                 @else
                     <ol class="mt-3 space-y-2 rounded-xl border border-zinc-200 bg-white p-5">
                         @foreach($historyEvents as $event)
@@ -464,7 +460,10 @@
                     <p class="mt-2 text-sm text-zinc-700">Version {{ $publishedReport->version_number }}, approved {{ $publishedReport->reviewed_at?->toDateString() ?? '—' }}{{ $publishedReport->run?->model ? ' · drafted with '.$publishedReport->run->model : '' }}.</p>
                     <p class="mt-2 text-sm"><a href="{{ route('projects.reports.show', [$project, $publishedReport]) }}" class="font-semibold text-emerald-700 hover:text-emerald-600">Read the full assessment →</a></p>
                 @else
-                    <p class="mt-2 text-sm text-amber-900">Not yet available. The maintainers run the AI analysis from the evidence page; approved assessments appear here.</p>
+                    <p class="mt-2 text-sm text-amber-900">No assessment published.</p>
+                    @can('update', $project)
+                        <p class="mt-2 text-sm"><a href="{{ route('projects.evidence', $project) }}" class="font-semibold text-emerald-700 hover:text-emerald-600">Run the AI analysis →</a></p>
+                    @endcan
                 @endif
             </section>
 
@@ -485,11 +484,14 @@
 
             <section class="rounded-xl border border-zinc-200 p-5">
                 <h2 class="text-sm font-semibold text-zinc-500">Export</h2>
-                <p class="mt-2 text-sm text-zinc-600">Take this investigation with you. Exports never include private offers, messages, or invitations.</p>
-                <p class="mt-3 flex flex-wrap gap-3 text-sm">
+                <p class="mt-2 flex flex-wrap gap-3 text-sm">
                     <a href="{{ route('projects.export', [$project, 'md']) }}" class="font-semibold text-emerald-700 hover:text-emerald-600">Markdown ↓</a>
                     <a href="{{ route('projects.export', [$project, 'json']) }}" class="font-semibold text-emerald-700 hover:text-emerald-600">JSON ↓</a>
                 </p>
+                <details class="mt-2 text-sm text-zinc-600">
+                    <summary class="cursor-pointer font-semibold text-emerald-700 hover:text-emerald-600">Privacy</summary>
+                    <p class="mt-1">Exports never include private offers, messages, or invitations.</p>
+                </details>
             </section>
         </aside>
     </div>

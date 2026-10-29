@@ -4,7 +4,7 @@
             <a href="{{ route('projects.show', $project) }}" class="hover:underline">{{ $project->title }}</a> · Updates
         </p>
         <h1 class="mt-1 text-[1.75rem] font-semibold leading-tight tracking-tight sm:text-3xl">Project updates</h1>
-        <p class="mt-1 text-sm text-zinc-600">Short official notes from the maintainers. Followers hear about each one; everyone can discuss them.</p>
+        <p class="mt-1 text-sm text-zinc-600">Updates from the maintainers.</p>
     </x-slot>
 
     @include('projects._nav', ['project' => $project, 'active' => 'updates'])

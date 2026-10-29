@@ -201,4 +201,17 @@ class ChatTest extends TestCase
             ->assertOk()
             ->assertSee('Reported chat content.', false);
     }
+
+    public function test_chat_empty_state_and_presence_match_viewer_capability(): void
+    {
+        $guest = $this->get(route('lounge'))->assertOk()->getContent();
+        $this->assertStringContainsString('No messages yet.', $guest);
+        $this->assertStringNotContainsString('Say hello.', $guest);
+        $this->assertStringNotContainsString('Here now', $guest);
+
+        $member = $this->actingAs(User::factory()->create())
+            ->get(route('lounge'))->assertOk()->getContent();
+        $this->assertStringContainsString('No messages yet. Say hello.', $member);
+        $this->assertStringContainsString('Here now', $member);
+    }
 }

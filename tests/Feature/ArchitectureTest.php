@@ -343,7 +343,8 @@ class ArchitectureTest extends TestCase
 
         $page = $this->actingAs($owner2)->get(route('projects.architecture.show', $empty));
         $page->assertOk();
-        $page->assertSee('No architecture yet');
+        $page->assertSee('No architecture published yet')
+            ->assertSee('Manage evidence', false);
     }
 
     public function test_authorization_follows_project_policy(): void

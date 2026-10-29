@@ -87,7 +87,7 @@
                     <section>
                         <header>
                             <h2 class="text-lg font-medium text-gray-900">Avatar</h2>
-                            <p class="mt-1 text-sm text-gray-600">Shown next to your name across the site. Images are resized and re-encoded; embedded metadata is discarded. Without one, your initials show.</p>
+                            <p class="mt-1 text-sm text-gray-600">Shown next to your name across the site. Embedded metadata is discarded; without one, your initials show.</p>
                         </header>
 
                         <div class="mt-4 flex items-center gap-4">

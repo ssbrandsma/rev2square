@@ -84,7 +84,7 @@
         <div class="mt-6 rounded-xl border border-zinc-200 bg-white p-6 sm:p-8">
             <h2 class="text-sm font-semibold text-zinc-500">Private discussion <span class="font-normal">(only you and the maintainers see this)</span></h2>
             @if($offer->messages->isEmpty())
-                <p class="mt-2 text-sm text-zinc-500">No messages yet. Maintainers can ask for clarification here before deciding.</p>
+                <p class="mt-2 text-sm text-zinc-500">No messages yet.</p>
             @else
                 <ol class="mt-3 space-y-3">
                     @foreach($offer->messages as $message)

@@ -87,7 +87,7 @@
         <section aria-label="Contributions">
             <h2 class="text-sm font-semibold text-zinc-500">Contributions <span class="text-zinc-400">({{ $sections['contributions']['total'] }})</span></h2>
             @if($sections['contributions']['items']->isEmpty())
-                <p class="mt-3 rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-6 text-sm text-zinc-600">No recorded contributions on published projects yet. Comments and chat do not count as engineering work.</p>
+                <p class="mt-3 rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-6 text-sm text-zinc-600">No recorded contributions on published projects yet.</p>
             @else
                 <ul class="mt-3 space-y-3">
                     @foreach($sections['contributions']['items'] as $contribution)
