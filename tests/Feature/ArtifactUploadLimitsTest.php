@@ -247,13 +247,77 @@ class ArtifactUploadLimitsTest extends TestCase
         // running dev containers, so PHP silently kept its 8M default.
         $compose = file_get_contents($repo.'/compose.dev.yaml');
         $this->assertGreaterThanOrEqual(2, substr_count($compose, './docker/php/conf.d-uploads.ini:/usr/local/etc/php/conf.d/uploads.ini:ro'));
-        $this->assertStringContainsString('conf.d-uploads.ini', file_get_contents($repo.'/docker/php/Dockerfile.prod'));
+        // Production: shared conf.d path scanned by BOTH php-fpm (HTTP)
+        // and php CLI (workers) in the official php:8.4-fpm image. Any
+        // SAPI-specific destination (cli/conf.d, fpm/conf.d) would leave
+        // HTTP uploads on the 2M/8M defaults.
+        $dockerfile = file_get_contents($repo.'/docker/php/Dockerfile.prod');
+        $this->assertStringContainsString(
+            'COPY docker/php/conf.d-uploads.ini /usr/local/etc/php/conf.d/uploads.ini',
+            $dockerfile
+        );
+        $this->assertStringNotContainsString('cli/conf.d', $dockerfile);
+        // Both production variants build the FPM app image from that
+        // Dockerfile and must not mask conf.d with a volume.
+        foreach (['compose.prod.yaml', 'compose.virtualmin.yaml'] as $composeFile) {
+            $prod = file_get_contents($repo.'/'.$composeFile);
+            $this->assertStringContainsString('dockerfile: docker/php/Dockerfile.prod', $prod, $composeFile);
+            $this->assertStringNotContainsString('/usr/local/etc/php/conf.d', $prod, $composeFile);
+        }
+    }
+
+    public function test_php_fpm_inherits_upload_limits_no_pool_overrides(): void
+    {
+        $repo = base_path();
+        // INI precedence: conf.d/uploads.ini overrides php.ini-production
+        // (2M/8M). An FPM pool override directive would supersede conf.d,
+        // so the repo must ship none; stock www.conf sets none. Match
+        // directive lines only, so documentation mentions do not trip this.
+        foreach (glob($repo.'/docker/php/*') ?: [] as $file) {
+            $this->assertSame(
+                0,
+                preg_match('/^\s*php_(admin_)?value\b/mi', file_get_contents($file)),
+                basename($file).' must not set FPM pool overrides'
+            );
+        }
+        $this->assertSame([], glob($repo.'/docker/php/*.conf') ?: []);
+        $this->assertSame([], glob($repo.'/docker/php/pool.d/*') ?: []);
+        // Alphabetical conf.d load (opcache-prod.ini before uploads.ini)
+        // must not overlap on upload keys.
+        $opcache = file_get_contents($repo.'/docker/php/conf.d-opcache-prod.ini');
+        foreach (['upload_max_filesize', 'post_max_size', 'max_input_time', 'memory_limit'] as $key) {
+            $this->assertStringNotContainsString($key, $opcache);
+        }
+        // Sanity: the whole request body cap must cover a max-size file.
+        $this->assertGreaterThanOrEqual(64 * 1024 * 1024, 80 * 1024 * 1024);
+        $ini = file_get_contents($repo.'/docker/php/conf.d-uploads.ini');
+        $this->assertStringContainsString('upload_max_filesize = 64M', $ini);
+        $this->assertStringContainsString('post_max_size = 80M', $ini);
+    }
+
+    public function test_production_memory_and_media_caps_preserved(): void
+    {
+        $repo = base_path();
+        // memory_limit stays 256M: headroom for one detection pass, not
+        // raised merely to match upload size.
+        $this->assertStringContainsString(
+            'memory_limit = 256M', file_get_contents($repo.'/docker/php/conf.d-uploads.ini')
+        );
+        // Public presentation-media caps are a separate workflow and stay.
+        $this->assertSame(12 * 1024 * 1024, \App\Services\Media\MediaUploadService::MAX_IMAGE_BYTES);
+        $this->assertSame(25 * 1024 * 1024, \App\Services\Media\MediaUploadService::MAX_FILE_BYTES);
+        // Research-artifact app cap stays 64 MiB with a bounded batch.
+        $this->assertSame(67108864, \App\Services\Admin\AppSettings::allowlist()['artifacts.max_upload_bytes']['default']);
+        $this->assertStringContainsString(
+            "'files' => 'required|array|min:1|max:5'",
+            file_get_contents($repo.'/app/Http/Controllers/ArtifactController.php')
+        );
     }
 
     public function test_infrastructure_configs_declare_matching_limits(): void
     {
         $repo = base_path();
-        $this->assertStringContainsString('upload_max_filesize = 65M', file_get_contents($repo.'/docker/php/conf.d-uploads.ini'));
+        $this->assertStringContainsString('upload_max_filesize = 64M', file_get_contents($repo.'/docker/php/conf.d-uploads.ini'));
         $this->assertStringContainsString('post_max_size = 80M', file_get_contents($repo.'/docker/php/conf.d-uploads.ini'));
         $this->assertStringContainsString('client_max_body_size 80m;', file_get_contents($repo.'/docker/nginx/default.conf'));
         $this->assertStringContainsString('client_max_body_size 80m;', file_get_contents($repo.'/docker/nginx/default.prod.conf'));

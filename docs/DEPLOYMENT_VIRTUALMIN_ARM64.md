@@ -533,12 +533,62 @@ virtualmin` (disk + DB size), host `free -m`, `./backups/` growth.
 
 Research-artifact upload path (all four must agree): 64 MiB per file in
 Laravel (`artifacts.max_upload_bytes`, admin-tunable), PHP
-`upload_max_filesize 65M` / `post_max_size 80M`
-(`docker/php/conf.d-uploads.ini`), nginx `client_max_body_size 80m`
+`upload_max_filesize 64M` / `post_max_size 80M`
+(`docker/php/conf.d-uploads.ini`, loaded by php-fpm AND CLI from the
+shared `/usr/local/etc/php/conf.d/uploads.ini`; no FPM pool overrides),
+nginx `client_max_body_size 80m`
 (`docker/nginx/default.prod.conf`), and no `LimitRequestBody` below
 83886080 bytes in the Virtualmin Apache templates (default 0 =
 unlimited). Aggregate batches are bounded at ~80 MiB: at most 5 files
 per request, large files one at a time.
+
+Production PHP-limit fix (observed 2M/8M on a stale image): the Docker
+nginx layer is already configured at 80m (see above); only the app image
+needs a rebuild to pick up `conf.d-uploads.ini`. A plain `restart` is
+NOT enough (new image content requires recreation). Owner-operated, as
+root from `/srv/rev2square`:
+
+```sh
+[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin build app && \
+  docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin up -d app queue scheduler analysis-coordinator
+[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin exec -T app cat /usr/local/etc/php/conf.d/uploads.ini
+# expect: upload_max_filesize = 64M, post_max_size = 80M
+[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin exec -T app php -r 'echo ini_get("upload_max_filesize")," ",ini_get("post_max_size"),"\n";'
+# expect: 64M 80M (CLI shares conf.d with php-fpm in this image)
+[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin exec -T app php-fpm -i | grep -Ei '^(upload_max_filesize|post_max_size) '
+# expect: both lines show the same 64M/80M under the FPM SAPI
+```
+
+Host outer-proxy caveat: a host `nginx -T | grep client_max_body_size`
+(or equivalent) producing NO matching output does NOT prove there is no
+outer body limit. The front door on this host is Virtualmin-managed
+Apache (`ProxyPass` to 127.0.0.1:8081), not host nginx; Apache's
+`LimitRequestBody` (default 0 = unlimited) lives in Virtualmin server
+templates and per-vhost directives, which a host-nginx check cannot see.
+Before retesting uploads, the owner must confirm in the Virtualmin UI /
+generated vhost that no `LimitRequestBody` below 83886080 applies to the
+Rev2Square `:443` vhost.
+
+Post-deploy HTTP proof (owner-operated): the PHP setting alone does NOT
+prove the entire upload path works. Upload the supplied firmware
+(`baby_9.0.2_r17157.bin`, 16,032,273 bytes) through the real public URL
+(Draft project -> Agent tab -> Upload), then check it stored byte-intact
+(artifact row `ready`, SHA-256 matches the sidecar). If HTTP 413
+persists, identify the rejecting layer from scoped logs (narrowest
+window covering one retry):
+
+- Docker nginx 413: `docker compose ... logs --since 5m nginx | grep -i 413`
+  plus `client_max_body_size` in the baked `/etc/nginx/conf.d/default.conf`.
+- Apache outer proxy: the domain's Virtualmin error log around the same
+  timestamp (`LimitRequestBody` / proxy errors); loopback-direct POST to
+  `http://127.0.0.1:8081/` succeeding while public HTTPS 413s points here.
+- PHP-FPM/CLI limits: `php-fpm -i` values above; Laravel log
+  `storage/logs/laravel.log` showing the controller's "exceeds the server
+  request limit" (post_max_size) vs per-file "the limit is 64.0 MiB"
+  (app cap) vs `UPLOAD_ERR_INI_SIZE` mapping.
+
+Do not edit production files or running containers by hand; all changes
+arrive via the next `build && up -d` from a reviewed git SHA.
 
 ## 19. Known limitations
 
