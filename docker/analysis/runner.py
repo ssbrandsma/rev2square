@@ -183,11 +183,41 @@ def _ghidra_argv(profile, params, workdir, input_path):
     entry_arg = ("0x%x" % bounded_int(entry, 0, 2 ** 64 - 1, "entry")
                  if entry is not None else "none")
     project = os.path.join(workdir, "ghidra-project")
+    os.makedirs(project, exist_ok=True)
     output = os.path.join(workdir, "evidence.json")
-    return [binary, project, "-import", input_path, "-overwrite",
+    # analyzeHeadless takes TWO positionals (location + name); the
+    # name is fixed since each job gets a fresh project directory.
+    return [binary, project, "analysis", "-import", input_path,
+            "-overwrite",
             "-processor", language, "-cspec", "default",
             "-postScript", "ExportEvidence.java", output,
             "0x%x" % base, entry_arg, "-deleteProject"]
+
+
+def tool_env(tool, workdir):
+    """Minimal subprocess environment. Ghidra additionally scopes
+    every JVM-writable path per job through the headless launcher's
+    documented GHIDRA_HEADLESS_JAVA_OPTIONS hook (user.home, the JVM
+    temp dir, and the application cache dir); all three live under
+    the job workdir so cleanup removes them. The JDK probe itself
+    (LaunchSupport -save) runs without these flags and uses the
+    image's shared home, which stays writable tmpfs."""
+    env = {"PATH": "/usr/bin:/bin:/opt/jadx/bin:/opt/ilspy",
+           "LC_ALL": "C",
+           "JAVA_HOME": os.environ.get("JAVA_HOME", ""),
+           "DOTNET_CLI_TELEMETRY_OPTOUT": "1",
+           "DOTNET_NOLOGO": "1"}
+    if tool == "ghidra":
+        if any(c.isspace() for c in workdir):
+            fail("ghidra workdir must not contain whitespace")
+        sub = {name: os.path.join(workdir, name)
+               for name in ("ghidra-home", "ghidra-tmp", "ghidra-cache")}
+        for d in sub.values():
+            os.makedirs(d, exist_ok=True)
+        env["GHIDRA_HEADLESS_JAVA_OPTIONS"] = (
+            "-Duser.home=%s -Djava.io.tmpdir=%s -Dapplication.cachedir=%s"
+            % (sub["ghidra-home"], sub["ghidra-tmp"], sub["ghidra-cache"]))
+    return env
 
 
 def _jadx_argv(profile, params, workdir, input_path):
@@ -469,11 +499,7 @@ class Runner:
             argv, stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             cwd=workdir, start_new_session=True,
-            env={"PATH": "/usr/bin:/bin:/opt/jadx/bin:/opt/ilspy",
-                 "LC_ALL": "C",
-                 "JAVA_HOME": os.environ.get("JAVA_HOME", ""),
-                 "DOTNET_CLI_TELEMETRY_OPTOUT": "1",
-                 "DOTNET_NOLOGO": "1"})
+            env=tool_env(self.tool, workdir))
 
     def _reap_tree(self, proc):
         try:

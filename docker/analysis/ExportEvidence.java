@@ -7,13 +7,13 @@
 // Ghidra 12.2 API surface used (verified against the 12.2 tag):
 //   GhidraScript#run/analyzeAll/getScriptArgs, DecompInterface
 //   (openProgram/decompileFunction/dispose), FunctionManager,
-//   ReferenceManager, Memory/blocks, Listing/CodeUnit, TaskMonitor.
-// The Dockerfile build smoke-tests script *presence*; compilation is
-// verified by the owner qualification run (see delivery doc).
+//   ReferenceManager, Memory/blocks, Listing/getInstructions,
+//   AddressSet(AddressRange), TaskMonitor.
+// The Dockerfile build smoke compiles and executes this script
+// against a known fixture; a script error fails the build.
 
 import java.io.FileWriter;
 import java.util.ArrayList;
-import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -24,14 +24,15 @@ import ghidra.app.decompiler.DecompiledFunction;
 import ghidra.app.script.GhidraScript;
 import ghidra.framework.Application;
 import ghidra.program.model.address.Address;
+import ghidra.program.model.address.AddressSet;
 import ghidra.program.model.address.AddressSetView;
-import ghidra.program.model.listing.CodeUnit;
 import ghidra.program.model.listing.Function;
 import ghidra.program.model.listing.FunctionIterator;
 import ghidra.program.model.listing.Instruction;
 import ghidra.program.model.listing.Listing;
 import ghidra.program.model.listing.Program;
 import ghidra.program.model.mem.Memory;
+import ghidra.program.model.mem.MemoryAccessException;
 import ghidra.program.model.mem.MemoryBlock;
 import ghidra.program.model.symbol.SourceType;
 
@@ -79,9 +80,21 @@ public class ExportEvidence extends GhidraScript {
 					.getAddress(entryOff + addressBias(program, base, delta));
 				entryAddr = ea.getOffset();
 				disassemble(ea);
+				// Auto-analysis may already own this address (raw
+				// imports routinely gain FUN_xxxxxxxxx siblings):
+				// rename in place instead of failing to create.
+				Function atEntry = program.getFunctionManager()
+					.getFunctionAt(ea);
 				try {
-					program.getFunctionManager()
-						.createFunction("entry", ea, null, SourceType.USER_DEFINED);
+					if (atEntry != null) {
+						atEntry.setName("entry",
+							SourceType.USER_DEFINED);
+					}
+					else {
+						program.getFunctionManager()
+							.createFunction("entry", ea, null,
+								SourceType.USER_DEFINED);
+					}
 				}
 				catch (Exception e) {
 					warnings.add("entry_function_create_failed");
@@ -241,14 +254,8 @@ public class ExportEvidence extends GhidraScript {
 			if (!b.isExecute() || !b.isInitialized()) {
 				continue;
 			}
-			Iterator<CodeUnit> it = listing.getCodeUnits(
-				b.getAddressRange(), true).iterator();
-			while (it.hasNext()) {
-				CodeUnit cu = it.next();
-				if (!(cu instanceof Instruction)) {
-					continue;
-				}
-				Instruction ins = (Instruction) cu;
+			for (Instruction ins : listing.getInstructions(
+					new AddressSet(b.getAddressRange()), true)) {
 				if (count >= MAX_INSTRUCTIONS) {
 					truncated = true;
 					break;
@@ -256,7 +263,16 @@ public class ExportEvidence extends GhidraScript {
 				Map<String, Object> l = new LinkedHashMap<>();
 				l.put("address", "0x" + Long.toHexString(
 					ins.getAddress().getOffset()));
-				l.put("bytes", bytesHex(ins.getBytes()));
+				String hex;
+				try {
+					hex = bytesHex(ins.getBytes());
+				}
+				catch (MemoryAccessException e) {
+					hex = "";
+					warnings.add("bytes_unreadable_at_0x" + Long.toHexString(
+						ins.getAddress().getOffset()));
+				}
+				l.put("bytes", hex);
 				String text = ins.toString();
 				l.put("text", text.length() > MAX_LINE_CHARS
 					? text.substring(0, MAX_LINE_CHARS) : text);

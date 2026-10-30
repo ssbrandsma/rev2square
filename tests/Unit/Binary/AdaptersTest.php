@@ -103,6 +103,9 @@ class AdaptersTest extends TestCase
         $command = $adapter->buildCommand($valid);
         $this->assertIsArray($command);
         $this->assertSame('/opt/ghidra/support/analyzeHeadless', $command[0]);
+        $this->assertSame($jobDir.'/proj', $command[1]);
+        $this->assertSame('analysis', $command[2]);
+        $this->assertSame('-import', $command[3]);
         $this->assertContains('-processor', $command);
         $this->assertContains('x86:LE:32:default', $command);
         $this->assertContains('ExportEvidence.java', $command);

@@ -134,8 +134,9 @@ class RunnerCase(unittest.TestCase):
         argv = self.dry("ghidra", "headless",
                        {"language": "ARM:LE:32:v8", "base": 134217728,
                         "entry": None})
-        self.assertEqual(argv[1:4],
-                         ["/w/ghidra-project", "-import", "/w/input.bin"])
+        self.assertEqual(argv[1:5],
+                         ["/w/ghidra-project", "analysis",
+                          "-import", "/w/input.bin"])
         self.assertTrue(argv[0].endswith("/aheadless"))
         self.assertIn("ARM:LE:32:v8", argv)
         self.assertIn("ExportEvidence.java", argv)
@@ -150,6 +151,25 @@ class RunnerCase(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.dry("ghidra", "headless",
                      {"language": "ARM:LE:32:v8;evil", "base": 0})
+
+    def test_ghidra_tool_env_scopes_jvm_paths_per_job(self):
+        env = runner.tool_env("ghidra", self.work)
+        opts = env["GHIDRA_HEADLESS_JAVA_OPTIONS"]
+        for flag in ("-Duser.home=", "-Djava.io.tmpdir=",
+                     "-Dapplication.cachedir="):
+            self.assertIn(flag + self.work, opts)
+        for name in ("ghidra-home", "ghidra-tmp", "ghidra-cache"):
+            self.assertTrue(os.path.isdir(os.path.join(self.work, name)))
+        # The launcher word-splits this string: no value may contain
+        # whitespace.
+        for part in opts.split(" "):
+            self.assertTrue(part.startswith("-D") and " " not in part)
+        # Other tools keep the minimal env without JVM scoping.
+        self.assertNotIn("GHIDRA_HEADLESS_JAVA_OPTIONS",
+                         runner.tool_env("objdump", self.work))
+        with self.assertRaises(ValueError):
+            runner.tool_env("ghidra",
+                            os.path.join(self.tmp, "with space"))
 
     def test_jadx_ilspy_extract_argv(self):
         jadx = self.stub("jadx", "exit 0\n")

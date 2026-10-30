@@ -147,6 +147,7 @@ FROM ${DEBIAN_IMAGE}
 ENV DEBIAN_FRONTEND=noninteractive \
     JAVA_HOME=/opt/jdk \
     PATH=/opt/jdk/bin:${PATH} \
+    HOME=/home/www-data \
     GHIDRA_HEADLESS=/opt/ghidra/support/analyzeHeadless \
     TOOL_IMAGE=rev2square/ghidra:12.2
 
@@ -188,18 +189,50 @@ RUN cp /opt/ghidra/ExportEvidence.java \
     && chmod 644 /provenance/* /opt/smoke/arm32-smoke.bin \
     && chmod 755 /opt/runner/runner.py
 
+# Writable home for the non-root runtime user. Java derives
+# user.home from /etc/passwd, NOT from $HOME (verified: with
+# HOME=/tmp exported, user.home still resolved to /var/www and
+# Ghidra's LaunchSupport -save died with FileNotFoundException,
+# cascading into the no-TTY JDK prompt). Pointing the passwd entry
+# at /home/www-data fixes both errors at the root. That path is a
+# www-data-owned layer dir at build time and uid/gid-pinned tmpfs
+# at runtime (see compose), so both contexts agree. The sed is
+# anchored on the exact current entry: if the base image ever
+# changes www-data's ids, the match fails and the pwd assertion
+# below fails the build loudly instead of mis-editing passwd.
+RUN echo "--- install: home for www-data ---" \
+    && sed -i 's|^www-data:x:33:33:www-data:/var/www:|www-data:x:33:33:www-data:/home/www-data:|' /etc/passwd \
+    && python3 -c "import pwd; assert pwd.getpwnam('www-data').pw_dir=='/home/www-data'" \
+    && mkdir -p /home/www-data \
+    && chown www-data:www-data /home/www-data \
+    && chmod 755 /home/www-data
+
+# Non-interactive JDK selection via the launcher's documented
+# mechanism: with JAVA_HOME_OVERRIDE set, LaunchSupport uses
+# /opt/jdk without discovery heuristics or prompting.
+RUN echo "--- install: pin JDK via JAVA_HOME_OVERRIDE ---" \
+    && sed -i 's|^JAVA_HOME_OVERRIDE=$|JAVA_HOME_OVERRIDE=/opt/jdk|' /opt/ghidra/support/launch.properties \
+    && grep -q '^JAVA_HOME_OVERRIDE=/opt/jdk$' /opt/ghidra/support/launch.properties
+
 USER www-data
 
 # Runtime self-checks execute as the non-root runtime user. Each gate
 # is its own labeled layer so the build log names the exact failing
-# check. HOME points at tmpfs (as in production).
+# check. They run with the image's real home configuration (no
+# HOME=/tmp masking): passwd, $HOME, and Java user.home must agree.
 RUN echo "--- smoke: python stdlib imports (www-data) ---" \
-    && export HOME=/tmp \
     && python3 -c "import argparse, fcntl, hashlib, json, os, platform, re, select, shutil, signal, subprocess, sys, time"
 
 RUN echo "--- smoke: JDK executes (www-data) ---" \
-    && export HOME=/tmp \
     && /opt/jdk/bin/java -version
+
+# Home-alignment gate: the exact mechanism that failed on the
+# server. $HOME (image ENV) and Java user.home (passwd-derived)
+# must both resolve to the writable home.
+RUN echo "--- smoke: home aligned for www-data ---" \
+    && test "$HOME" = /home/www-data \
+    && test -d /home/www-data -a -w /home/www-data \
+    && /opt/jdk/bin/java -XshowSettings:properties -version 2>&1 | grep -qE '^\s+user\.home = /home/www-data$'
 
 # Architecture gate without the `file` package: read the ELF header
 # directly (e_machine == 183 is EM_AARCH64). Validated both ways:
@@ -212,18 +245,18 @@ RUN echo "--- smoke: decompile is AArch64 ELF (www-data) ---" \
 # above — if another library ever goes missing, this fails loudly
 # instead of crashing the first headless run).
 RUN echo "--- smoke: native runtime deps resolve (www-data) ---" \
-    && export HOME=/tmp \
     && ldd /opt/ghidra/Ghidra/Features/Decompiler/os/linux_arm_64/decompile > /tmp/decompile-ldd.txt \
     && if grep -q 'not found' /tmp/decompile-ldd.txt; then echo "MISSING SHARED LIBS:" >&2; cat /tmp/decompile-ldd.txt >&2; exit 1; fi \
     && grep -q 'libstdc++' /tmp/decompile-ldd.txt
 
 # Headless execution gate: import-only run as www-data (JVM +
-# launcher + loader path, no post-script).
+# launcher + loader path, no post-script), with the exact per-job
+# environment the runner uses (runner.tool_env: no HOME, JVM paths
+# scoped to the job dir). analyzeHeadless takes TWO positionals
+# (project location + name) and requires the location to exist.
 RUN echo "--- smoke: headless import executes as www-data ---" \
-    && export HOME=/tmp \
     && mkdir -p /tmp/gimp && cp /opt/smoke/arm32-smoke.bin /tmp/gimp/input.bin \
-    && /opt/ghidra/support/analyzeHeadless /tmp/gimp/proj -import /tmp/gimp/input.bin \
-        -overwrite -processor ARM:LE:32:v8 -cspec default -deleteProject \
+    && python3 -c "import os,subprocess,sys; sys.path.insert(0,'/opt/runner'); import runner; os.makedirs('/tmp/gimp/proj',exist_ok=True); subprocess.run(['/opt/ghidra/support/analyzeHeadless','/tmp/gimp/proj','analysis','-import','/tmp/gimp/input.bin','-overwrite','-processor','ARM:LE:32:v8','-cspec','default','-deleteProject'],check=True,timeout=600,env=runner.tool_env('ghidra','/tmp/gimp'))" \
     && rm -rf /tmp/gimp
 
 # Integration gate: run the REAL runner argv (built by
@@ -232,14 +265,20 @@ RUN echo "--- smoke: headless import executes as www-data ---" \
 # script-created entry function at 0x8000, the exact MOV bytes,
 # and decompiled C containing a return.
 RUN echo "--- smoke: fixture decompiles via runner argv (www-data) ---" \
-    && export HOME=/tmp \
     && mkdir -p /tmp/gsmoke && cp /opt/smoke/arm32-smoke.bin /tmp/gsmoke/input.bin \
-    && python3 -c "import json,subprocess,sys; sys.path.insert(0,'/opt/runner'); import runner; argv=runner.build_argv('ghidra','headless',{'language':'ARM:LE:32:v8','base':0x8000,'entry':0x8000},'/tmp/gsmoke','/tmp/gsmoke/input.bin'); print(json.dumps(argv)); subprocess.run(argv,check=True,timeout=600)" \
+    && python3 -c "import json,subprocess,sys; sys.path.insert(0,'/opt/runner'); import runner; argv=runner.build_argv('ghidra','headless',{'language':'ARM:LE:32:v8','base':0x8000,'entry':0x8000},'/tmp/gsmoke','/tmp/gsmoke/input.bin'); print(json.dumps(argv)); subprocess.run(argv,check=True,timeout=600,env=runner.tool_env('ghidra','/tmp/gsmoke'))" \
     && python3 -c "import json; e=json.load(open('/tmp/gsmoke/evidence.json')); assert e['schema']==1,'schema'; assert e['tool']=='ghidra','tool'; assert e['language']=='ARM:LE:32:v8','language'; assert any(f.get('name')=='entry' and f.get('entry')=='0x8000' for f in e['functions']),'entry fn'; assert any(l.get('bytes')=='0100a0e3' for l in e['disassembly']['lines']),'mov bytes'; assert any('r0' in l.get('text','').lower() for l in e['disassembly']['lines']),'r0 text'; d={f.get('entry'):f for f in e['decompilation']['functions']}; assert 'c' in d.get('0x8000',{}),'decompiled c'; assert 'return' in d['0x8000']['c'].lower(),'return in c'; print('FIXTURE EVIDENCE OK')" \
     && rm -rf /tmp/gsmoke
 
+# Scoping gate: after two headless runs, no job files may leak
+# into the shared home or the default cache location (both runs
+# scoped user.home, java.io.tmpdir, and application.cachedir to
+# their job dirs, which are now deleted).
+RUN echo "--- smoke: job files stayed scoped (www-data) ---" \
+    && test ! -e /home/www-data/.ghidra || { echo "LEAK: job files in shared home" >&2; exit 1; } \
+    && test ! -e /var/tmp/www-data-ghidra || { echo "LEAK: cache escaped to /var/tmp" >&2; exit 1; }
+
 RUN echo "--- smoke: runner dry-run argv (www-data) ---" \
-    && export HOME=/tmp \
     && mkdir -p /tmp/dry \
     && python3 /opt/runner/runner.py --dry-run --tool ghidra \
         --profile headless \

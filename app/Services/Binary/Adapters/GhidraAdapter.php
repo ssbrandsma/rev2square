@@ -226,7 +226,7 @@ final class GhidraAdapter extends SandboxedBackend
         }
 
         return [
-            '/opt/ghidra/support/analyzeHeadless', $params['project'], '-import', $params['input'], '-overwrite',
+            '/opt/ghidra/support/analyzeHeadless', $params['project'], 'analysis', '-import', $params['input'], '-overwrite',
             '-processor', $language, '-cspec', 'default',
             '-postScript', 'ExportEvidence.java', $params['output'], sprintf('0x%x', $base), 'none', '-deleteProject',
         ];

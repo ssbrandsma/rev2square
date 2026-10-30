@@ -200,8 +200,9 @@ class AnalysisDeploymentTest extends TestCase
 
             $userPos = strpos($final, 'USER www-data');
             $this->assertNotFalse($userPos, "{$dockerfile} pins the non-root user");
-            $this->assertSame(1, preg_match('/python3 -c "import ([^"]+)"/', $final, $smoke), "{$dockerfile} smokes stdlib imports");
-            $smokePos = strpos($final, $smoke[0]);
+            $afterUser = substr($final, (int) $userPos);
+            $this->assertSame(1, preg_match('/python3 -c "import ([^"]+)"/', $afterUser, $smoke), "{$dockerfile} smokes stdlib imports");
+            $smokePos = strpos($final, $smoke[0], (int) $userPos);
             $this->assertGreaterThan($userPos, $smokePos, "{$dockerfile} smoke runs as the non-root user");
             foreach ($modules as $module) {
                 $this->assertMatchesRegularExpression('/\b'.preg_quote($module, '/').'\b/', $smoke[1], "{$dockerfile} smoke covers import {$module}");
@@ -337,11 +338,29 @@ class AnalysisDeploymentTest extends TestCase
         $this->assertStringNotContainsString('g++', $final, 'final stage has no C++ compiler');
         $this->assertDoesNotMatchRegularExpression('/\bgcc\b/', $final, 'final stage has no C compiler');
 
-        foreach (['ldd /opt/ghidra', "'not found'", 'm==183', 'analyzeHeadless /tmp/gimp/proj -import', 'build_argv(', 'arm32-smoke.bin', 'FIXTURE EVIDENCE OK'] as $token) {
+        foreach (['ldd /opt/ghidra', "'not found'", 'm==183', "'analysis','-import'", 'build_argv(', 'tool_env(', 'arm32-smoke.bin', 'FIXTURE EVIDENCE OK'] as $token) {
             $this->assertStringContainsString($token, $ghidra, "final stage checks {$token}");
         }
+        // Home/JDK launcher configuration: passwd-derived user.home
+        // (exporting $HOME cannot fix Java), image ENV alignment, and
+        // the documented non-interactive JDK override. No HOME=/tmp
+        // masking anywhere in this Dockerfile.
+        foreach (['www-data:x:33:33:www-data:/home/www-data', 'HOME=/home/www-data', 'JAVA_HOME_OVERRIDE=/opt/jdk', 'user\\.home = /home/www-data', '/var/tmp/www-data-ghidra'] as $token) {
+            $this->assertStringContainsString($token, $ghidra, "final stage configures {$token}");
+        }
+        $this->assertStringNotContainsString('export HOME=/tmp', $ghidra, 'no HOME masking in ghidra build');
         $this->assertSame(5, substr_count($ghidra, '--- natives:'), 'five labeled native-build steps');
-        $this->assertSame(7, substr_count($ghidra, '--- smoke:'), 'seven labeled runtime gates');
+        $this->assertSame(9, substr_count($ghidra, '--- smoke:'), 'nine labeled runtime gates');
+    }
+
+    #[DataProvider('composeFiles')]
+    public function test_ghidra_home_tmpfs_has_pinned_ownership(string $file): void
+    {
+        // A plain tmpfs mount is root-owned and would hide the
+        // image's www-data-owned home; the mount must pin uid/gid
+        // so Java user.home stays writable by the runtime user.
+        $block = $this->serviceBlock($this->compose($file), 'ghidra-runner');
+        $this->assertStringContainsString('/home/www-data:uid=33,gid=33,mode=755', $block, "ghidra home tmpfs pinned ({$file})");
     }
 
     public function test_ghidra_smoke_fixture_matches_known_bytes(): void

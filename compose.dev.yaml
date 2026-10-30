@@ -166,7 +166,10 @@ services:
     tmpfs:
       - /tmp
       - /work
-      - /home/www-data
+      # Pinned ownership: a plain tmpfs mount is root-owned and would
+      # hide the image's www-data-owned home (Java user.home must be
+      # writable by the runtime user).
+      - /home/www-data:uid=33,gid=33,mode=755
     volumes:
       - analysis-spool:/spool:ro
       - analysis-results:/results
