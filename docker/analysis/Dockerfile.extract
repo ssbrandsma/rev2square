@@ -35,6 +35,14 @@ ARG UBIREADER_SHA256=d6d81b19c3ddd81e21d83a5aa19f9dfa1f6e61bf39d866cea4bd0581b24
 
 FROM ${DEBIAN_IMAGE}
 
+# Stage-scoped ARG re-declaration: global ARGs are visible in FROM
+# lines only. Without this, the download RUN below sees empty URLs
+# and fails with an opaque `curl: (3) URL using bad/illegal format`.
+ARG SEVENZZ_URL
+ARG SEVENZZ_SHA256
+ARG UBIREADER_URL
+ARG UBIREADER_SHA256
+
 ENV DEBIAN_FRONTEND=noninteractive \
     SEVENZZ_BIN=/opt/7zz/7zz \
     UNSQUASHFS_BIN=/usr/bin/unsquashfs \
@@ -46,6 +54,17 @@ LABEL org.rev2square.tool="extract" \
       org.rev2square.7zz-sha256="64511f6ebc32d5257a535b33b21a5b6712c72aa91e28524f41e1ce92e803c909" \
       org.rev2square.ubireader-sha256="d6d81b19c3ddd81e21d83a5aa19f9dfa1f6e61bf39d866cea4bd0581b243bd39" \
       org.rev2square.base-image="debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3"
+
+# Preflight: fail fast with a clear message on missing/empty build
+# inputs (including an empty Compose build-arg override erasing a
+# default) instead of an opaque curl error after expensive steps.
+# Checksums stay mandatory — nothing here weakens verification.
+RUN : "${SEVENZZ_URL:?missing build input SEVENZZ_URL}" \
+    && : "${SEVENZZ_SHA256:?missing build input SEVENZZ_SHA256}" \
+    && : "${UBIREADER_URL:?missing build input UBIREADER_URL}" \
+    && : "${UBIREADER_SHA256:?missing build input UBIREADER_SHA256}" \
+    && case "${SEVENZZ_URL}" in https://*) ;; *) echo "SEVENZZ_URL must be an https URL" >&2; exit 1;; esac \
+    && case "${UBIREADER_URL}" in https://*) ;; *) echo "UBIREADER_URL must be an https URL" >&2; exit 1;; esac
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \

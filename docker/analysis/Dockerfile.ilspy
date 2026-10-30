@@ -29,6 +29,10 @@ ARG ILSPYCMD_VERSION
 ENV DOTNET_CLI_TELEMETRY_OPTOUT=1 \
     DOTNET_NOLOGO=1
 
+# Preflight: fail fast with a clear message on a missing/empty tool
+# version instead of an opaque dotnet error after the SDK download.
+RUN : "${ILSPYCMD_VERSION:?missing build input ILSPYCMD_VERSION}"
+
 RUN dotnet tool install ilspycmd --version "${ILSPYCMD_VERSION}" \
         --tool-path /opt/ilspy \
     && /opt/ilspy/ilspycmd --version

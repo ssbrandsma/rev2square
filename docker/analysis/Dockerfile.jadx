@@ -1,7 +1,8 @@
 # Rev2Square isolated JADX runner (Linux ARM64, CLI only).
 #
 # Pinned:
-#   JADX 1.5.6, jadx-1.5.6.zip
+#   JADX 1.5.6, jadx-1.5.6.zip (flat layout: bin/ + lib/ at the
+#     archive root — there is NO jadx-1.5.6/ top-level directory)
 #     sha256:545ea2be9c242511bc145755cf4bda2485ade42966e096f8b4d3da2a230e8974
 #     source: https://github.com/skylot/jadx/releases/tag/v1.5.6
 #     license: Apache-2.0
@@ -25,6 +26,14 @@ ARG TEMURIN_JRE_SHA256=1114f09d6174f54270c3117410b5e4022b43ebc0b43b751af08b927c5
 
 FROM ${DEBIAN_IMAGE}
 
+# Stage-scoped ARG re-declaration: global ARGs are visible in FROM
+# lines only (see Dockerfile.extract for the failure mode this
+# prevents: empty URLs, opaque curl errors).
+ARG JADX_VERSION
+ARG JADX_SHA256
+ARG TEMURIN_JRE_URL
+ARG TEMURIN_JRE_SHA256
+
 ENV DEBIAN_FRONTEND=noninteractive \
     JAVA_HOME=/opt/jre \
     PATH=/opt/jre/bin:${PATH} \
@@ -39,6 +48,15 @@ LABEL org.rev2square.tool="jadx" \
       org.rev2square.jre="temurin-17.0.21+9-aarch64" \
       org.rev2square.jre-sha256="1114f09d6174f54270c3117410b5e4022b43ebc0b43b751af08b927c55ed7bb5" \
       org.rev2square.base-image="debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3"
+
+# Preflight: fail fast with a clear message on missing/empty build
+# inputs (including an empty Compose build-arg override erasing a
+# default) instead of an opaque curl error after expensive steps.
+RUN : "${JADX_VERSION:?missing build input JADX_VERSION}" \
+    && : "${JADX_SHA256:?missing build input JADX_SHA256}" \
+    && : "${TEMURIN_JRE_URL:?missing build input TEMURIN_JRE_URL}" \
+    && : "${TEMURIN_JRE_SHA256:?missing build input TEMURIN_JRE_SHA256}" \
+    && case "${TEMURIN_JRE_URL}" in https://*) ;; *) echo "TEMURIN_JRE_URL must be an https URL" >&2; exit 1;; esac
 
 # Full python3 (NOT python3-minimal): the runner needs stdlib
 # modules such as json that the minimal package omits.
@@ -56,8 +74,9 @@ RUN apt-get update \
     && echo "${JADX_SHA256}  /tmp/jadx.zip" | sha256sum -c - \
     && unzip -q /tmp/jadx.zip -d /tmp/jadxdist \
     && rm /tmp/jadx.zip \
-    && cp -r /tmp/jadxdist/jadx-${JADX_VERSION}/. /opt/jadx/ \
+    && cp -r /tmp/jadxdist/. /opt/jadx/ \
     && rm -rf /tmp/jadxdist \
+    && test -x /opt/jadx/bin/jadx \
     && rm -f /opt/jadx/bin/jadx-gui /opt/jadx/bin/jadx-gui.bat
 
 COPY runner.py /opt/runner/runner.py

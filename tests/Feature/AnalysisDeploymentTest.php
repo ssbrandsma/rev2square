@@ -226,6 +226,11 @@ class AnalysisDeploymentTest extends TestCase
             }
             $guarded++;
             $this->assertMatchesRegularExpression('/pull_policy:\s*[\'"]?never[\'"]?/', $block, "{$service} is built locally, never pulled ({$file})");
+            // No Compose build.args on runners: an unset/empty
+            // override would silently erase a pinned Dockerfile
+            // default (the Dockerfiles preflight for empties, but no
+            // override should exist to trip that in the first place).
+            $this->assertDoesNotMatchRegularExpression('/^\s+args:/m', $block, "{$service} sets no build args ({$file})");
         }
         $this->assertGreaterThanOrEqual(5, $guarded, "runner images guarded ({$file})");
 
@@ -233,6 +238,63 @@ class AnalysisDeploymentTest extends TestCase
         // during builds and third-party service pulls keep working.
         $db = $this->serviceBlock($compose, 'db');
         $this->assertStringNotContainsString('pull_policy', $db, "db keeps default pull behavior ({$file})");
+    }
+
+    public function test_runner_stages_redeclare_download_args_with_preflight(): void
+    {
+        // Regression net for the extract build failure: global ARGs
+        // (declared before the first FROM) are visible in FROM lines
+        // only. Any stage whose steps reference one must re-declare
+        // it with a bare `ARG NAME`, or the variable silently expands
+        // empty and curl fails with `URL using bad/illegal format`.
+        $dir = base_path('docker/analysis');
+        // Expected `: "${VAR:?missing build input ...}"` guards and
+        // `must be an https URL` scheme checks per Dockerfile.
+        $preflights = [
+            'Dockerfile.binutils' => [0, 0],
+            'Dockerfile.ghidra' => [5, 1],
+            'Dockerfile.jadx' => [4, 1],
+            'Dockerfile.ilspy' => [1, 0],
+            'Dockerfile.extract' => [4, 2],
+        ];
+        foreach ($preflights as $dockerfile => [$guards, $schemes]) {
+            $text = (string) file_get_contents($dir.'/'.$dockerfile);
+            $stripped = (string) preg_replace('/^\s*#.*$/m', '', $text);
+            $parts = preg_split('/^FROM [^\n]*$/m', $stripped);
+            $global = (string) array_shift($parts);
+            preg_match_all('/^ARG\s+([A-Z][A-Z0-9_]*)=/m', $global, $defs);
+            $globals = $defs[1];
+
+            foreach (array_values($parts) as $i => $stage) {
+                $steps = (string) preg_replace('/^ARG\s+[^\n]*$/m', '', $stage);
+                preg_match_all('/\$\{([A-Z][A-Z0-9_]+)[}:]/', $steps, $braced);
+                preg_match_all('/\$([A-Z][A-Z0-9_]+)/', $steps, $plain);
+                $refs = array_unique(array_merge($braced[1], $plain[1]));
+                foreach ($refs as $ref) {
+                    if (! in_array($ref, $globals, true)) {
+                        continue;
+                    }
+                    $this->assertMatchesRegularExpression(
+                        '/^ARG\s+'.preg_quote($ref, '/').'\s*$/m',
+                        $stage,
+                        "{$dockerfile} stage {$i} re-declares ARG {$ref}"
+                    );
+                }
+            }
+
+            $this->assertSame($guards, substr_count($text, 'missing build input'), "{$dockerfile} preflights its build inputs");
+            $this->assertSame($schemes, substr_count($text, 'must be an https URL'), "{$dockerfile} pins https download schemes");
+        }
+    }
+
+    public function test_jadx_uses_verified_flat_archive_layout(): void
+    {
+        // The published jadx-1.5.6.zip has bin/ + lib/ at the archive
+        // root (verified by download); there is no jadx-1.5.6/ top
+        // directory, so the install copy must use the dist root.
+        $jadx = (string) file_get_contents(base_path('docker/analysis/Dockerfile.jadx'));
+        $this->assertStringContainsString('cp -r /tmp/jadxdist/. /opt/jadx/', $jadx);
+        $this->assertStringNotContainsString('jadxdist/jadx-', $jadx);
     }
 
     public function test_setup_docs_gate_startup_on_successful_build(): void

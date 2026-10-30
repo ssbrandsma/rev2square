@@ -35,6 +35,12 @@ FROM ${DEBIAN_IMAGE} AS jdk
 ARG TEMURIN_JDK_URL
 ARG TEMURIN_JDK_SHA256
 
+# Preflight: fail fast with a clear message on missing/empty build
+# inputs instead of an opaque curl error after expensive steps.
+RUN : "${TEMURIN_JDK_URL:?missing build input TEMURIN_JDK_URL}" \
+    && : "${TEMURIN_JDK_SHA256:?missing build input TEMURIN_JDK_SHA256}" \
+    && case "${TEMURIN_JDK_URL}" in https://*) ;; *) echo "TEMURIN_JDK_URL must be an https URL" >&2; exit 1;; esac
+
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/* \
@@ -55,6 +61,13 @@ ARG GHIDRA_SHA256
 COPY --from=jdk /opt/jdk /opt/jdk
 ENV JAVA_HOME=/opt/jdk \
     PATH=/opt/jdk/bin:${PATH}
+
+# Preflight before the 20-40 minute buildNatives: fail fast with a
+# clear message on missing/empty build inputs. (The download URL
+# host is hardcoded https; only the versioned parts vary.)
+RUN : "${GHIDRA_VERSION:?missing build input GHIDRA_VERSION}" \
+    && : "${GHIDRA_ZIP:?missing build input GHIDRA_ZIP}" \
+    && : "${GHIDRA_SHA256:?missing build input GHIDRA_SHA256}"
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
