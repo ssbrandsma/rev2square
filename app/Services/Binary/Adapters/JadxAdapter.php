@@ -29,6 +29,14 @@ final class JadxAdapter extends SandboxedBackend
         return 'jadx';
     }
 
+    protected function probeBudgetSeconds(): int
+    {
+        // Covers the version ping plus the runner's one-time fixture
+        // decompile (cached per boot afterwards) with margin; the 10s
+        // shared default would flap the first probe on slow hosts.
+        return 30;
+    }
+
     protected function qualifyProbeAnswer(array $answer): ?array
     {
         // A version ping cannot prove jadx decompiles: only a fixture

@@ -16,6 +16,11 @@
 # 18081). It refuses production project names and env files, never
 # touches `rev2square-virtualmin` / `rev2square-prod`, and its trap
 # removes ONLY the QA project's own containers/volumes (unless --keep).
+# The committed compose file points service env_file at the server path
+# /etc/rev2square/.env.virtualmin, so the script runs a sed-rewritten
+# COPY with that path swapped to its generated env (byte-identical
+# otherwise, asserted below) plus --project-directory for build
+# contexts; phase 0 then proves the QA env (not /etc) is loaded.
 # Analysis-runner images are ARM64-only, so full analysis E2E is out of
 # scope on amd64; the coordinator mount is proven at container level.
 #
@@ -67,17 +72,29 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+QA_COMPOSE="$TMPDIR/qa-compose.virtualmin.yaml"
+sed "s|/etc/rev2square/.env.virtualmin|$ENV_FILE|g" "$ROOT/compose.virtualmin.yaml" > "$QA_COMPOSE"
+# (delta assertions run below, after fail() is defined)
+
 dc() {
-    docker compose -f "$ROOT/compose.virtualmin.yaml" --env-file "$ENV_FILE" -p "$QA_PROJECT" "$@"
+    docker compose --project-directory "$ROOT" -f "$QA_COMPOSE" --env-file "$ENV_FILE" -p "$QA_PROJECT" "$@"
 }
 
 fail() { echo "FAIL: $1" >&2; exit 1; }
 pass() { echo "PASS: $1"; }
 
+[ "$(grep -cF "path: $ENV_FILE" "$QA_COMPOSE")" -eq 3 ] || fail "compose copy env rewrite"
+if grep -qF "/etc/rev2square" "$QA_COMPOSE"; then fail "compose copy still references /etc"; fi
+
 # Synthetic 4 KiB ELF fixture (deterministic; no firmware needed here).
 printf '\177ELF\002\001\001\000' > "$FIXTURE"
 dd if=/dev/zero of="$FIXTURE" bs=1 count=$((4096 - 8)) seek=8 conv=notrunc status=none
 FIXTURE_SHA=$(sha256sum "$FIXTURE" | cut -d' ' -f1)
+
+# Phase-0 marker: a random value that exists ONLY in the generated QA env;
+# reading it back from a running container proves the sed-rewritten compose
+# copy loaded the QA env rather than the server path /etc/rev2square/.
+QA_MARKER="qa-marker-$(openssl rand -hex 8)"
 
 DB_PASSWORD=$(openssl rand -base64 32)
 DB_ROOT_PASSWORD=$(openssl rand -base64 32)
@@ -107,6 +124,7 @@ AI_PROVIDER=mock
 TRUSTED_PROXIES=PRIVATE_SUBNETS
 APP_LOOPBACK_PORT=${QA_PORT}
 DOCKER_PLATFORM=linux/${ARCH}
+QA_ENV_MARKER=${QA_MARKER}
 EOF
 chmod 600 "$ENV_FILE"
 
@@ -132,6 +150,13 @@ until curl -fsS -o /dev/null --max-time 5 "$BASE/up" 2>/dev/null; do
     [ "$i" -ge 60 ] && fail "stack never became healthy"
     sleep 3
 done
+
+# --- Phase 0: env isolation (generated QA env loaded, not /etc) ----------
+got_marker=$(dc exec -T app sh -c 'echo "$QA_ENV_MARKER"' | tr -d '\r\n') || fail "marker read via app"
+[ "$got_marker" = "$QA_MARKER" ] || fail "QA env marker mismatch (wrong env file?)"
+got_appurl=$(dc exec -T app sh -c 'echo "$APP_URL"' | tr -d '\r\n') || fail "APP_URL read via app"
+[ "$got_appurl" = "http://127.0.0.1:${QA_PORT}" ] || fail "APP_URL mismatch ($got_appurl)"
+pass "phase 0: QA env loaded (marker + APP_URL :${QA_PORT})"
 
 # --- Phase A: cross-container sharing as the runtime user -----------------
 PROBE="artifacts/_qa_probe_$$.bin"

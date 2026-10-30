@@ -279,6 +279,52 @@ class RunnerCase(unittest.TestCase):
         self.run_once("objdump")
         self.assertNotIn("fixture", self.claim("job1"))
 
+    def test_jadx_probe_caches_fixture_per_boot(self):
+        fixdir = os.path.join(self.tmp, "fixtures")
+        os.makedirs(fixdir)
+        with open(os.path.join(fixdir, "dex-smoke.dex"), "wb") as fh:
+            fh.write(b"dex-fixture-bytes")
+        os.environ["RUNNER_FIXTURES"] = fixdir
+        os.environ["JADX_BIN"] = self.stub(
+            "jadx",
+            'if [ "$1" = "--version" ]; then echo "jadx 1.5.1"; exit 0; fi\n'
+            'out=""; prev=""; for a in "$@"; do'
+            ' if [ "$prev" = "-d" ]; then out="$a"; fi; prev="$a"; done\n'
+            'mkdir -p "$out/com/rev2square"\n'
+            'echo "public class FixtureSmoketest {}"'
+            ' > "$out/com/rev2square/FixtureSmoketest.java"\n')
+        decompiles = []
+        orig_check = runner.Runner._check_fixture
+
+        def counting_check(self, claimdir):
+            decompiles.append(claimdir)
+            return orig_check(self, claimdir)
+
+        runner.Runner._check_fixture = counting_check
+        try:
+            r = runner.Runner("jadx", self.spool, self.results)
+            self.submit("jadx", kind="probe", name="job1")
+            r.run_once()
+            self.submit("jadx", kind="probe", name="job2")
+            r.run_once()
+        finally:
+            runner.Runner._check_fixture = orig_check
+        # One decompile served both probes: qualification is real on
+        # the first probe, instant (cached) afterwards.
+        self.assertEqual(len(decompiles), 1)
+        self.assertEqual(self.claim("job1")["fixture"],
+                         {"name": "dex-smoke.dex", "ok": True})
+        self.assertEqual(self.claim("job2")["fixture"],
+                         {"name": "dex-smoke.dex", "ok": True})
+
+    def test_write_answer_never_raises(self):
+        # A coordinator that timed out may clean its submission side
+        # while the runner still works; losing that race must not
+        # kill the runner loop.
+        r = runner.Runner("jadx", self.spool, self.results)
+        self.assertFalse(r._write_answer(
+            os.path.join(self.tmp, "no-such-claimdir"), {"schema": 1}))
+
     def test_committed_dex_fixture_parses(self):
         path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                             "..", "fixtures", "dex-smoke.dex")

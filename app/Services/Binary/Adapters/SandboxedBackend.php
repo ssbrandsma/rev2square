@@ -29,7 +29,7 @@ abstract class SandboxedBackend implements BinaryAdapter
 
     public function version(): ?string
     {
-        if (! app()->runningInConsole()) {
+        if (! app()->runningInConsole() || ! $this->hasSpoolMounts()) {
             return WorkerCapability::verifiedFor($this)['version'];
         }
 
@@ -44,29 +44,23 @@ abstract class SandboxedBackend implements BinaryAdapter
     {
         // HTTP readers use coordinator snapshots, never submit spool jobs.
         if (! app()->runningInConsole()) {
-            $worker = WorkerCapability::verifiedFor($this);
-
-            return [
-                'available' => $worker['verified'],
-                'reason' => $worker['note'],
-                'setup_doc' => $worker['verified'] ? null : 'docs/analysis-spool-deployment.md',
-            ];
+            return $this->snapshotProbe();
         }
 
-        $spool = $this->spool();
-        if (! is_dir($spool->spoolDir()) || ! is_dir($spool->resultsDir())) {
-            return [
-                'available' => false,
-                'reason' => 'No analysis spool at '.$spool->spoolDir().'. '.DeployHints::startRunnersHint(),
-                'setup_doc' => 'docs/analysis-spool-deployment.md',
-            ];
+        // Console, but runningInConsole() alone is not a coordinator
+        // identity check: only the spool mounts prove it. Any other
+        // console context (app/queue/scheduler shells, tests) reads the
+        // same coordinator snapshots as HTTP instead of submitting jobs
+        // no runner will ever answer.
+        if (! $this->hasSpoolMounts()) {
+            return $this->snapshotProbe();
         }
 
         $answer = $this->spoolProbe();
         if ($answer === null) {
             return [
                 'available' => false,
-                'reason' => 'The '.$this->tool().' runner did not answer its capability probe. Check that the runner container is up and shares the spool volumes.',
+                'reason' => 'The '.$this->tool().' runner did not answer its capability probe ('.$this->probeBudgetSeconds().'s budget). '.DeployHints::startRunnersHint(),
                 'setup_doc' => 'docs/analysis-spool-deployment.md',
             ];
         }
@@ -144,11 +138,41 @@ abstract class SandboxedBackend implements BinaryAdapter
             $this->probeDone = true;
             $this->probeMemo = $this->spool()->probe(
                 $this->tool(),
-                (int) config('artifacts.binary_spool_probe_seconds', 10),
+                $this->probeBudgetSeconds(),
             );
         }
 
         return $this->probeMemo;
+    }
+
+    /**
+     * Coordinator-side probe budget in seconds. Steady-state probes
+     * are version pings (~seconds); adapters whose first probe pays a
+     * bounded qualification cost override with margin.
+     */
+    protected function probeBudgetSeconds(): int
+    {
+        return (int) config('artifacts.binary_spool_probe_seconds', 10);
+    }
+
+    /** Coordinator identity check: the spool mounts, not the SAPI. */
+    protected function hasSpoolMounts(): bool
+    {
+        $spool = $this->spool();
+
+        return is_dir($spool->spoolDir()) && is_dir($spool->resultsDir());
+    }
+
+    /** @return array{available:bool,reason:string,setup_doc:?string} */
+    private function snapshotProbe(): array
+    {
+        $worker = WorkerCapability::verifiedFor($this);
+
+        return [
+            'available' => $worker['verified'],
+            'reason' => $worker['note'],
+            'setup_doc' => $worker['verified'] ? null : 'docs/analysis-spool-deployment.md',
+        ];
     }
 
     protected function spool(): SpoolClient

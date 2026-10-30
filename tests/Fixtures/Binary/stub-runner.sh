@@ -10,6 +10,8 @@
 #   MODE=ok       answer the first analyze job with canned outputs, then exit
 #   MODE=timeout  mark the first analyze job timed out, then exit
 #   MODE=slow     mark running, then wait for cancel (or 25s) and record it
+#   MODE=delayed  answer the first probe job after STUB_DELAY seconds
+#                 (slow first-probe qualification analog), then exit
 #
 # Canned payloads arrive via env: STUB_EVIDENCE (json), STUB_TOOLOUT (text).
 set -u
@@ -54,6 +56,11 @@ case "$MODE" in
         ;;
     timeout)
         printf '{"schema":1,"state":"timeout","wall_seconds":1}' > "$RESULTS/$JOBID/status.json"
+        ;;
+    delayed)
+        sleep "${STUB_DELAY:-3}"
+        printf '{"schema":1,"tool":"%s","tool_version":"stub-1.0","runner_arch":"%s","image_digest":"stub","tool_image":"stub"}' \
+            "$TOOL" "$(uname -m)" > "$RESULTS/$JOBID/status.json"
         ;;
     slow)
         printf '{"schema":1,"state":"running"}' > "$RESULTS/$JOBID/status.json"

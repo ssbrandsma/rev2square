@@ -95,6 +95,41 @@ class SpoolClientTest extends TestCase
         $this->assertSame(['.', '..'], scandir($this->results));
     }
 
+    public function test_probe_timeout_removes_submission_only_and_late_answer_lands_intact(): void
+    {
+        // Slow first-probe qualification analog: the runner answers
+        // AFTER the coordinator's budget expires.
+        $this->startStub('delayed', ['STUB_DELAY' => '3']);
+
+        $this->assertNull($this->client()->probe('objdump', 1));
+
+        // Timeout cleanup removed only OUR submission side...
+        $this->assertSame(['.', '..'], scandir($this->spool));
+
+        // ...while the runner-owned claim survived: the late answer
+        // lands intact (never truncated mid-write by the coordinator).
+        $answer = null;
+        $deadline = microtime(true) + 10;
+        while (microtime(true) < $deadline) {
+            foreach (array_diff(scandir($this->results), ['.', '..']) as $job) {
+                $raw = @file_get_contents($this->results.'/'.$job.'/status.json');
+                $decoded = is_string($raw) ? json_decode($raw, true) : null;
+                if (is_array($decoded) && ($decoded['tool_version'] ?? null) === 'stub-1.0') {
+                    $answer = $decoded;
+                    break 2;
+                }
+            }
+            usleep(100000);
+        }
+        $this->assertIsArray($answer);
+        $this->assertSame(1, $answer['schema']);
+        $this->assertSame('stub', $answer['image_digest']);
+
+        // The scheduled prune reaps the orphaned late answer by age.
+        $this->assertSame(['spool' => 0, 'results' => 1], $this->client()->prune(-1));
+        $this->assertSame(['.', '..'], scandir($this->results));
+    }
+
     public function test_run_round_trip_returns_evidence_and_tool_output(): void
     {
         $this->startStub('ok', [

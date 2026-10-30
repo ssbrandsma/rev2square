@@ -9,8 +9,8 @@
 #   docker/backup/restore.sh [--variant prod|virtualmin] [--env-file FILE] [--project NAME] [--yes] [--skip-safety-dump] FILE.sql.gz
 #
 # Variants: prod (compose.prod.yaml + .env.production) or virtualmin
-# (compose.virtualmin.yaml + .env.virtualmin). An explicit --env-file
-# overrides the variant default.
+# (compose.virtualmin.yaml + /etc/rev2square/.env.virtualmin). An
+# explicit --env-file overrides the variant default.
 #
 # After restore the script runs migrations (schema alignment no-op on a
 # healthy dump) and signals workers to restart gracefully. This script
@@ -50,7 +50,7 @@ case "$VARIANT" in
         ;;
     virtualmin)
         COMPOSE_FILE="$ROOT/compose.virtualmin.yaml"
-        [ "$ENV_SET" -eq 0 ] && ENV_FILE="$ROOT/.env.virtualmin"
+        [ "$ENV_SET" -eq 0 ] && ENV_FILE="/etc/rev2square/.env.virtualmin"
         ;;
     *) echo "Unknown variant: $VARIANT (use prod or virtualmin)" >&2; exit 2 ;;
 esac

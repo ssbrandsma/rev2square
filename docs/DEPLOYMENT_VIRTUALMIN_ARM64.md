@@ -16,9 +16,11 @@ same Dockerfiles. The Caddy service is NOT used in this variant.
 Conventions: commands prefixed `[root]#` run as root (or with sudo);
 commands prefixed `[vmin]$` may run as the Virtualmin hosting account.
 `vc` = `docker compose -f compose.virtualmin.yaml --env-file
-.env.virtualmin`. Every command below spells paths out so copy/paste
-works without aliases. All server paths use `/srv/rev2square` as the
-application root (see section 4).
+/etc/rev2square/.env.virtualmin`. Every command below spells paths out
+so copy/paste works without aliases. All server paths use
+`/srv/rev2square` as the application root (see section 4), except the
+environment file, which lives at `/etc/rev2square/.env.virtualmin`
+(see section 8).
 
 ```
 Internet
@@ -124,7 +126,7 @@ Re-verify on the VPS (native, authoritative):
 
 ```sh
 [root]# cd /srv/rev2square
-[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin build
+[root]# docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin build
 [root]# docker inspect --format '{{.RepoTags}} {{.Architecture}}' rev2square/app:latest rev2square/nginx:latest
 # expect: both report arm64
 [root]# docker run --rm --entrypoint sh rev2square/app:latest -c 'ls /var/www/.env* 2>&1; ls -d /var/www/vendor /var/www/public/build'
@@ -159,8 +161,9 @@ access to the application):
 
 ```
 /srv/rev2square/
-  .env.virtualmin        # chmod 600 root:root, all secrets (section 8)
   compose.virtualmin.yaml
+  # (environment file lives outside the checkout:
+  #  /etc/rev2square/.env.virtualmin, chmod 600 root:root — section 8)
   docker/, app/, ...    # git checkout (root:root, read-only for vmin user)
   backups/              # created by backup.sh, chmod 700 root:root
 ```
@@ -279,9 +282,10 @@ Verify (as root, after `apachectl configtest && systemctl reload httpd`):
 
 ```sh
 [root]# cd /srv/rev2square
-[root]# cp .env.virtualmin.example .env.virtualmin
-[root]# chmod 600 .env.virtualmin
-[root]# nano .env.virtualmin
+[root]# mkdir -p /etc/rev2square
+[root]# cp .env.virtualmin.example /etc/rev2square/.env.virtualmin
+[root]# chmod 600 /etc/rev2square/.env.virtualmin
+[root]# nano /etc/rev2square/.env.virtualmin
 ```
 
 Set at minimum: `APP_KEY` (after first build, section 9 step 5),
@@ -300,6 +304,16 @@ change in the Apache snippet), `DOCKER_PLATFORM=linux/arm64`,
 `DEPLOY_VARIANT=virtualmin` (drives deployment-specific owner
 commands in admin diagnostics; the standalone template uses `prod`).
 
+Two distinct mechanisms read this one file — do not confuse them.
+`--env-file` on the compose command line feeds Compose-file
+*interpolation* (`${DB_PASSWORD:?}`, image tags, ports, the
+coordinator's explicit allowlist). The services' `env_file:` entries
+in compose.virtualmin.yaml feed the *container runtime* of app, queue
+and scheduler (absolute `/etc` path, `required: true`). On this
+server both point at `/etc/rev2square/.env.virtualmin`; the
+coordinator has no `env_file` entry and receives only its interpolated
+16-key allowlist.
+
 ## 9. Initial installation
 
 ```sh
@@ -311,11 +325,11 @@ commands in admin diagnostics; the standalone template uses `prod`).
 [root]# git checkout <release-sha-from-release-notes>   # never an unreviewed main
 [root]# git rev-parse --short HEAD   # record in the release notes
 
-[root]# cp .env.virtualmin.example .env.virtualmin
-[root]# chmod 600 .env.virtualmin
-[root]# nano .env.virtualmin   # section 8 (leave APP_KEY empty for now)
+[root]# cp .env.virtualmin.example /etc/rev2square/.env.virtualmin
+[root]# chmod 600 /etc/rev2square/.env.virtualmin
+[root]# nano /etc/rev2square/.env.virtualmin   # section 8 (leave APP_KEY empty for now)
 
-[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin build
+[root]# docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin build
 # native ARM64 build on the VPS, 5-15 min first run
 
 [root]# docker images --digests rev2square/app
@@ -323,17 +337,17 @@ commands in admin diagnostics; the standalone template uses `prod`).
 [root]# git rev-parse --short HEAD
 # paste all three into the release notes
 
-[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin run --rm app php artisan key:generate --show
-# paste the output into .env.virtualmin as APP_KEY
+[root]# docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin run --rm app php artisan key:generate --show
+# paste the output into /etc/rev2square/.env.virtualmin as APP_KEY
 
-[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin up -d
-[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin exec -T app php artisan migrate --force
-[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin exec -T app php artisan db:seed --force
+[root]# docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin up -d
+[root]# docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin exec -T app php artisan migrate --force
+[root]# docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin exec -T app php artisan db:seed --force
 # The seeder creates maintainer@rev2square.test with a PUBLISHED password
 # (see README). The stack is still loopback-only, so neutralize it
 # immediately, before any cutover ever exposes it:
-[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin exec -T app php artisan tinker --execute="App\Models\User::where('email','maintainer@rev2square.test')->firstOrFail()->forceFill(['password'=>Illuminate\Support\Facades\Hash::make(Illuminate\Support\Str::random(32))])->save(); echo 'seed password randomized'.PHP_EOL;"
-[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin exec -T app php artisan tinker --execute="echo 'known password still valid: '.(Illuminate\Support\Facades\Hash::check('password',App\Models\User::where('email','maintainer@rev2square.test')->firstOrFail()->password)?'YES-BAD':'no-good').PHP_EOL;"
+[root]# docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin exec -T app php artisan tinker --execute="App\Models\User::where('email','maintainer@rev2square.test')->firstOrFail()->forceFill(['password'=>Illuminate\Support\Facades\Hash::make(Illuminate\Support\Str::random(32))])->save(); echo 'seed password randomized'.PHP_EOL;"
+[root]# docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin exec -T app php artisan tinker --execute="echo 'known password still valid: '.(Illuminate\Support\Facades\Hash::check('password',App\Models\User::where('email','maintainer@rev2square.test')->firstOrFail()->password)?'YES-BAD':'no-good').PHP_EOL;"
 # expect: "seed password randomized" then "known password still valid: no-good"
 # (Re-running db:seed is safe: firstOrCreate never resets the password.)
 [root]# ./docker/ops/status.sh --variant virtualmin --url http://127.0.0.1:8081
@@ -350,7 +364,7 @@ inside the Compose network only.
   race):
 
   ```sh
-  [root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin exec -T app php artisan migrate --force
+  [root]# docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin exec -T app php artisan migrate --force
   ```
 
 - Seed ONLY via `db:seed --force` (idempotent ShowcaseSeeder:
@@ -367,10 +381,10 @@ inside the Compose network only.
 
 ```sh
 [root]# cd /srv/rev2square
-[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin up -d       # start
-[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin stop        # stop, keep volumes
-[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin down        # remove containers, keep volumes
-[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin restart queue scheduler  # workers
+[root]# docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin up -d       # start
+[root]# docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin stop        # stop, keep volumes
+[root]# docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin down        # remove containers, keep volumes
+[root]# docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin restart queue scheduler  # workers
 ```
 
 Routine stop/start/retreat ALWAYS preserves volumes (`stop` or plain
@@ -390,9 +404,9 @@ cannot fill the disk.
 # migration runbook BEFORE the build/up below (inventory + back up
 # container-layer files first; a new empty volume would hide them).
 [root]# ./docker/backup/backup.sh --variant virtualmin   # safety backup first
-[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin build && \
-  docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin up -d
-[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin exec -T app php artisan migrate --force
+[root]# docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin build && \
+  docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin up -d
+[root]# docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin exec -T app php artisan migrate --force
 [root]# ./docker/ops/status.sh --variant virtualmin
 ```
 
@@ -439,9 +453,9 @@ the Apache/Virtualmin layer (section 17), not the containers.
 ## 15. Log inspection
 
 ```sh
-[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin logs -f --tail=100 app queue
-[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin exec -T app tail -n 100 storage/logs/laravel.log
-[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin exec -T app php artisan queue:failed
+[root]# docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin logs -f --tail=100 app queue
+[root]# docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin exec -T app tail -n 100 storage/logs/laravel.log
+[root]# docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin exec -T app php artisan queue:failed
 ```
 
 Apache-side access/error logs stay in Virtualmin's usual per-domain
@@ -457,9 +471,9 @@ from git, always reproducible):
 [root]# cd /srv/rev2square
 [root]# ./docker/backup/backup.sh --variant virtualmin
 [root]# git checkout <previous-release-sha>
-[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin build && \
-  docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin up -d
-[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin exec -T app php artisan migrate --force
+[root]# docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin build && \
+  docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin up -d
+[root]# docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin exec -T app php artisan migrate --force
 [root]# ./docker/ops/status.sh --variant virtualmin
 ```
 
@@ -467,9 +481,9 @@ Full retreat (pre-cutover): plain `down` preserves the database volume
 for later inspection — prefer it over destroying anything:
 
 ```sh
-[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin down
+[root]# docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin down
 # volumes kept. Destroy them ONLY with explicit authorization:
-# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin down -v
+# docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin down -v
 ```
 
 Database rollback = `restore.sh --variant virtualmin` of a pre-upgrade
@@ -554,13 +568,13 @@ NOT enough (new image content requires recreation). Owner-operated, as
 root from `/srv/rev2square`:
 
 ```sh
-[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin build app && \
-  docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin up -d app queue scheduler analysis-coordinator
-[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin exec -T app cat /usr/local/etc/php/conf.d/uploads.ini
+[root]# docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin build app && \
+  docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin up -d app queue scheduler analysis-coordinator
+[root]# docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin exec -T app cat /usr/local/etc/php/conf.d/uploads.ini
 # expect: upload_max_filesize = 64M, post_max_size = 80M
-[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin exec -T app php -r 'echo ini_get("upload_max_filesize")," ",ini_get("post_max_size"),"\n";'
+[root]# docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin exec -T app php -r 'echo ini_get("upload_max_filesize")," ",ini_get("post_max_size"),"\n";'
 # expect: 64M 80M (CLI shares conf.d with php-fpm in this image)
-[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin exec -T app php-fpm -i | grep -Ei '^(upload_max_filesize|post_max_size) '
+[root]# docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin exec -T app php-fpm -i | grep -Ei '^(upload_max_filesize|post_max_size) '
 # expect: both lines show the same 64M/80M under the FPM SAPI
 ```
 
@@ -634,20 +648,20 @@ containers/volumes, or auto-delete failed rows):
 ```sh
 [root]# cd /srv/rev2square
 # 0. Read-only inventory: what lives where right now.
-[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin ps
-[root]# for s in app queue analysis-coordinator; do echo "== $s"; docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin exec -T $s sh -c 'find /var/www/storage/app -type f | head -50; echo; du -sh /var/www/storage/app'; done
-[root]# docker inspect $(docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin ps -q app) --format '{{json .Mounts}}'
+[root]# docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin ps
+[root]# for s in app queue analysis-coordinator; do echo "== $s"; docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin exec -T $s sh -c 'find /var/www/storage/app -type f | head -50; echo; du -sh /var/www/storage/app'; done
+[root]# docker inspect $(docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin ps -q app) --format '{{json .Mounts}}'
 # expect: no app-storage yet (first migration); note any anonymous volumes
-[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin exec -T app php artisan tinker --execute="foreach (\App\Models\ProjectArtifact::orderBy(\"id\")->get() as \$a) echo \$a->id.' '.\$a->state.' '.\$a->byte_size.' '.\$a->sha256.' '.\$a->rawPath().PHP_EOL;" > /root/artifact-rows-$(date +%Y%m%d).txt
+[root]# docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin exec -T app php artisan tinker --execute="foreach (\App\Models\ProjectArtifact::orderBy(\"id\")->get() as \$a) echo \$a->id.' '.\$a->state.' '.\$a->byte_size.' '.\$a->sha256.' '.\$a->rawPath().PHP_EOL;" > /root/artifact-rows-$(date +%Y%m%d).txt
 [root]# ./docker/backup/backup.sh --variant virtualmin   # database safety backup
 # 1. Back up per-container files (each container holds DIFFERENT pieces:
 # app = raw uploads, queue = snapshots, coordinator = evidence/children).
 [root]# ts=$(date +%Y%m%d-%H%M%S); mkdir -p backups/storage-app-$ts
-[root]# for s in app queue analysis-coordinator; do cid=$(docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin ps -q $s); docker cp $cid:/var/www/storage/app backups/storage-app-$ts/$s; done
+[root]# for s in app queue analysis-coordinator; do cid=$(docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin ps -q $s); docker cp $cid:/var/www/storage/app backups/storage-app-$ts/$s; done
 [root]# find backups/storage-app-$ts -type f | sort | xargs sha256sum > backups/storage-app-$ts/SHA256SUMS; wc -l backups/storage-app-$ts/SHA256SUMS
 # 2. Deploy (recreates app/queue/coordinator with the new empty volume).
 [root]# git fetch origin && git checkout <sha-with-app-storage>
-[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin build app && docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin up -d
+[root]# docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin build app && docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin up -d
 # 3. Merge the three trees (disjoint names expected: raws vs snapshots
 # vs evidence) and restore into the volume as www-data (no root chown
 # needed: exec runs as the compose user).
@@ -655,9 +669,9 @@ containers/volumes, or auto-delete failed rows):
 [root]# for s in app queue analysis-coordinator; do (cd $s && tar cf - .) | (cd merged && tar xkf -); done
 [root]# echo "merged: $(find merged -type f | wc -l) source: $(find app queue analysis-coordinator -type f | wc -l)"
 # expect equal counts (no collisions); stop and inspect if they differ
-[root]# cd /srv/rev2square && (cd backups/storage-app-$ts/merged && tar cf - .) | docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin exec -T app tar xf - -C /var/www/storage/app
+[root]# cd /srv/rev2square && (cd backups/storage-app-$ts/merged && tar cf - .) | docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin exec -T app tar xf - -C /var/www/storage/app
 # 4. Verify SHA-256 per row, then retry failed rows from the UI.
-[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin exec -T app php artisan artifacts:verify-storage
+[root]# docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin exec -T app php artisan artifacts:verify-storage
 # Rows whose file is back report "retry from the artifact page": open
 # each failed artifact/analysis and press Retry (extraction re-runs;
 # analyses failed missing_original/storage_unreadable are retryable).
@@ -691,10 +705,10 @@ inventory/backup above and BEFORE any recreation:
 # 0. Uploads inventoried + backed up per the storage runbook above FIRST.
 # 1. Drain analysis: queue nothing new; wait for in-flight runs (they
 #    are retryable if lost).
-[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin exec -T analysis-coordinator php artisan analysis:diagnostics
+[root]# docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin exec -T analysis-coordinator php artisan analysis:diagnostics
 # expect: Pending spool submissions 0 (re-run until drained)
 # 2. Confirm the exact volume names (project-scoped).
-[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin config --volumes
+[root]# docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin config --volumes
 # expect: analysis-spool analysis-results app-storage db-data (+ live names
 # rev2square-virtualmin_analysis-spool / rev2square-virtualmin_analysis-results)
 # 3. One-shot re-own of the two TRANSIENT volumes only (contents kept).
@@ -703,17 +717,17 @@ inventory/backup above and BEFORE any recreation:
 # expect: SPOOL-WRITABLE
 # Fallback (only if the re-own cannot run): after the drain, remove and
 # recreate JUST these two empty volumes — never app-storage/db-data:
-#   docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin stop analysis-coordinator objdump-runner ghidra-runner jadx-runner ilspy-runner extract-runner
+#   docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin stop analysis-coordinator objdump-runner ghidra-runner jadx-runner ilspy-runner extract-runner
 #   docker volume rm rev2square-virtualmin_analysis-spool rev2square-virtualmin_analysis-results
 # 4. Deploy (rebuilds app + runners with the ownership fix and the jadx
 #    fixture), recreate, restore app-storage, then verify.
 [root]# git fetch origin && git checkout <sha-with-spool-fix>
-[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin build app objdump-runner ghidra-runner jadx-runner ilspy-runner extract-runner && docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin up -d
+[root]# docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin build app objdump-runner ghidra-runner jadx-runner ilspy-runner extract-runner && docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin up -d
 # (analysis-coordinator shares the app image, so `build app` covers it)
-[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin exec -T app php artisan artifacts:verify-storage
-[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin exec -T analysis-coordinator php artisan analysis:diagnostics
+[root]# docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin exec -T app php artisan artifacts:verify-storage
+[root]# docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin exec -T analysis-coordinator php artisan analysis:diagnostics
 # 5. Refresh snapshots from the coordinator and confirm runners ready.
-[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin exec -T analysis-coordinator php artisan binary:worker-capabilities --refresh
+[root]# docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin exec -T analysis-coordinator php artisan binary:worker-capabilities --refresh
 # wait a minute, then re-run analysis:diagnostics: every installed
 # backend ready (jadx ready requires its DEX fixture pass). Poisoned
 # snapshots captured pre-fix from spool-less containers heal on this

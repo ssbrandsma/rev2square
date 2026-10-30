@@ -48,7 +48,7 @@ case "$VARIANT" in
         [ "$ENV_SET" -eq 0 ] && ENV_FILE="$ROOT/.env.production"
         ;;
     virtualmin)
-        [ "$ENV_SET" -eq 0 ] && ENV_FILE="$ROOT/.env.virtualmin"
+        [ "$ENV_SET" -eq 0 ] && ENV_FILE="/etc/rev2square/.env.virtualmin"
         ;;
     *) echo "Unknown variant: $VARIANT (use prod or virtualmin)" >&2; exit 2 ;;
 esac

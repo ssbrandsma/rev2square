@@ -19,19 +19,19 @@ class DeployHintsTest extends TestCase
 
         $this->assertSame('virtualmin', DeployHints::variant());
         $this->assertSame(
-            'docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin',
+            'docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin',
             DeployHints::composeBase()
         );
         $this->assertStringContainsString(
-            'docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin up -d analysis-coordinator',
+            'docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin up -d analysis-coordinator',
             DeployHints::startRunnersHint()
         );
         $this->assertStringContainsString(
-            'docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin exec -T analysis-coordinator php artisan binary:worker-capabilities --refresh',
+            'docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin exec -T analysis-coordinator php artisan binary:worker-capabilities --refresh',
             DeployHints::refreshSnapshotsHint()
         );
         $this->assertSame(
-            'docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin exec -T analysis-coordinator php artisan analysis:diagnostics',
+            'docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin exec -T analysis-coordinator php artisan analysis:diagnostics',
             DeployHints::coordinatorArtisan('analysis:diagnostics')
         );
     }

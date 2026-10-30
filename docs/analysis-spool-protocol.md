@@ -41,6 +41,17 @@ not-operational until rebuilt. Probe answers keep version/arch even
 when the fixture fails, so diagnostics can tell "runner down" apart
 from "runner up, decompile broken".
 
+Deadline separation: the fixture check is bounded (30s wall × 3
+attempts) and cached per runner boot — install health cannot change
+without a restart — so steady-state probes stay on the fast
+version-ping path for every tool. Coordinator budgets: 10s default,
+30s for jadx (covers the version ping plus the one-time fixture
+run with margin). A coordinator that times out removes only its
+spool submission, never the results claim: the runner owns the
+claim until answered, and late answers land harmlessly for the
+hourly age-based prune. Runners never let a lost answer kill the
+poll loop.
+
 ## 2. Analysis job
 
 Spool: `<job>/job.json` + `<job>/<input>` (confined basename,

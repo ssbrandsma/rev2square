@@ -9,7 +9,7 @@
 #   docker/backup/backup.sh [--variant prod|virtualmin] [--env-file FILE] [--project NAME] [--dir DIR] [--keep N]
 #
 # Variants: prod (compose.prod.yaml + .env.production, rev2square-prod) or
-# virtualmin (compose.virtualmin.yaml + .env.virtualmin,
+# virtualmin (compose.virtualmin.yaml + /etc/rev2square/.env.virtualmin,
 # rev2square-virtualmin). An explicit --env-file overrides the variant
 # default. Output ./backups, keep 14 newest dumps.
 #
@@ -51,7 +51,7 @@ case "$VARIANT" in
         ;;
     virtualmin)
         COMPOSE_FILE="$ROOT/compose.virtualmin.yaml"
-        [ "$ENV_SET" -eq 0 ] && ENV_FILE="$ROOT/.env.virtualmin"
+        [ "$ENV_SET" -eq 0 ] && ENV_FILE="/etc/rev2square/.env.virtualmin"
         ;;
     *) echo "Unknown variant: $VARIANT (use prod or virtualmin)" >&2; exit 2 ;;
 esac

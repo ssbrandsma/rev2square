@@ -83,7 +83,17 @@ class SpoolClient
                 usleep(250000);
             }
         } finally {
-            $this->cleanup($jobId);
+            if ($answer === null) {
+                // Timeout: the runner may still be working (slow
+                // first-probe qualification, loaded host). Remove only
+                // OUR submission side; never the results claim — the
+                // runner owns it until answered, and deleting it
+                // mid-write would race the runner. A late answer lands
+                // harmlessly and the scheduled prune reaps it by age.
+                $this->removeJobDir($this->spoolDir.'/'.$jobId);
+            } else {
+                $this->cleanup($jobId);
+            }
         }
 
         return $answer;
@@ -222,37 +232,42 @@ class SpoolClient
         if (preg_match('#^[A-Za-z0-9-]{1,64}$#', $jobId) !== 1) {
             return;
         }
-        foreach ([$this->spoolDir.'/'.$jobId, $this->resultsDir.'/'.$jobId] as $dir) {
-            if (! is_dir($dir)) {
+        $this->removeJobDir($this->spoolDir.'/'.$jobId);
+        $this->removeJobDir($this->resultsDir.'/'.$jobId);
+    }
+
+    /** Remove one side of one job. Best-effort, never throws. */
+    private function removeJobDir(string $dir): void
+    {
+        if (is_link($dir) || ! is_dir($dir)) {
+            return;
+        }
+        foreach (['job.json', 'status.json', 'evidence.json', 'tool.out', 'cancel'] as $known) {
+            if (is_file($dir.'/'.$known) && ! is_link($dir.'/'.$known)) {
+                @unlink($dir.'/'.$known);
+            }
+        }
+        // Input + promoted files: unknown names, still confined.
+        foreach (@scandir($dir) ?: [] as $entry) {
+            if ($entry === '.' || $entry === '..') {
                 continue;
             }
-            foreach (['job.json', 'status.json', 'evidence.json', 'tool.out', 'cancel'] as $known) {
-                if (is_file($dir.'/'.$known) && ! is_link($dir.'/'.$known)) {
-                    @unlink($dir.'/'.$known);
-                }
+            $path = $dir.'/'.$entry;
+            if (is_file($path) && ! is_link($path)) {
+                @unlink($path);
             }
-            // Input + promoted files: unknown names, still confined.
-            foreach (@scandir($dir) ?: [] as $entry) {
-                if ($entry === '.' || $entry === '..') {
-                    continue;
-                }
-                $path = $dir.'/'.$entry;
-                if (is_file($path) && ! is_link($path)) {
-                    @unlink($path);
-                }
-            }
-            // Promotion candidates (extract tool): validated names only.
-            $filesDir = $dir.'/files';
-            if (is_dir($filesDir) && ! is_link($filesDir)) {
-                foreach (@scandir($filesDir) ?: [] as $entry) {
-                    if (preg_match('#^[0-9a-f]{64}\.bin$#', $entry) === 1) {
-                        @unlink($filesDir.'/'.$entry);
-                    }
-                }
-                @rmdir($filesDir);
-            }
-            @rmdir($dir);
         }
+        // Promotion candidates (extract tool): validated names only.
+        $filesDir = $dir.'/files';
+        if (is_dir($filesDir) && ! is_link($filesDir)) {
+            foreach (@scandir($filesDir) ?: [] as $entry) {
+                if (preg_match('#^[0-9a-f]{64}\.bin$#', $entry) === 1) {
+                    @unlink($filesDir.'/'.$entry);
+                }
+            }
+            @rmdir($filesDir);
+        }
+        @rmdir($dir);
     }
 
     /**

@@ -98,6 +98,10 @@ return [
     'binary_spool_wall_seconds' => (int) env('BINARY_SPOOL_WALL_SECONDS', 480),
 
     // Capability-probe round-trip budget per runner (seconds).
+    // Steady-state probes are version pings; JadxAdapter overrides to
+    // 30s to cover the runner's one-time fixture decompile (cached per
+    // boot afterwards). Runner fixture wall/attempts live in
+    // docker/analysis/runner.py; keep them aligned (protocol §1).
     'binary_spool_probe_seconds' => (int) env('BINARY_SPOOL_PROBE_SECONDS', 10),
 
     // Grace after the runner wall clock during which the coordinator

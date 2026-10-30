@@ -72,9 +72,15 @@ TOOLS = ("objdump", "ghidra", "jadx", "ilspy", "extract")
 # reports fixture_ok when the tool decompiles its fixture and the
 # known class marker appears, so "ready" means "demonstrated the
 # real operation", not "answered a version ping".
+#
+# The check is bounded (wall x attempts) and cached per boot: install
+# health cannot change without a restart (read-only image), so every
+# probe after the first answers from cache and stays on the fast
+# version-ping path. Attempts only repeat on failure.
 PROBE_FIXTURES = {"jadx": "dex-smoke.dex"}
 FIXTURE_MARKER = "FixtureSmoketest"
-FIXTURE_WALL_SECONDS = 60
+FIXTURE_WALL_SECONDS = 30
+FIXTURE_ATTEMPTS = 3
 
 # Collection bounds (runner-side; PHP re-validates everything read).
 MAX_EVIDENCE_BYTES = 512 * 1024
@@ -276,6 +282,7 @@ class Runner:
         self.tool = tool
         self.spool = spool
         self.results = results
+        self._fixture_cache = None
 
     def pending_jobs(self):
         try:
@@ -331,12 +338,35 @@ class Runner:
             answer["fixture"] = self.probe_fixture(claimdir)
         if self.tool == "objdump":
             answer["architectures"] = self.objdump_architectures()
-        with open(os.path.join(claimdir, "status.json"), "w",
-                  encoding="utf-8") as fh:
-            json.dump(answer, fh)
-        os.chmod(os.path.join(claimdir, "status.json"), 0o644)
+        self._write_answer(claimdir, answer)
+
+    def _write_answer(self, claimdir, answer):
+        """Persist a probe answer; never raise. A coordinator that
+        timed out may have cleaned its submission side while this
+        runner was still working — a lost late answer must not kill
+        the runner loop."""
+        try:
+            with open(os.path.join(claimdir, "status.json"), "w",
+                      encoding="utf-8") as fh:
+                json.dump(answer, fh)
+            os.chmod(os.path.join(claimdir, "status.json"), 0o644)
+            return True
+        except OSError:
+            return False
 
     def probe_fixture(self, claimdir):
+        """Cached smoke-fixture verdict. Computed once per boot (bounded
+        attempts); later probes answer instantly so health checks stay
+        fast while qualification stays real."""
+        if self._fixture_cache is None:
+            try:
+                self._fixture_cache = self._check_fixture(claimdir)
+            except Exception:
+                self._fixture_cache = {
+                    "name": PROBE_FIXTURES[self.tool], "ok": False}
+        return self._fixture_cache
+
+    def _check_fixture(self, claimdir):
         """Decompile the baked smoke fixture; fail closed on any error
         so a broken install reports fixture_ok:false while the probe
         itself still answers version/arch for diagnostics."""
@@ -349,21 +379,26 @@ class Runner:
         workdir = os.path.join(claimdir, "fixture-work")
         try:
             os.makedirs(workdir, exist_ok=True)
-            argv = _jadx_argv("apk", {"threads": 1}, workdir, fixture)
-            proc = subprocess.run(
-                argv, stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                cwd=workdir, timeout=FIXTURE_WALL_SECONDS,
-                env=tool_env(self.tool, workdir))
-            if proc.returncode != 0:
-                return result
-            _, inline, _ = self._collect_tree(
-                os.path.join(workdir, "jadx-out"))
-            result["ok"] = any(
-                key.endswith(".java") and FIXTURE_MARKER in value
-                for key, value in inline.items())
-        except Exception:
-            pass
+            for _ in range(FIXTURE_ATTEMPTS):
+                shutil.rmtree(os.path.join(workdir, "jadx-out"),
+                              ignore_errors=True)
+                try:
+                    argv = _jadx_argv("apk", {"threads": 1}, workdir, fixture)
+                    proc = subprocess.run(
+                        argv, stdin=subprocess.DEVNULL,
+                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                        cwd=workdir, timeout=FIXTURE_WALL_SECONDS,
+                        env=tool_env(self.tool, workdir))
+                except Exception:
+                    continue
+                if proc.returncode != 0:
+                    continue
+                _, inline, _ = self._collect_tree(
+                    os.path.join(workdir, "jadx-out"))
+                if any(key.endswith(".java") and FIXTURE_MARKER in value
+                       for key, value in inline.items()):
+                    result["ok"] = True
+                    return result
         finally:
             shutil.rmtree(workdir, ignore_errors=True)
         return result

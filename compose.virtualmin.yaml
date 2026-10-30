@@ -4,7 +4,7 @@ name: rev2square-virtualmin
 # See docs/DEPLOYMENT_VIRTUALMIN_ARM64.md.
 #
 # Usage (from the repo root on the server, as root):
-#   docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin up -d --build
+#   docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin up -d --build
 #
 # Differences from compose.prod.yaml:
 # - NO Caddy proxy: Virtualmin-managed Apache terminates TLS on ports
@@ -19,7 +19,9 @@ name: rev2square-virtualmin
 #   policies as compose.prod.yaml; the Dockerfiles are shared unchanged.
 # - app-storage named volume shares durable private user data
 #   (storage/app) between app, queue, and analysis-coordinator.
-# - Secrets come from .env.virtualmin (chmod 600, never committed).
+# - Secrets come from /etc/rev2square/.env.virtualmin (chmod 600, never
+#   committed). Pass the same path via --env-file for Compose variable
+#   interpolation; the services' env_file entries read it into containers.
 
 services:
   app:
@@ -31,8 +33,12 @@ services:
     # Locally built (see the build && up upgrade flow); a missing image
     # must fail fast locally, never attempt a Docker Hub pull.
     pull_policy: never
+    # Runtime env comes from the server file (absolute path): this is the
+    # SERVICE env_file (container runtime), distinct from the --env-file
+    # CLI flag that feeds Compose-file interpolation. Both point at the
+    # same /etc file on the server.
     env_file:
-      - path: .env.virtualmin
+      - path: /etc/rev2square/.env.virtualmin
         required: true
     volumes:
       # Shared private user data (research artifacts, presentation
@@ -103,10 +109,10 @@ services:
     platform: ${DOCKER_PLATFORM:-linux/arm64}
     image: mariadb:11.8
     environment:
-      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?Set DB_ROOT_PASSWORD in .env.virtualmin (and pass --env-file .env.virtualmin)}
+      MYSQL_ROOT_PASSWORD: ${DB_ROOT_PASSWORD:?Set DB_ROOT_PASSWORD in /etc/rev2square/.env.virtualmin (and pass --env-file /etc/rev2square/.env.virtualmin)}
       MYSQL_DATABASE: ${DB_DATABASE:-rev2square}
       MYSQL_USER: ${DB_USERNAME:-rev2square}
-      MYSQL_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env.virtualmin (and pass --env-file .env.virtualmin)}
+      MYSQL_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in /etc/rev2square/.env.virtualmin (and pass --env-file /etc/rev2square/.env.virtualmin)}
     volumes:
       - db-data:/var/lib/mysql
       - ./docker/mariadb/init.sql:/docker-entrypoint-initdb.d/10-init.sql:ro
@@ -136,7 +142,7 @@ services:
     # Single worker: conservative for the 4 GB shared VPS.
     command: ["php", "artisan", "queue:work", "--sleep=3", "--tries=3", "--max-time=3600"]
     env_file:
-      - path: .env.virtualmin
+      - path: /etc/rev2square/.env.virtualmin
         required: true
     volumes:
       # Shared private user data (see the app service comment): the
@@ -172,7 +178,7 @@ services:
     pull_policy: never
     command: ["php", "artisan", "schedule:work"]
     env_file:
-      - path: .env.virtualmin
+      - path: /etc/rev2square/.env.virtualmin
         required: true
     depends_on:
       db:
@@ -200,7 +206,8 @@ services:
   # Restricted analysis coordinator: serves ONLY the 'analysis' queue
   # on the 'analysis-database' connection. Shares the app image (no
   # secrets baked in) but takes NO env_file: its environment is an
-  # explicit allowlist interpolated from --env-file .env.virtualmin.
+  # explicit allowlist interpolated from --env-file
+  # /etc/rev2square/.env.virtualmin.
   # Absent on purpose: APP_KEY, DB_ROOT_PASSWORD, session/mail/AI keys.
   # Exactly one instance; never scale this service.
   analysis-coordinator:
@@ -216,9 +223,9 @@ services:
       DB_CONNECTION: ${DB_CONNECTION:-mysql}
       DB_HOST: ${DB_HOST:-db}
       DB_PORT: ${DB_PORT:-3306}
-      DB_DATABASE: ${DB_DATABASE:?Set DB_DATABASE in .env.virtualmin (and pass --env-file .env.virtualmin)}
-      DB_USERNAME: ${DB_USERNAME:?Set DB_USERNAME in .env.virtualmin (and pass --env-file .env.virtualmin)}
-      DB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env.virtualmin (and pass --env-file .env.virtualmin)}
+      DB_DATABASE: ${DB_DATABASE:?Set DB_DATABASE in /etc/rev2square/.env.virtualmin (and pass --env-file /etc/rev2square/.env.virtualmin)}
+      DB_USERNAME: ${DB_USERNAME:?Set DB_USERNAME in /etc/rev2square/.env.virtualmin (and pass --env-file /etc/rev2square/.env.virtualmin)}
+      DB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in /etc/rev2square/.env.virtualmin (and pass --env-file /etc/rev2square/.env.virtualmin)}
       QUEUE_CONNECTION: database
       CACHE_STORE: database
       FILESYSTEM_DISK: local

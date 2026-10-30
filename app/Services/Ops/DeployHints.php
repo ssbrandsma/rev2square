@@ -22,7 +22,7 @@ final class DeployHints
     public static function composeBase(): ?string
     {
         return match (self::variant()) {
-            'virtualmin' => 'docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin',
+            'virtualmin' => 'docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin',
             'prod' => 'docker compose -f compose.prod.yaml --env-file .env.production',
             default => null,
         };
