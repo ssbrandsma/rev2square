@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Services\Binary\Adapters\BinaryAdapter;
 use App\Services\Binary\Adapters\SandboxedBackend;
+use App\Services\Ops\DeployHints;
 use Illuminate\Database\Eloquent\Model;
 
 /**
@@ -44,12 +45,12 @@ class WorkerCapability extends Model
 
         $row = self::where('adapter', $adapter->id())->first();
         if ($row === null || $row->captured_at === null) {
-            return ['verified' => false, 'version' => null, 'note' => 'No worker capability snapshot. Run: php artisan binary:worker-capabilities --refresh'];
+            return ['verified' => false, 'version' => null, 'note' => 'No worker capability snapshot. '.DeployHints::refreshSnapshotsHint()];
         }
 
         $ttlHours = (int) config('artifacts.binary_worker_snapshot_ttl_hours', 24);
         if ($row->captured_at->lt(now()->subHours($ttlHours))) {
-            return ['verified' => false, 'version' => $row->version, 'note' => 'Worker snapshot is stale (captured '.$row->captured_at->toIso8601String().'). Refresh it before queueing.'];
+            return ['verified' => false, 'version' => $row->version, 'note' => 'Worker snapshot is stale (captured '.$row->captured_at->toIso8601String().'). '.DeployHints::refreshSnapshotsHint()];
         }
         if (! $row->available) {
             return ['verified' => false, 'version' => $row->version, 'note' => 'The analysis worker reports this backend unavailable: '.($row->details['reason'] ?? 'unknown reason')];

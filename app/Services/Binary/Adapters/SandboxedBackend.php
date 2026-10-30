@@ -3,8 +3,10 @@
 namespace App\Services\Binary\Adapters;
 
 use App\Models\BinaryAnalysis;
+use App\Models\WorkerCapability;
 use App\Services\Binary\Sandbox\EvidenceValidator;
 use App\Services\Binary\Sandbox\SpoolClient;
+use App\Services\Ops\DeployHints;
 
 /**
  * Shared spool boundary for isolated backends (objdump, Ghidra, JADX,
@@ -27,6 +29,10 @@ abstract class SandboxedBackend implements BinaryAdapter
 
     public function version(): ?string
     {
+        if (! app()->runningInConsole()) {
+            return WorkerCapability::verifiedFor($this)['version'];
+        }
+
         $probe = $this->spoolProbe();
 
         return is_string($probe['tool_version'] ?? null) && $probe['tool_version'] !== ''
@@ -36,11 +42,22 @@ abstract class SandboxedBackend implements BinaryAdapter
 
     public function probe(): array
     {
+        // HTTP readers use coordinator snapshots, never submit spool jobs.
+        if (! app()->runningInConsole()) {
+            $worker = WorkerCapability::verifiedFor($this);
+
+            return [
+                'available' => $worker['verified'],
+                'reason' => $worker['note'],
+                'setup_doc' => $worker['verified'] ? null : 'docs/analysis-spool-deployment.md',
+            ];
+        }
+
         $spool = $this->spool();
         if (! is_dir($spool->spoolDir()) || ! is_dir($spool->resultsDir())) {
             return [
                 'available' => false,
-                'reason' => 'No analysis spool at '.$spool->spoolDir().'. Start the isolated runners: docker compose up -d analysis-coordinator objdump-runner ghidra-runner jadx-runner ilspy-runner extract-runner.',
+                'reason' => 'No analysis spool at '.$spool->spoolDir().'. '.DeployHints::startRunnersHint(),
                 'setup_doc' => 'docs/analysis-spool-deployment.md',
             ];
         }
@@ -64,6 +81,11 @@ abstract class SandboxedBackend implements BinaryAdapter
             ];
         }
 
+        $qualified = $this->qualifyProbeAnswer($answer);
+        if ($qualified !== null) {
+            return $qualified;
+        }
+
         $version = $this->version();
 
         return [
@@ -71,6 +93,20 @@ abstract class SandboxedBackend implements BinaryAdapter
             'reason' => 'Isolated '.$this->tool().' runner ('.($version ?? 'unversioned').', '.$runnerArch.', image '.($answer['image_digest'] ?? 'unknown').').',
             'setup_doc' => null,
         ];
+    }
+
+    /**
+     * Extra per-adapter probe qualification. Return null when the
+     * runner answer is sufficient, or an unavailable probe-shaped
+     * array when the backend needs more proof (e.g. a fixture
+     * decompile) before it may be declared ready.
+     *
+     * @param array<string,mixed> $answer
+     * @return array{available:false,reason:string,setup_doc:string}|null
+     */
+    protected function qualifyProbeAnswer(array $answer): ?array
+    {
+        return null;
     }
 
     public static function normalizeArch(string $arch): string

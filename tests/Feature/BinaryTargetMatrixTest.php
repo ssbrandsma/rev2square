@@ -9,10 +9,12 @@ use App\Models\ProjectArtifact;
 use App\Models\User;
 use App\Services\Artifacts\ArtifactExtractor;
 use App\Services\Binary\Adapters\ObjdumpAdapter;
+use App\Services\Binary\Sandbox\SpoolClient;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
 use Tests\Support\BinaryFixtures;
+use Tests\Support\SpoolFake;
 use Tests\TestCase;
 
 /**
@@ -637,16 +639,39 @@ class BinaryTargetMatrixTest extends TestCase
         $this->assertFalse($analysis->isRetryable());
     }
 
-    public function test_worker_capabilities_command_reports_and_captures(): void
+    public function test_worker_capabilities_command_reports_without_capturing(): void
     {
-        // Point the spool at missing dirs: sandboxed captures fail
-        // fast (no runner round-trip) instead of timing out.
+        $this->artisan('binary:worker-capabilities')->assertSuccessful();
+        $this->assertSame(0, \App\Models\WorkerCapability::count());
+    }
+
+    public function test_worker_capabilities_sync_refuses_without_local_spool(): void
+    {
+        // Inline capture measures THIS container: without the spool
+        // mounts it must refuse instead of recording bogus snapshots
+        // that would shadow the real runners until the next refresh.
         config([
             'artifacts.binary_spool_dir' => sys_get_temp_dir().'/rev2-no-spool-'.uniqid(),
             'artifacts.binary_results_dir' => sys_get_temp_dir().'/rev2-no-results-'.uniqid(),
         ]);
-        $this->artisan('binary:worker-capabilities')->assertSuccessful();
+
+        $this->artisan('binary:worker-capabilities', ['--sync' => true])
+            ->expectsOutputToContain('No analysis spool is mounted in this container')
+            ->assertFailed();
         $this->assertSame(0, \App\Models\WorkerCapability::count());
+    }
+
+    public function test_worker_capabilities_sync_captures_through_bound_spool(): void
+    {
+        // Spool dirs exist here (as on the coordinator) and a bound
+        // fake answers instantly, so capture stays fast: one verified
+        // bundled backend plus five unavailable sandboxed ones.
+        $spool = new SpoolFake;
+        app()->instance(SpoolClient::class, $spool);
+        config([
+            'artifacts.binary_spool_dir' => $spool->spoolDir(),
+            'artifacts.binary_results_dir' => $spool->resultsDir(),
+        ]);
 
         $this->artisan('binary:worker-capabilities', ['--sync' => true])->assertSuccessful();
         $this->assertSame(6, \App\Models\WorkerCapability::count());

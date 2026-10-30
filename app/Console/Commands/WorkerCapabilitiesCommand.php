@@ -5,6 +5,7 @@ namespace App\Console\Commands;
 use App\Jobs\RefreshWorkerCapabilities;
 use App\Models\WorkerCapability;
 use App\Services\Binary\Adapters\AdapterRegistry;
+use App\Services\Ops\DeployHints;
 use Illuminate\Console\Command;
 
 /**
@@ -22,6 +23,17 @@ class WorkerCapabilitiesCommand extends Command
     public function handle(): int
     {
         if ($this->option('sync')) {
+            // Inline capture measures THIS container: without the spool
+            // mounts it would record bogus "unavailable" snapshots that
+            // shadow the real runners until the next refresh. Refuse
+            // instead of poisoning the table.
+            $spool = (string) config('artifacts.binary_spool_dir');
+            $results = (string) config('artifacts.binary_results_dir');
+            if (! is_dir($spool) || ! is_dir($results)) {
+                $this->error('No analysis spool is mounted in this container ('.$spool.'), so inline capture would record bogus snapshots. Capture on the coordinator instead: '.DeployHints::coordinatorArtisan('binary:worker-capabilities --sync'));
+
+                return self::FAILURE;
+            }
             (new RefreshWorkerCapabilities)->handle();
             $this->info('Captured inline (this process only — meaningful on the worker host).');
         } elseif ($this->option('refresh')) {

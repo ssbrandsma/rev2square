@@ -80,11 +80,29 @@ RUN apt-get update \
     && rm -f /opt/jadx/bin/jadx-gui /opt/jadx/bin/jadx-gui.bat
 
 COPY runner.py /opt/runner/runner.py
+# DEX smoke fixture for probe qualification (see fixtures/gen_dex_smoke.py).
+COPY --chmod=644 fixtures/dex-smoke.dex /opt/runner/fixtures/dex-smoke.dex
 
 RUN /opt/jadx/bin/jadx --version > /provenance/jadx-version.txt 2>&1 \
     && /opt/jre/bin/java -version > /provenance/java-version.txt 2>&1 \
     && chmod 644 /provenance/* \
     && chmod 755 /opt/runner/runner.py /opt/jadx/bin/jadx
+
+# Fixture qualification at build time: the DEX smoke input MUST
+# decompile with the known class marker, or this image is broken.
+# Fixture sha256: 597807fe5c8d9d999ba7ca4292a8707618281463638b7449384d9907e95f8b80
+# (regenerate deterministically via fixtures/gen_dex_smoke.py).
+RUN echo "597807fe5c8d9d999ba7ca4292a8707618281463638b7449384d9907e95f8b80  /opt/runner/fixtures/dex-smoke.dex" | sha256sum -c - \
+    && mkdir -p /tmp/fxqual \
+    && /opt/jadx/bin/jadx --no-src-save-cache -d /tmp/fxqual/out /opt/runner/fixtures/dex-smoke.dex \
+    && grep -rq FixtureSmoketest /tmp/fxqual/out \
+    && rm -rf /tmp/fxqual
+
+# Spool/results mount points (named volumes shared with the coordinator).
+# Pre-created www-data-owned so volume initialization preserves uid 33:
+# the runner reads the spool (mounted :ro) and writes results as
+# www-data. Never 777: these carry untrusted job traffic.
+RUN mkdir -p /spool /results && chown www-data:www-data /spool /results
 
 USER www-data
 
@@ -97,7 +115,11 @@ RUN export HOME=/tmp \
     && mkdir -p /tmp/dry \
     && python3 /opt/runner/runner.py --dry-run --tool jadx \
         --profile apk --params-json '{"threads":2}' --workdir /tmp/dry \
-        | grep -q -- '--no-src-save-cache'
+        | grep -q -- '--no-src-save-cache' \
+    && mkdir -p /tmp/fxdry \
+    && /opt/jadx/bin/jadx --no-src-save-cache -d /tmp/fxdry/out /opt/runner/fixtures/dex-smoke.dex \
+    && grep -rq FixtureSmoketest /tmp/fxdry/out \
+    && rm -rf /tmp/fxdry
 
 CMD ["python3", "/opt/runner/runner.py", "--tool", "jadx", \
      "--spool", "/spool", "--results", "/results"]

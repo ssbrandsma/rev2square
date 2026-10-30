@@ -6,6 +6,7 @@ use App\Models\BinaryAnalysis;
 use App\Models\WorkerCapability;
 use App\Services\Binary\Adapters\AdapterRegistry;
 use App\Services\Binary\Adapters\SandboxedBackend;
+use App\Services\Ops\DeployHints;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
 
@@ -36,6 +37,7 @@ class AnalysisDiagnosticsCommand extends Command
     private function backends(): void
     {
         $rows = [];
+        $needsRefresh = false;
         foreach (AdapterRegistry::all() as $adapter) {
             $check = WorkerCapability::verifiedFor($adapter);
             $extra = '';
@@ -44,6 +46,7 @@ class AnalysisDiagnosticsCommand extends Command
                 $details = $row?->details ?? [];
                 $extra = 'runner='.(is_string($details['runner_arch'] ?? null) ? $details['runner_arch'] : '?')
                     .' image='.(is_string($details['image_digest'] ?? null) ? substr($details['image_digest'], 0, 19) : '?');
+                $needsRefresh = $needsRefresh || ! $check['verified'];
             }
             $rows[] = [
                 $adapter->id(),
@@ -54,6 +57,9 @@ class AnalysisDiagnosticsCommand extends Command
             ];
         }
         $this->table(['Backend', 'Ready', 'Version', 'Runner', 'Note'], $rows);
+        if ($needsRefresh) {
+            $this->info(DeployHints::refreshSnapshotsHint());
+        }
     }
 
     private function queueDepth(): void
@@ -142,6 +148,9 @@ class AnalysisDiagnosticsCommand extends Command
         );
         if ($stale > 0) {
             $this->warn($stale.' stale claim(s): a runner may have died mid-job. They fail closed at the coordinator and are pruned hourly; investigate the runner logs if this recurs.');
+        }
+        if ($pending === null || $claims === null) {
+            $this->info('Live spool counts need the coordinator mounts: '.DeployHints::coordinatorArtisan('analysis:diagnostics'));
         }
     }
 }

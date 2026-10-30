@@ -210,6 +210,30 @@ class SpooledAdaptersTest extends TestCase
         $this->assertSame([], $this->spool->seen);
     }
 
+    public function test_jadx_probe_requires_fixture_ok(): void
+    {
+        $this->spool->probes['jadx'] = SpoolFake::answer('jadx', '1.5.6', [
+            'fixture' => ['name' => 'dex-smoke.dex', 'ok' => true],
+        ]);
+
+        $this->assertTrue((new JadxAdapter)->probe()['available']);
+    }
+
+    public function test_jadx_probe_without_fixture_stays_not_operational(): void
+    {
+        // Stale runner predating the fixture: version ping only.
+        $this->spool->probes['jadx'] = SpoolFake::answer('jadx', '1.5.6');
+        $probe = (new JadxAdapter)->probe();
+        $this->assertFalse($probe['available']);
+        $this->assertStringContainsString('not operational yet', $probe['reason']);
+
+        // Runner up but decompile broken: still not ready.
+        $this->spool->probes['jadx'] = SpoolFake::answer('jadx', '1.5.6', [
+            'fixture' => ['name' => 'dex-smoke.dex', 'ok' => false],
+        ]);
+        $this->assertFalse((new JadxAdapter)->probe()['available']);
+    }
+
     public function test_jadx_and_ilspy_normalize_reconstruction(): void
     {
         $this->spool->probes['jadx'] = SpoolFake::answer('jadx', '1.5.6');

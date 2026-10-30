@@ -8,7 +8,7 @@
 
         <section class="mb-6 rounded-xl border border-zinc-200 bg-white p-4 sm:p-6">
             <h2 class="font-semibold">Execution readiness</h2>
-            <p class="mt-1 text-xs text-zinc-500">Worker-verified snapshots from the isolated runners. A backend queues work only when ready; refresh with <code class="font-mono">php artisan binary:worker-capabilities --refresh</code> after deployments.</p>
+            <p class="mt-1 text-xs text-zinc-500">Worker-verified snapshots from the isolated runners. A backend queues work only when ready; {{ \App\Services\Ops\DeployHints::refreshSnapshotsHint() }}</p>
             <div class="mt-3 overflow-x-auto">
                 <table class="w-full text-left text-sm">
                     <thead>

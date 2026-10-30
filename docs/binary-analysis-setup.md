@@ -32,7 +32,7 @@ mappings stay visible-but-unrouted — this is deliberate.
 ```
 Browser / Agent
   → app (Laravel) + general queue workers (full env, all secrets)
-  → analysis-coordinator (queue `analysis` only, 13-var env allowlist,
+  → analysis-coordinator (queue `analysis` only, 16-key env allowlist,
      DB + spool volumes only — NO app key, NO mail, NO AI keys)
        → spool volume (coordinator writes jobs; runners mount read-only)
        → objdump/ghidra/jadx/ilspy/extract runners
@@ -134,9 +134,14 @@ Presence is not integration. After provisioning or any backend change:
 3. For Ghidra specifically, confirm one run shows tool-generated
    pseudocode for a known function, and that an `arm32-thumb`
    fixture decodes Thumb (not ARM) instructions.
-4. For extraction, confirm one SquashFS fixture promotes its
+4. For JADX specifically, no manual run is needed: every probe
+   decompiles the baked `dex-smoke.dex` fixture and the backend
+   reports ready only when the known class marker appears
+   (`docker/analysis/fixtures/gen_dex_smoke.py` regenerates the
+   fixture deterministically; the image build fails otherwise).
+5. For extraction, confirm one SquashFS fixture promotes its
    contained executable to a child artifact you can then analyze.
-5. Record backend name + version + image digest in the release notes.
+6. Record backend name + version + image digest in the release notes.
    Do not mark a backend verified from documentation alone.
 
 Until qualified, treat the mapping as unavailable regardless of what
@@ -174,6 +179,7 @@ Coordinator allowlist (the only vars the coordinator ever sees):
 | `CACHE_STORE` | `database` | |
 | `FILESYSTEM_DISK` | `local` | Artifact disk access |
 | `BINARY_SPOOL_DIR` / `BINARY_RESULTS_DIR` | `/spool` / `/results` | Spool mount points |
+| `DEPLOY_VARIANT` | `virtualmin` / `prod` | Deployment name so diagnostics render exact owner commands |
 
 Analysis tuning (coordinator + job behavior):
 

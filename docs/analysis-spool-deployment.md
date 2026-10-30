@@ -11,7 +11,7 @@ does not promise.
 | Zone | Components | Secrets | Network | Untrusted bytes |
 |---|---|---|---|---|
 | Application | `app`, `nginx`, `queue`, `scheduler`, `db` | Full env (APP_KEY, mail, Meta keys) | App net + proxied egress | Stored, never parsed by tools |
-| Coordinator | `analysis-coordinator` | 13-var allowlist: DB + framework basics only (no APP_KEY, no mail, no AI keys) | App net (DB/queue only) | Staged into the spool, parsed only as validated JSON/text |
+| Coordinator | `analysis-coordinator` | 16-key allowlist: DB + framework basics only (no APP_KEY, no mail, no AI keys) | App net (DB/queue only) | Staged into the spool, parsed only as validated JSON/text |
 | Spool | `analysis-spool` vol (job specs + inputs), `analysis-results` vol (status + evidence) | None | None (volumes) | Job inputs (opaque blobs) |
 | Runners | `objdump/ghidra/jadx/ilspy/extract-runner` | None (no env_file, no secrets in compose) | `network_mode: none` | Parsed by tools inside private tmpfs workdirs |
 
@@ -100,7 +100,8 @@ Coordinator (compose, asserted by
 - Serves only queue `analysis` on connection `analysis-database`
   (`retry_after` 900 > wall 480 + grace 30 — long runs never
   double-execute after a visibility timeout).
-- 15-key environment allowlist (DB + framework + spool paths); in
+- 16-key environment allowlist (DB + framework + spool paths +
+  `DEPLOY_VARIANT` for deployment-specific owner hints); in
   dev the bind-mounted repo `.env` is additionally masked by
   `docker/analysis/coordinator.env` (non-secret framework keys only).
 - `--tries=1`: malformed input and over-limit runs fail once with a

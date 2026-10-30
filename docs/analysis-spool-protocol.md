@@ -32,6 +32,15 @@ rejects runners whose normalized arch (`aarch64/arm64`,
 `x86_64/amd64`) differs from its own — emulated execution is never
 silently qualified.
 
+`fixture` is jadx-only (smoke qualification): the runner decompiles
+its baked `dex-smoke.dex` and reports `{"name": "dex-smoke.dex",
+"ok": true}` only when the known class marker appears in the emitted
+`.java`. The coordinator declares jadx ready only with `ok: true`;
+runners predating the fixture (no `fixture` key) stay
+not-operational until rebuilt. Probe answers keep version/arch even
+when the fixture fails, so diagnostics can tell "runner down" apart
+from "runner up, decompile broken".
+
 ## 2. Analysis job
 
 Spool: `<job>/job.json` + `<job>/<input>` (confined basename,

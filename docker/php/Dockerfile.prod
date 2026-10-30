@@ -91,6 +91,14 @@ RUN chmod -R a+rX /var/www \
     && mkdir -p /var/www/.config/psysh \
     && chown -R www-data:www-data /var/www/storage /var/www/bootstrap/cache /var/www/.config
 
+# Spool/results mount points: the analysis-spool/analysis-results named
+# volumes mount here on the coordinator (the runner images pre-create the
+# same paths, so whichever container initializes a fresh volume wins
+# correctly). www-data-owned so the volume initialization preserves uid
+# 33 and the runtime user can stage jobs without any chmod. Never 777:
+# these carry untrusted job traffic.
+RUN mkdir -p /spool /results && chown www-data:www-data /spool /results
+
 USER www-data
 
 # Final-image gate as the actual runtime user: uploads.ini must be

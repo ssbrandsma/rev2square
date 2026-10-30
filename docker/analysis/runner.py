@@ -67,6 +67,15 @@ EXTRACT_PROFILES = ("7zz-list", "7zz-extract", "unsquashfs-list",
 
 TOOLS = ("objdump", "ghidra", "jadx", "ilspy", "extract")
 
+# Probe smoke fixtures: tool -> baked fixture filename under
+# RUNNER_FIXTURES (/opt/runner/fixtures in images). A probe only
+# reports fixture_ok when the tool decompiles its fixture and the
+# known class marker appears, so "ready" means "demonstrated the
+# real operation", not "answered a version ping".
+PROBE_FIXTURES = {"jadx": "dex-smoke.dex"}
+FIXTURE_MARKER = "FixtureSmoketest"
+FIXTURE_WALL_SECONDS = 60
+
 # Collection bounds (runner-side; PHP re-validates everything read).
 MAX_EVIDENCE_BYTES = 512 * 1024
 MAX_INLINE_FILE_BYTES = 32 * 1024
@@ -318,12 +327,46 @@ class Runner:
             "tool_image": os.environ.get("TOOL_IMAGE", "unknown"),
             "answered_at": int(time.time()),
         }
+        if self.tool in PROBE_FIXTURES:
+            answer["fixture"] = self.probe_fixture(claimdir)
         if self.tool == "objdump":
             answer["architectures"] = self.objdump_architectures()
         with open(os.path.join(claimdir, "status.json"), "w",
                   encoding="utf-8") as fh:
             json.dump(answer, fh)
         os.chmod(os.path.join(claimdir, "status.json"), 0o644)
+
+    def probe_fixture(self, claimdir):
+        """Decompile the baked smoke fixture; fail closed on any error
+        so a broken install reports fixture_ok:false while the probe
+        itself still answers version/arch for diagnostics."""
+        name = PROBE_FIXTURES[self.tool]
+        result = {"name": name, "ok": False}
+        fixture = os.path.join(
+            os.environ.get("RUNNER_FIXTURES", "/opt/runner/fixtures"), name)
+        if not os.path.isfile(fixture) or os.path.islink(fixture):
+            return result
+        workdir = os.path.join(claimdir, "fixture-work")
+        try:
+            os.makedirs(workdir, exist_ok=True)
+            argv = _jadx_argv("apk", {"threads": 1}, workdir, fixture)
+            proc = subprocess.run(
+                argv, stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                cwd=workdir, timeout=FIXTURE_WALL_SECONDS,
+                env=tool_env(self.tool, workdir))
+            if proc.returncode != 0:
+                return result
+            _, inline, _ = self._collect_tree(
+                os.path.join(workdir, "jadx-out"))
+            result["ok"] = any(
+                key.endswith(".java") and FIXTURE_MARKER in value
+                for key, value in inline.items())
+        except Exception:
+            pass
+        finally:
+            shutil.rmtree(workdir, ignore_errors=True)
+        return result
 
     def tool_version(self):
         flag = {"ghidra": ["-version"]}.get(self.tool, ["--version"])

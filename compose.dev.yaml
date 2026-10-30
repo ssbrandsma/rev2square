@@ -120,6 +120,7 @@ services:
       QUEUE_CONNECTION: database
       CACHE_STORE: database
       FILESYSTEM_DISK: local
+      DEPLOY_VARIANT: ${DEPLOY_VARIANT:-}
       BINARY_SPOOL_DIR: /spool
       BINARY_RESULTS_DIR: /results
     depends_on:

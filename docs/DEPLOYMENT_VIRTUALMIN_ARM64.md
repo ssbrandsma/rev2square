@@ -296,7 +296,9 @@ Fixed values (already in the template): `APP_ENV=production`,
 subnet), `TRUSTED_HOSTS` empty (= APP_URL host + loopback for
 healthchecks; pin explicitly only for extra names),
 `APP_LOOPBACK_PORT=8081` (change ONLY if 8081 collides — mirror the
-change in the Apache snippet), `DOCKER_PLATFORM=linux/arm64`.
+change in the Apache snippet), `DOCKER_PLATFORM=linux/arm64`,
+`DEPLOY_VARIANT=virtualmin` (drives deployment-specific owner
+commands in admin diagnostics; the standalone template uses `prod`).
 
 ## 9. Initial installation
 
@@ -672,6 +674,59 @@ while snapshots are missing and go full on reload. Missing vs
 permission-denied is distinguished in operator logs and failure codes;
 public messages stay generic and retry-first. `artifacts:verify-storage`
 is the pre/post check; it never modifies rows or files.
+
+Spool/results volume ownership (coordinate with the storage migration
+above — same window, uploads first): the `analysis-spool` /
+`analysis-results` named volumes were first created by images that did
+not contain `/spool` or `/results`, so Docker created them root-owned
+and the www-data coordinator/runners cannot stage jobs (probes fail,
+snapshots stay missing, artifact pages warn). All six images now
+pre-create both dirs www-data-owned, which fixes FRESH volumes; the
+two EXISTING volumes need a one-time re-own. They hold only transient
+job traffic (no uploads), but do this strictly AFTER the upload
+inventory/backup above and BEFORE any recreation:
+
+```sh
+[root]# cd /srv/rev2square
+# 0. Uploads inventoried + backed up per the storage runbook above FIRST.
+# 1. Drain analysis: queue nothing new; wait for in-flight runs (they
+#    are retryable if lost).
+[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin exec -T analysis-coordinator php artisan analysis:diagnostics
+# expect: Pending spool submissions 0 (re-run until drained)
+# 2. Confirm the exact volume names (project-scoped).
+[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin config --volumes
+# expect: analysis-spool analysis-results app-storage db-data (+ live names
+# rev2square-virtualmin_analysis-spool / rev2square-virtualmin_analysis-results)
+# 3. One-shot re-own of the two TRANSIENT volumes only (contents kept).
+[root]# docker run --rm --user root --entrypoint chown -v rev2square-virtualmin_analysis-spool:/spool -v rev2square-virtualmin_analysis-results:/results rev2square/app:latest 33:33 /spool /results
+[root]# docker run --rm --user www-data --entrypoint sh -v rev2square-virtualmin_analysis-spool:/spool -v rev2square-virtualmin_analysis-results:/results rev2square/app:latest -c 'touch /spool/.w && rm /spool/.w && touch /results/.w && rm /results/.w && echo SPOOL-WRITABLE'
+# expect: SPOOL-WRITABLE
+# Fallback (only if the re-own cannot run): after the drain, remove and
+# recreate JUST these two empty volumes — never app-storage/db-data:
+#   docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin stop analysis-coordinator objdump-runner ghidra-runner jadx-runner ilspy-runner extract-runner
+#   docker volume rm rev2square-virtualmin_analysis-spool rev2square-virtualmin_analysis-results
+# 4. Deploy (rebuilds app + runners with the ownership fix and the jadx
+#    fixture), recreate, restore app-storage, then verify.
+[root]# git fetch origin && git checkout <sha-with-spool-fix>
+[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin build app objdump-runner ghidra-runner jadx-runner ilspy-runner extract-runner && docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin up -d
+# (analysis-coordinator shares the app image, so `build app` covers it)
+[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin exec -T app php artisan artifacts:verify-storage
+[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin exec -T analysis-coordinator php artisan analysis:diagnostics
+# 5. Refresh snapshots from the coordinator and confirm runners ready.
+[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin exec -T analysis-coordinator php artisan binary:worker-capabilities --refresh
+# wait a minute, then re-run analysis:diagnostics: every installed
+# backend ready (jadx ready requires its DEX fixture pass). Poisoned
+# snapshots captured pre-fix from spool-less containers heal on this
+# refresh automatically; no manual row cleanup.
+```
+
+Producer/consumer flow (intended): the coordinator stages job specs
+into `/spool` (write) and collects `/results` (write for claims
+cleanup); runners read the spool read-only and write results; the web
+tier NEVER mounts either volume and reads coordinator status purely
+via the `worker_capabilities` DB snapshots (hourly refresh on the
+coordinator queue, or `--refresh` on demand). Do not mount the spool
+into app/queue/scheduler merely to silence warnings.
 
 ## 19. Known limitations
 

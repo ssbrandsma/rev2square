@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Jobs\AnalyzeBinaryJob;
+use App\Jobs\RefreshWorkerCapabilities;
 use App\Models\BinaryAnalysis;
 use App\Models\Project;
 use App\Models\ProjectArtifact;
@@ -33,7 +34,7 @@ class AnalysisDeploymentTest extends TestCase
     private const COORDINATOR_ENV_KEYS = [
         'APP_NAME', 'APP_ENV', 'LOG_CHANNEL', 'LOG_LEVEL',
         'DB_CONNECTION', 'DB_HOST', 'DB_PORT', 'DB_DATABASE', 'DB_USERNAME', 'DB_PASSWORD',
-        'QUEUE_CONNECTION', 'CACHE_STORE', 'FILESYSTEM_DISK',
+        'QUEUE_CONNECTION', 'CACHE_STORE', 'FILESYSTEM_DISK', 'DEPLOY_VARIANT',
         'BINARY_SPOOL_DIR', 'BINARY_RESULTS_DIR',
     ];
 
@@ -451,6 +452,76 @@ class AnalysisDeploymentTest extends TestCase
         // short budget; unknown rows never crash dispatch.
         $this->assertSame(540, AnalyzeBinaryJob::timeoutFor($analysis->id));
         $this->assertSame((int) config('artifacts.binary_timeout_seconds', 120), AnalyzeBinaryJob::timeoutFor(999999));
+    }
+
+    public function test_capability_refresh_routes_to_the_coordinator_queue(): void
+    {
+        Queue::fake();
+
+        RefreshWorkerCapabilities::dispatch();
+
+        // Snapshots measure the execution environment: only the
+        // coordinator (spool + runners) may capture them, so the job
+        // must ride the analysis connection/queue — never default.
+        Queue::assertPushedOn('analysis', RefreshWorkerCapabilities::class);
+        Queue::assertPushed(RefreshWorkerCapabilities::class, fn ($job) => $job->connection === 'analysis-database');
+    }
+
+    public function test_images_precreate_spool_dirs_for_non_root(): void
+    {
+        // Named-volume initialization preserves the image dir's
+        // ownership, so pre-creating /spool + /results www-data-owned
+        // (in BOTH image families — whichever container initializes a
+        // fresh volume wins correctly) keeps the www-data runtime user
+        // writable with no chmod. World-writable modes would expose
+        // untrusted job traffic.
+        $files = [
+            'docker/php/Dockerfile.prod',
+            'docker/analysis/Dockerfile.binutils',
+            'docker/analysis/Dockerfile.extract',
+            'docker/analysis/Dockerfile.ghidra',
+            'docker/analysis/Dockerfile.ilspy',
+            'docker/analysis/Dockerfile.jadx',
+        ];
+        foreach ($files as $file) {
+            $text = (string) file_get_contents(base_path($file));
+            $this->assertMatchesRegularExpression(
+                '{mkdir -p /spool /results && chown www-data:www-data /spool /results}',
+                $text,
+                "{$file} pre-creates the spool mount points"
+            );
+            $this->assertDoesNotMatchRegularExpression(
+                '/chmod\s+(-R\s+)?0?777\b/',
+                $text,
+                "{$file} grants no world-writable modes"
+            );
+        }
+    }
+
+    #[DataProvider('composeFiles')]
+    public function test_app_tier_mounts_no_spool_volumes(string $file): void
+    {
+        // The web tier reads coordinator status via DB snapshots, never
+        // the spool: mounting it broadly would only silence warnings
+        // while widening access to untrusted job traffic.
+        $compose = $this->compose($file);
+        foreach (['app', 'queue', 'scheduler'] as $service) {
+            $block = $this->serviceBlock($compose, $service);
+            $this->assertStringNotContainsString('analysis-spool', $block, "{$service} mounts no spool ({$file})");
+            $this->assertStringNotContainsString('analysis-results', $block, "{$service} mounts no results ({$file})");
+        }
+    }
+
+    public function test_env_templates_declare_deploy_variant(): void
+    {
+        $this->assertStringContainsString(
+            "\nDEPLOY_VARIANT=virtualmin\n",
+            (string) file_get_contents(base_path('.env.virtualmin.example'))
+        );
+        $this->assertStringContainsString(
+            "\nDEPLOY_VARIANT=prod\n",
+            (string) file_get_contents(base_path('.env.production.example'))
+        );
     }
 
     public function test_diagnostics_command_reports_without_secrets(): void

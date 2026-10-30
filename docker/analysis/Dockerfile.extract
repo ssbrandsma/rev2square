@@ -98,6 +98,12 @@ RUN /opt/7zz/7zz i > /provenance/7zz-info.txt 2>&1 \
     && chmod 644 /provenance/* \
     && chmod 755 /opt/runner/runner.py
 
+# Spool/results mount points (named volumes shared with the coordinator).
+# Pre-created www-data-owned so volume initialization preserves uid 33:
+# the runner reads the spool (mounted :ro) and writes results as
+# www-data. Never 777: these carry untrusted job traffic.
+RUN mkdir -p /spool /results && chown www-data:www-data /spool /results
+
 USER www-data
 
 # Runtime self-checks execute as the non-root runtime user: stdlib

@@ -4,6 +4,7 @@ namespace App\Services\Binary\Adapters;
 
 use App\Models\BinaryAnalysis;
 use App\Models\ProjectArtifact;
+use App\Services\Ops\DeployHints;
 
 /**
  * JADX adapter (isolated runner): Dalvik/DEX, APK, and Java class
@@ -26,6 +27,23 @@ final class JadxAdapter extends SandboxedBackend
     public function tool(): string
     {
         return 'jadx';
+    }
+
+    protected function qualifyProbeAnswer(array $answer): ?array
+    {
+        // A version ping cannot prove jadx decompiles: only a fixture
+        // decompile with the known marker qualifies the backend.
+        // Runners predating the fixture report no fixture key and stay
+        // not-operational until rebuilt.
+        if (($answer['fixture']['ok'] ?? null) === true) {
+            return null;
+        }
+
+        return [
+            'available' => false,
+            'reason' => 'The JADX runner answered but its DEX smoke fixture did not decompile (stale runner image or broken install): decompilation available in backend, not operational yet. '.DeployHints::rebuildRunnerHint('jadx-runner'),
+            'setup_doc' => 'docs/analysis-spool-deployment.md',
+        ];
     }
 
     public function formats(): array

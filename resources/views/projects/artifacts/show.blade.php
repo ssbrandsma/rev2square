@@ -306,7 +306,7 @@
                             </p>
                             <p class="mt-0.5 font-mono text-xs text-zinc-500">{{ $row['target_source'] }}: {{ $row['note'] }}</p>
                             @if(! $row['available'])
-                                <p class="mt-1 text-xs text-amber-800">This container: {{ $row['availability_reason'] }}</p>
+                                <p class="mt-1 text-xs text-amber-800">Execution readiness: {{ $row['availability_reason'] }}</p>
                             @endif
                             @if($row['adapter'] !== 'php-native')
                                 <p class="mt-1 text-xs @if($row['worker_verified']) text-zinc-500 @else text-amber-800 @endif">Worker: {{ $row['worker_note'] }}</p>
@@ -314,9 +314,16 @@
                             @if($row['requestable'])
                                 <p class="mt-1 text-xs font-semibold text-emerald-700">Queueable with this backend and target.</p>
                             @endif
+                            @if(! $row['requestable'] && ($row['capabilities']['decompilation'] ?? null) === 'supported')
+                                <p class="mt-1 text-xs text-amber-800">Decompilation is supported by this backend, but is not operational yet.</p>
+                            @endif
                             <dl class="mt-1 grid grid-cols-2 gap-x-4 gap-y-0.5 font-mono text-xs sm:grid-cols-3">
                                 @foreach($row['capabilities'] as $cap => $level)
-                                    <div><dt class="inline text-zinc-500">{{ $cap }}:</dt> <dd class="inline font-semibold @if($level === 'supported')text-emerald-700 @elseif($level === 'partial')text-sky-700 @elseif($level === 'unsupported')text-zinc-400 @else text-amber-700 @endif">{{ $level }}</dd></div>
+                                    @if($cap === 'decompilation' && $level === 'supported' && ! $row['available'])
+                                        <div class="col-span-2 sm:col-span-3"><span class="font-semibold text-amber-700">decompilation available in backend, not operational yet</span></div>
+                                    @else
+                                        <div><dt class="inline text-zinc-500">{{ $cap }}:</dt> <dd class="inline font-semibold @if($level === 'supported')text-emerald-700 @elseif($level === 'partial')text-sky-700 @elseif($level === 'unsupported')text-zinc-400 @else text-amber-700 @endif">{{ $level }}</dd></div>
+                                    @endif
                                 @endforeach
                             </dl>
                         </div>

@@ -13,6 +13,7 @@ use App\Models\WorkerCapability;
 use App\Services\Admin\AppSettings;
 use App\Services\Admin\CostEstimates;
 use App\Services\Binary\Adapters\AdapterRegistry;
+use App\Services\Ops\DeployHints;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\View\View;
 
@@ -57,7 +58,7 @@ class DashboardController extends Controller
             }
         }
         if ($unverifiedInstalled !== []) {
-            $warnings[] = 'Installed analysis backend(s) lack a fresh worker snapshot ('.implode(', ', $unverifiedInstalled).') — their targets cannot queue until refreshed (php artisan binary:worker-capabilities --refresh).';
+            $warnings[] = 'Installed analysis backend(s) lack a fresh worker snapshot ('.implode(', ', $unverifiedInstalled).') — their targets cannot queue until refreshed ('.DeployHints::refreshSnapshotsHint().').';
         }
 
         return view('admin.dashboard', [

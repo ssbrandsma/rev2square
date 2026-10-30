@@ -16,11 +16,13 @@ import json
 import os
 import shutil
 import signal
+import struct
 import subprocess
 import sys
 import tempfile
 import time
 import unittest
+import zlib
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import runner
@@ -230,6 +232,64 @@ class RunnerCase(unittest.TestCase):
         r = runner.Runner("objdump", self.spool, self.results)
         self.assertEqual(r.objdump_architectures(),
                          ["i386", "iamcu", "arm", "aarch64", "mips"])
+
+    # -- jadx probe fixture qualification -------------------------------
+
+    def jadx_probe(self, stub_body, with_fixture=True):
+        fixdir = os.path.join(self.tmp, "fixtures")
+        os.makedirs(fixdir, exist_ok=True)
+        if with_fixture:
+            with open(os.path.join(fixdir, "dex-smoke.dex"), "wb") as fh:
+                fh.write(b"dex-fixture-bytes")
+        os.environ["RUNNER_FIXTURES"] = fixdir
+        os.environ["JADX_BIN"] = self.stub("jadx", stub_body)
+        self.submit("jadx", kind="probe")
+        self.run_once("jadx")
+        return self.claim("job1")
+
+    def test_jadx_probe_reports_fixture_ok_on_marker(self):
+        answer = self.jadx_probe(
+            'if [ "$1" = "--version" ]; then echo "jadx 1.5.1"; exit 0; fi\n'
+            'out=""; prev=""; for a in "$@"; do'
+            ' if [ "$prev" = "-d" ]; then out="$a"; fi; prev="$a"; done\n'
+            'mkdir -p "$out/com/rev2square"\n'
+            'echo "public class FixtureSmoketest {}"'
+            ' > "$out/com/rev2square/FixtureSmoketest.java"\n')
+        self.assertIn("1.5.1", answer["tool_version"])
+        self.assertEqual(answer["fixture"],
+                         {"name": "dex-smoke.dex", "ok": True})
+
+    def test_jadx_probe_fixture_fails_closed_on_tool_error(self):
+        answer = self.jadx_probe(
+            'if [ "$1" = "--version" ]; then echo "jadx 1.5.1"; exit 0; fi\n'
+            "exit 1\n")
+        self.assertIn("1.5.1", answer["tool_version"])
+        self.assertEqual(answer["fixture"],
+                         {"name": "dex-smoke.dex", "ok": False})
+
+    def test_jadx_probe_fixture_missing_baked_file(self):
+        answer = self.jadx_probe('echo "jadx 1.5.1"\n', with_fixture=False)
+        self.assertEqual(answer["fixture"],
+                         {"name": "dex-smoke.dex", "ok": False})
+
+    def test_other_tools_probe_without_fixture(self):
+        os.environ["OBJDUMP_BIN"] = self.stub(
+            "objdump", 'echo "GNU objdump 2.40"\n')
+        self.submit("objdump", kind="probe")
+        self.run_once("objdump")
+        self.assertNotIn("fixture", self.claim("job1"))
+
+    def test_committed_dex_fixture_parses(self):
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "..", "fixtures", "dex-smoke.dex")
+        with open(path, "rb") as fh:
+            blob = fh.read()
+        self.assertEqual(blob[:8], b"dex\n035\x00")
+        (adler,) = struct.unpack_from("<I", blob, 8)
+        self.assertEqual(adler, zlib.adler32(blob[12:]) & 0xFFFFFFFF)
+        self.assertEqual(blob[12:32], hashlib.sha1(blob[32:]).digest())
+        (file_size,) = struct.unpack_from("<I", blob, 0x20)
+        self.assertEqual(file_size, len(blob))
 
     # -- analyze happy path --------------------------------------------
 
