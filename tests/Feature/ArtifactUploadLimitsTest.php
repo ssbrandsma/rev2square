@@ -295,6 +295,68 @@ class ArtifactUploadLimitsTest extends TestCase
         $this->assertStringContainsString('post_max_size = 80M', $ini);
     }
 
+    public function test_prod_image_pins_readable_ini_modes_despite_umask_077_checkout(): void
+    {
+        $repo = base_path();
+
+        // Model the hostile build host: sources checked out under umask 077
+        // arrive root-only (0600), unreadable by the www-data runtime user.
+        // A COPY without --chmod bakes those exact bits into the image, and
+        // static COPY-path assertions alone did not catch that defect.
+        $previous = umask(077);
+        try {
+            $tmp = sys_get_temp_dir().'/umask077-'.uniqid().'.ini';
+            file_put_contents($tmp, file_get_contents($repo.'/docker/php/conf.d-uploads.ini'));
+            clearstatcache(true, $tmp);
+            $this->assertSame(0, fileperms($tmp) & 0o077, 'fixture must model a umask-077 checkout');
+        } finally {
+            umask($previous);
+            if (isset($tmp)) {
+                @unlink($tmp);
+            }
+        }
+
+        // Every app-owned conf.d ini COPY must therefore pin a
+        // deterministic, runtime-readable, runtime-nonwritable mode.
+        $dockerfile = file_get_contents($repo.'/docker/php/Dockerfile.prod');
+        $lines = explode("\n", $dockerfile);
+        $iniCopies = array_values(array_filter(
+            $lines,
+            fn ($line) => str_contains($line, 'docker/php/conf.d-')
+                && str_contains($line, '/usr/local/etc/php/conf.d/')
+        ));
+        $this->assertCount(2, $iniCopies);
+        foreach ($iniCopies as $copy) {
+            $this->assertMatchesRegularExpression(
+                '/^COPY\s+--chmod=0?[0-7]{3}\s/',
+                $copy,
+                $copy.' must pin an explicit mode'
+            );
+            preg_match('/^COPY\s+--chmod=0?([0-7]{3})\s/', $copy, $m);
+            $mode = octdec($m[1]);
+            $this->assertSame(0, $mode & 0o022, $copy.' must stay non-writable by the runtime user');
+            $this->assertNotSame(0, $mode & 0o004, $copy.' must stay world-readable');
+            $this->assertNotSame(0, $mode & 0o400, $copy.' must stay owner-readable');
+        }
+
+        // The final-image gate must run AFTER USER www-data, as the actual
+        // runtime user: readable file, scanned ini, effective 64M/80M under
+        // both SAPIs, with php-fpm inheriting the intended limits.
+        $userLine = null;
+        foreach ($lines as $i => $line) {
+            if (preg_match('/^USER\s+www-data\b/', $line)) {
+                $userLine = $i;
+            }
+        }
+        $this->assertNotNull($userLine);
+        $tail = implode("\n", array_slice($lines, $userLine));
+        $this->assertStringContainsString('test -r /usr/local/etc/php/conf.d/uploads.ini', $tail);
+        $this->assertStringContainsString('php_ini_scanned_files', $tail);
+        $this->assertStringContainsString('ini_get("upload_max_filesize")', $tail);
+        $this->assertStringContainsString('ini_get("post_max_size")', $tail);
+        $this->assertStringContainsString('php-fpm -i', $tail);
+    }
+
     public function test_production_memory_and_media_caps_preserved(): void
     {
         $repo = base_path();

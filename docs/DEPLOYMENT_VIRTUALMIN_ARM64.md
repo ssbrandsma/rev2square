@@ -590,6 +590,19 @@ window covering one retry):
 Do not edit production files or running containers by hand; all changes
 arrive via the next `build && up -d` from a reviewed git SHA.
 
+File-mode follow-up (Permission denied on uploads.ini inside the
+container, `php --ini` omitting uploads.ini, effective 2M/8M despite a
+correct host file): `COPY` preserves host checkout bits, so a umask-077
+build host baked root-only 600 ini files that the www-data runtime user
+cannot read. Fixed by `COPY --chmod=0644` on both conf.d ini files
+(uploads + opcache; root-owned, non-writable by the runtime user, no
+broadening of secrets or storage) plus a build-time gate that runs as
+www-data and fails the image unless uploads.ini is readable, scanned,
+and effective (64M/80M) under both CLI and php-fpm. Same owner rebuild
+as above; after it, `cat .../uploads.ini` must succeed (no Permission
+denied), `php --ini` must list uploads.ini, and `php-fpm -i` must show
+64M/80M. A `restart` without `build` cannot fix baked-in modes.
+
 ## 19. Known limitations
 
 1. ARM64 runtime was validated by cross-build + manifest inspection and

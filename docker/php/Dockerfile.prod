@@ -61,8 +61,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Production PHP defaults (display_errors off, log_errors on).
 RUN cp "$PHP_INI_DIR/php.ini-production" "$PHP_INI_DIR/php.ini"
-COPY docker/php/conf.d-opcache-prod.ini /usr/local/etc/php/conf.d/opcache-prod.ini
-COPY docker/php/conf.d-uploads.ini /usr/local/etc/php/conf.d/uploads.ini
+# Explicit modes: COPY preserves host checkout bits, so a umask-077 build
+# host would otherwise bake root-only 600 ini files that the www-data
+# runtime user cannot read (php-fpm then silently keeps 2M/8M). 0644 keeps
+# the files root-owned and non-writable by the runtime user. Parent dirs
+# come from the base image (root-owned 755, traversable); the gate below
+# proves readability end to end as the runtime user.
+COPY --chmod=0644 docker/php/conf.d-opcache-prod.ini /usr/local/etc/php/conf.d/opcache-prod.ini
+COPY --chmod=0644 docker/php/conf.d-uploads.ini /usr/local/etc/php/conf.d/uploads.ini
 COPY docker/php/entrypoint-prod.sh /usr/local/bin/rev2-entrypoint-prod.sh
 RUN chmod +x /usr/local/bin/rev2-entrypoint-prod.sh
 
@@ -86,6 +92,17 @@ RUN chmod -R a+rX /var/www \
     && chown -R www-data:www-data /var/www/storage /var/www/bootstrap/cache /var/www/.config
 
 USER www-data
+
+# Final-image gate as the actual runtime user: uploads.ini must be
+# readable (proves parent-dir traversal + file read), listed in
+# php_ini_scanned_files(), and effective (64M/80M) under both the CLI
+# and php-fpm SAPIs. Fails the image build on a umask-077 regression
+# instead of shipping a container that silently keeps 2M/8M.
+RUN test -r /usr/local/etc/php/conf.d/uploads.ini \
+    && php -r 'exit(strpos(php_ini_scanned_files(), "uploads.ini") === false ? 1 : 0);' \
+    && php -r 'exit(ini_get("upload_max_filesize") === "64M" && ini_get("post_max_size") === "80M" ? 0 : 1);' \
+    && php-fpm -i | grep -q '^upload_max_filesize => 64M' \
+    && php-fpm -i | grep -q '^post_max_size => 80M'
 
 ENTRYPOINT ["rev2-entrypoint-prod.sh"]
 CMD ["php-fpm"]
