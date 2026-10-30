@@ -26,6 +26,9 @@ services:
       context: .
       dockerfile: docker/php/Dockerfile.prod
     image: rev2square/app:${APP_VERSION:-latest}
+    # Locally built (see the build && up upgrade flow); a missing image
+    # must fail fast locally, never attempt a Docker Hub pull.
+    pull_policy: never
     env_file:
       - path: .env.virtualmin
         required: true
@@ -57,6 +60,9 @@ services:
       context: .
       dockerfile: docker/nginx/Dockerfile.prod
     image: rev2square/nginx:${APP_VERSION:-latest}
+    # Locally built (see the build && up upgrade flow); a missing image
+    # must fail fast locally, never attempt a Docker Hub pull.
+    pull_policy: never
     # Loopback only: Apache on the same host is the sole client. Never
     # replace 127.0.0.1 with 0.0.0.0 here — container services must not be
     # publicly exposed on a Virtualmin host.
@@ -238,6 +244,7 @@ services:
       context: docker/analysis
       dockerfile: Dockerfile.binutils
     image: rev2square/binutils:2.40-2
+    pull_policy: never
     volumes:
       - analysis-spool:/spool:ro
       - analysis-results:/results
@@ -266,6 +273,7 @@ services:
       context: docker/analysis
       dockerfile: Dockerfile.ghidra
     image: rev2square/ghidra:12.2
+    pull_policy: never
     volumes:
       - analysis-spool:/spool:ro
       - analysis-results:/results
@@ -295,6 +303,7 @@ services:
       context: docker/analysis
       dockerfile: Dockerfile.jadx
     image: rev2square/jadx:1.5.6
+    pull_policy: never
     volumes:
       - analysis-spool:/spool:ro
       - analysis-results:/results
@@ -323,6 +332,7 @@ services:
       context: docker/analysis
       dockerfile: Dockerfile.ilspy
     image: rev2square/ilspy:11.2.0.10050
+    pull_policy: never
     volumes:
       - analysis-spool:/spool:ro
       - analysis-results:/results
@@ -351,6 +361,7 @@ services:
       context: docker/analysis
       dockerfile: Dockerfile.extract
     image: rev2square/extract:1.0
+    pull_policy: never
     volumes:
       - analysis-spool:/spool:ro
       - analysis-results:/results

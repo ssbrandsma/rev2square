@@ -385,8 +385,8 @@ cannot fill the disk.
 [root]# git fetch origin
 [root]# git checkout <new-release-sha>
 [root]# ./docker/backup/backup.sh --variant virtualmin   # safety backup first
-[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin build
-[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin up -d
+[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin build && \
+  docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin up -d
 [root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin exec -T app php artisan migrate --force
 [root]# ./docker/ops/status.sh --variant virtualmin
 ```
@@ -452,8 +452,8 @@ from git, always reproducible):
 [root]# cd /srv/rev2square
 [root]# ./docker/backup/backup.sh --variant virtualmin
 [root]# git checkout <previous-release-sha>
-[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin build
-[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin up -d
+[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin build && \
+  docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin up -d
 [root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin exec -T app php artisan migrate --force
 [root]# ./docker/ops/status.sh --variant virtualmin
 ```

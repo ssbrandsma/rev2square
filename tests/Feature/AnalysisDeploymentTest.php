@@ -18,10 +18,11 @@ use Tests\TestCase;
 
 /**
  * Deployment-contract tests: runner isolation in both compose files,
- * coordinator env allowlist, Dockerfile pins, queue routing, job
- * timeouts, diagnostics, admin page, and the new Agent evidence
- * tools. Static where the boundary is static (compose/docker), live
- * where Laravel owns it (routing/commands/tools).
+ * coordinator env allowlist, Dockerfile pins, runner Python runtime,
+ * local-image pull policy, queue routing, job timeouts, diagnostics,
+ * admin page, and the new Agent evidence tools. Static where the
+ * boundary is static (compose/docker), live where Laravel owns it
+ * (routing/commands/tools).
  */
 class AnalysisDeploymentTest extends TestCase
 {
@@ -149,6 +150,102 @@ class AnalysisDeploymentTest extends TestCase
             $text = (string) file_get_contents($dir.'/'.$dockerfile);
             $this->assertStringContainsString('99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3', $text, "{$dockerfile} pins the base digest");
         }
+    }
+
+    public function test_runner_final_images_ship_full_python3_with_stdlib_smoke(): void
+    {
+        // Regression net for the ARM64 build failure: python3-minimal
+        // omits stdlib modules (notably json) that runner.py imports.
+        // The expected module set is derived from runner.py itself, so
+        // adding an import there fails here until every Dockerfile's
+        // smoke covers it.
+        $runner = (string) file_get_contents(base_path('docker/analysis/runner.py'));
+        preg_match_all('/^\s*(?:import\s+([a-z0-9_, ]+)|from\s+([a-z0-9_]+)\s+import\s+)/mi', $runner, $matches, PREG_SET_ORDER);
+        $modules = [];
+        foreach ($matches as $match) {
+            if ($match[1] !== '') {
+                foreach (explode(',', $match[1]) as $mod) {
+                    $modules[] = trim($mod);
+                }
+            } else {
+                $modules[] = $match[2];
+            }
+        }
+        $modules = array_values(array_unique(array_filter($modules)));
+        $this->assertContains('json', $modules, 'runner.py import extraction covers the incident module');
+        $this->assertGreaterThan(5, count($modules), 'runner.py import extraction is non-trivial');
+
+        $dir = base_path('docker/analysis');
+        $tools = [
+            'Dockerfile.binutils' => 'objdump',
+            'Dockerfile.ghidra' => 'ghidra',
+            'Dockerfile.jadx' => 'jadx',
+            'Dockerfile.ilspy' => 'ilspy',
+            'Dockerfile.extract' => 'extract',
+        ];
+        foreach ($tools as $dockerfile => $tool) {
+            $text = (string) file_get_contents($dir.'/'.$dockerfile);
+            // Final stage only: builder stages legitimately differ.
+            $stripped = (string) preg_replace('/^\s*#.*$/m', '', $text);
+            $stages = preg_split('/^FROM [^\n]*$/m', $stripped);
+            $final = (string) end($stages);
+
+            $this->assertStringNotContainsString('python3-minimal', $final, "{$dockerfile} final stage installs no python3-minimal");
+            $flat = str_replace("\\\n", ' ', $final);
+            $this->assertMatchesRegularExpression(
+                '/apt-get install -y --no-install-recommends\b[^;&|]*\bpython3\b/',
+                $flat,
+                "{$dockerfile} final stage installs full python3"
+            );
+
+            $userPos = strpos($final, 'USER www-data');
+            $this->assertNotFalse($userPos, "{$dockerfile} pins the non-root user");
+            $this->assertSame(1, preg_match('/python3 -c "import ([^"]+)"/', $final, $smoke), "{$dockerfile} smokes stdlib imports");
+            $smokePos = strpos($final, $smoke[0]);
+            $this->assertGreaterThan($userPos, $smokePos, "{$dockerfile} smoke runs as the non-root user");
+            foreach ($modules as $module) {
+                $this->assertMatchesRegularExpression('/\b'.preg_quote($module, '/').'\b/', $smoke[1], "{$dockerfile} smoke covers import {$module}");
+            }
+            $this->assertStringContainsString("--dry-run --tool {$tool}", $final, "{$dockerfile} keeps the dry-run self-check");
+        }
+    }
+
+    #[DataProvider('composeFiles')]
+    public function test_locally_built_images_are_never_pulled(string $file): void
+    {
+        // After a failed build, `up` must fail fast locally — never
+        // attempt a misleading Docker Hub pull of a project-local tag.
+        $compose = $this->compose($file);
+        $services = strstr($compose, "\nvolumes:\n", true) ?: $compose;
+        preg_match_all('/^  ([a-z][a-z0-9-]*):$/m', $services, $names);
+        $guarded = 0;
+        foreach ($names[1] as $service) {
+            $block = $this->serviceBlock($compose, (string) $service);
+            if (! str_contains($block, 'image: rev2square/')) {
+                continue;
+            }
+            $guarded++;
+            $this->assertMatchesRegularExpression('/pull_policy:\s*[\'"]?never[\'"]?/', $block, "{$service} is built locally, never pulled ({$file})");
+        }
+        $this->assertGreaterThanOrEqual(5, $guarded, "runner images guarded ({$file})");
+
+        // Registry images must stay retrievable: base-image pulls
+        // during builds and third-party service pulls keep working.
+        $db = $this->serviceBlock($compose, 'db');
+        $this->assertStringNotContainsString('pull_policy', $db, "db keeps default pull behavior ({$file})");
+    }
+
+    public function test_setup_docs_gate_startup_on_successful_build(): void
+    {
+        $setup = (string) file_get_contents(base_path('docs/binary-analysis-setup.md'));
+        $this->assertStringContainsString(
+            'build objdump-runner ghidra-runner jadx-runner ilspy-runner extract-runner &&',
+            $setup,
+            'runner provisioning chains up behind a successful build'
+        );
+
+        $deploy = (string) file_get_contents(base_path('docs/DEPLOYMENT_VIRTUALMIN_ARM64.md'));
+        $this->assertSame(2, substr_count($deploy, 'build &&'), 'upgrade + rollback gate up on build');
     }
 
     public function test_analysis_jobs_route_to_the_coordinator_queue(): void

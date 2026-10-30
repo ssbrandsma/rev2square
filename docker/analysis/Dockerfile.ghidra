@@ -58,7 +58,7 @@ ENV JAVA_HOME=/opt/jdk \
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        ca-certificates curl file gcc make python3-minimal unzip zip \
+        ca-certificates curl file gcc make python3 unzip zip \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /opt/dist \
     && curl -fsSL -o /tmp/ghidra.zip \
@@ -92,8 +92,10 @@ LABEL org.rev2square.tool="ghidra" \
       org.rev2square.jdk-sha256="bb5b2ded252f21c6090cf780b0a408ad0d83bbb557e702955643557f13231880" \
       org.rev2square.base-image="debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3"
 
+# Full python3 (NOT python3-minimal): the runner needs stdlib
+# modules such as json that the minimal package omits.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3-minimal \
+    && apt-get install -y --no-install-recommends python3 \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /opt/runner /provenance
 
@@ -109,13 +111,21 @@ RUN cp /opt/ghidra/ExportEvidence.java \
     && /opt/jdk/bin/java -version > /provenance/java-version.txt 2>&1 \
     && find /opt/ghidra -name decompile -type f > /provenance/decompile-bins.txt \
     && chmod 644 /provenance/* \
-    && chmod 755 /opt/runner/runner.py \
+    && chmod 755 /opt/runner/runner.py
+
+USER www-data
+
+# Runtime self-checks execute as the non-root runtime user: stdlib
+# coverage for every runner.py import, JDK executability, and the
+# dry-run argv path. HOME points at tmpfs (as in production).
+RUN export HOME=/tmp \
+    && python3 -c "import argparse, fcntl, hashlib, json, os, platform, re, select, shutil, signal, subprocess, sys, time" \
+    && /opt/jdk/bin/java -version \
+    && mkdir -p /tmp/dry \
     && python3 /opt/runner/runner.py --dry-run --tool ghidra \
         --profile headless \
         --params-json '{"language":"ARM:LE:32:v8","base":134217728}' \
         --workdir /tmp/dry | grep -q 'ExportEvidence.java'
-
-USER www-data
 
 CMD ["python3", "/opt/runner/runner.py", "--tool", "ghidra", \
      "--spool", "/spool", "--results", "/results"]

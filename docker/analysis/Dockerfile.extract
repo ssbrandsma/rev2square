@@ -70,21 +70,32 @@ RUN curl -fsSL -o /tmp/7zz.zip "${SEVENZZ_URL}" \
     && rm /tmp/ubi-reader.tar.gz \
     && pip freeze > /provenance/python-freeze.txt
 
-# Smoke tests fail the build loudly (incl. 7zz glibc compat and the
-# ubireader console script). Fallback if 7zz fails here: build tag
-# v26.02-v1.5.7-R2 from source for this glibc (see delivery doc).
+# Provenance capture (root): 7zz MUST run (glibc compat gate —
+# fallback if it fails here: build tag v26.02-v1.5.7-R2 from source
+# for this glibc, see delivery doc); version flags are best-effort.
 RUN /opt/7zz/7zz i > /provenance/7zz-info.txt 2>&1 \
-    && unsquashfs 2>&1 | head -3 | grep -qi 'squashfs' \
-    && unsquashfs -v > /provenance/unsquashfs-version.txt 2>&1 || true \
-    && command -v ubireader_extract_files \
-    && ubireader_extract_files --help > /provenance/ubireader-help.txt 2>&1 || true \
+    && { unsquashfs -v > /provenance/unsquashfs-version.txt 2>&1 || true; } \
+    && { ubireader_extract_files --help > /provenance/ubireader-help.txt 2>&1 || true; } \
     && chmod 644 /provenance/* \
-    && chmod 755 /opt/runner/runner.py \
+    && chmod 755 /opt/runner/runner.py
+
+USER www-data
+
+# Runtime self-checks execute as the non-root runtime user: stdlib
+# coverage for every runner.py import, tool executability, and the
+# dry-run argv path. HOME points at tmpfs (as in production).
+# Functional UBI qualification (a real image through ubireader) is an
+# owner step with the provisioned runners, not a build assertion.
+RUN export HOME=/tmp \
+    && python3 -c "import argparse, fcntl, hashlib, json, os, platform, re, select, shutil, signal, subprocess, sys, time" \
+    && /opt/7zz/7zz i > /dev/null \
+    && unsquashfs 2>&1 | head -3 | grep -qi 'squashfs' \
+    && test -x /usr/local/bin/ubireader_extract_files \
+    && test -s /provenance/ubireader-help.txt \
+    && mkdir -p /tmp/dry \
     && python3 /opt/runner/runner.py --dry-run --tool extract \
         --profile 7zz-list --params-json '{}' --workdir /tmp/dry \
         | grep -q '7zz'
-
-USER www-data
 
 CMD ["python3", "/opt/runner/runner.py", "--tool", "extract", \
      "--spool", "/spool", "--results", "/results"]

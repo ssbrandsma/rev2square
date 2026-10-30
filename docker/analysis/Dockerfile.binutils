@@ -24,10 +24,12 @@ LABEL org.rev2square.tool="objdump" \
       org.rev2square.tool-license="GPL-3.0-or-later" \
       org.rev2square.base-image="debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3"
 
+# Full python3 (NOT python3-minimal): the runner needs stdlib
+# modules such as json that the minimal package omits.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         binutils-multiarch=2.40-2 \
-        python3-minimal \
+        python3 \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /opt/objdump /opt/runner /provenance
 
@@ -40,15 +42,21 @@ RUN printf 'i386\ni386:x86-64\n' > /opt/objdump/machines.txt \
     && objdump -i > /provenance/objdump-architectures.txt \
     && objdump --version > /provenance/objdump-version.txt \
     && python3 --version > /provenance/python-version.txt \
-    && grep -q '^  i386$' /provenance/objdump-architectures.txt \
     && chmod 644 /opt/objdump/machines.txt /provenance/* \
-    && chmod 755 /opt/runner/runner.py \
-    # Runner self-check: dry-run must emit the exact allowlisted argv.
+    && chmod 755 /opt/runner/runner.py
+
+USER www-data
+
+# Runtime self-checks execute as the non-root runtime user: stdlib
+# coverage for every runner.py import, tool executability, and the
+# dry-run argv path. HOME points at tmpfs (as in production).
+RUN export HOME=/tmp \
+    && python3 -c "import argparse, fcntl, hashlib, json, os, platform, re, select, shutil, signal, subprocess, sys, time" \
+    && objdump -i | grep -q '^  i386$' \
+    && mkdir -p /tmp/dry \
     && python3 /opt/runner/runner.py --dry-run --tool objdump \
         --profile auto --params-json '{}' --workdir /tmp/dry \
         | grep -q '"-M", "intel"'
-
-USER www-data
 
 CMD ["python3", "/opt/runner/runner.py", "--tool", "objdump", \
      "--spool", "/spool", "--results", "/results"]

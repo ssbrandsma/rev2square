@@ -40,9 +40,11 @@ LABEL org.rev2square.tool="jadx" \
       org.rev2square.jre-sha256="1114f09d6174f54270c3117410b5e4022b43ebc0b43b751af08b927c55ed7bb5" \
       org.rev2square.base-image="debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3"
 
+# Full python3 (NOT python3-minimal): the runner needs stdlib
+# modules such as json that the minimal package omits.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        ca-certificates curl python3-minimal unzip \
+        ca-certificates curl python3 unzip \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /opt/jre /opt/jadx /opt/runner /provenance \
     && curl -fsSL -o /tmp/jre.tar.gz "${TEMURIN_JRE_URL}" \
@@ -63,12 +65,20 @@ COPY runner.py /opt/runner/runner.py
 RUN /opt/jadx/bin/jadx --version > /provenance/jadx-version.txt 2>&1 \
     && /opt/jre/bin/java -version > /provenance/java-version.txt 2>&1 \
     && chmod 644 /provenance/* \
-    && chmod 755 /opt/runner/runner.py /opt/jadx/bin/jadx \
+    && chmod 755 /opt/runner/runner.py /opt/jadx/bin/jadx
+
+USER www-data
+
+# Runtime self-checks execute as the non-root runtime user: stdlib
+# coverage for every runner.py import, JADX executability, and the
+# dry-run argv path. HOME points at tmpfs (as in production).
+RUN export HOME=/tmp \
+    && python3 -c "import argparse, fcntl, hashlib, json, os, platform, re, select, shutil, signal, subprocess, sys, time" \
+    && /opt/jadx/bin/jadx --version \
+    && mkdir -p /tmp/dry \
     && python3 /opt/runner/runner.py --dry-run --tool jadx \
         --profile apk --params-json '{"threads":2}' --workdir /tmp/dry \
         | grep -q -- '--no-src-save-cache'
-
-USER www-data
 
 CMD ["python3", "/opt/runner/runner.py", "--tool", "jadx", \
      "--spool", "/spool", "--results", "/results"]

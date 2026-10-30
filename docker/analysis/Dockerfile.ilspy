@@ -53,9 +53,11 @@ LABEL org.rev2square.tool="ilspycmd" \
 
 # .NET 10 runtime native deps (Debian names); ICU omitted on purpose
 # (invariant globalization — see ilspycmd csproj + env above).
+# Full python3 (NOT python3-minimal): the runner needs stdlib
+# modules such as json that the minimal package omits.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        libssl3 libgssapi-krb5-2 zlib1g libstdc++6 python3-minimal \
+        libssl3 libgssapi-krb5-2 zlib1g libstdc++6 python3 \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /opt/runner /provenance
 
@@ -66,14 +68,23 @@ COPY runner.py /opt/runner/runner.py
 RUN chmod -R a+rX /opt/ilspy /usr/share/dotnet \
     && /opt/ilspy/ilspycmd --version > /provenance/ilspycmd-version.txt 2>&1 \
     && dotnet --list-runtimes > /provenance/dotnet-runtimes.txt 2>&1 \
-    && grep -q 'linux-arm64' /provenance/dotnet-runtimes.txt \
     && chmod 644 /provenance/* \
-    && chmod 755 /opt/runner/runner.py \
+    && chmod 755 /opt/runner/runner.py
+
+USER www-data
+
+# Runtime self-checks execute as the non-root runtime user: stdlib
+# coverage for every runner.py import, ilspycmd executability, the
+# linux-arm64 runtime assertion, and the dry-run argv path. HOME
+# points at tmpfs (as in production).
+RUN export HOME=/tmp \
+    && python3 -c "import argparse, fcntl, hashlib, json, os, platform, re, select, shutil, signal, subprocess, sys, time" \
+    && /opt/ilspy/ilspycmd --version \
+    && grep -q 'linux-arm64' /provenance/dotnet-runtimes.txt \
+    && mkdir -p /tmp/dry \
     && python3 /opt/runner/runner.py --dry-run --tool ilspy \
         --profile assembly --params-json '{}' --workdir /tmp/dry \
         | grep -q 'ilspycmd'
-
-USER www-data
 
 CMD ["python3", "/opt/runner/runner.py", "--tool", "ilspy", \
      "--spool", "/spool", "--results", "/results"]

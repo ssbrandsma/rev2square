@@ -54,23 +54,28 @@ on every compose invocation. All steps are owner-operated.
 cd /srv/rev2square
 
 # 1. Build the five pinned tool images (needs build-time internet
-#    for the pinned releases; Ghidra's native build takes 20-40 min).
+#    for the pinned releases; Ghidra's native build takes 20-40 min)
+#    and (re)create the coordinator + runners — as ONE `&&` chain, so
+#    a failed build can never fall through into `up`. App/nginx/db/
+#    queue keep running; only these six services recycle. If ANY build
+#    fails: fix it and re-run this whole step; do NOT start services
+#    with missing local images. (Runner services use
+#    `pull_policy: never`, so a missing image fails fast with a local
+#    error instead of a misleading Docker Hub "pull access denied".)
 docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin \
-  build objdump-runner ghidra-runner jadx-runner ilspy-runner extract-runner
-
-# 2. Record what you built (paste into the deployment log).
-docker images --digests 'rev2square/*'
-
-# 3. (Re)create the coordinator + runners. App/nginx/db/queue keep
-#    running; only these six services recycle.
+  build objdump-runner ghidra-runner jadx-runner ilspy-runner extract-runner && \
 docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin \
   up -d analysis-coordinator objdump-runner ghidra-runner jadx-runner ilspy-runner extract-runner
 
-# 4. Check the runners answer (versions + ARM64 arch, no secrets shown).
+# 2. Record what you built (paste into the deployment log). Expect all
+#    five runner tags; a missing row means step 1 did not complete.
+docker images --digests 'rev2square/*'
+
+# 3. Check the runners answer (versions + ARM64 arch, no secrets shown).
 docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin \
   exec analysis-coordinator php artisan analysis:diagnostics
 
-# 5. Capture worker capability snapshots FROM the runners.
+# 4. Capture worker capability snapshots FROM the runners.
 docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin \
   exec analysis-coordinator php artisan binary:worker-capabilities --refresh
 # …wait a minute, then inspect:
@@ -84,7 +89,7 @@ them. Admins can watch readiness at `/admin/analysis`.
 Normal `update_prod.sh` runs keep working: the coordinator shares the
 app image (rebuilt with it), while the tool images only rebuild when
 you run `build` for them explicitly. After ANY app deploy or tool
-rebuild, repeat steps 4–5: snapshots older than
+rebuild, repeat steps 3–4: snapshots older than
 `BINARY_WORKER_SNAPSHOT_TTL_HOURS` (default 24) refuse dispatch until
 refreshed, and version changes fail queued runs as `worker_mismatch`
 rather than running them against a new backend silently.
@@ -94,6 +99,9 @@ rather than running them against a new backend silently.
 ```sh
 # Coordinator + runners (runners need ARM64 hardware to EXECUTE;
 # on x86 they build but stay unavailable — documented, never silent).
+# The `&&` chain stops `up` from running after a failed build.
+docker compose -f compose.dev.yaml \
+  build analysis-coordinator objdump-runner ghidra-runner jadx-runner ilspy-runner extract-runner && \
 docker compose -f compose.dev.yaml up -d analysis-coordinator \
   objdump-runner ghidra-runner jadx-runner ilspy-runner extract-runner
 docker compose -f compose.dev.yaml exec analysis-coordinator php artisan analysis:diagnostics
@@ -153,7 +161,7 @@ is installed.
   budget + grace, then redeploy; queued (not started) runs survive in
   the database queue. Never delete the spool volumes mid-run.
 - Rollback: previous tool images stay tagged locally; `up -d` with
-  the previous compose revision restores them. Re-run §2 steps 4–5.
+  the previous compose revision restores them. Re-run §2 steps 3–4.
 
 ## 6. Environment reference
 
