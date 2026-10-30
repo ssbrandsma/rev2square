@@ -164,18 +164,27 @@ LABEL org.rev2square.tool="ghidra" \
 # modules such as json that the minimal package omits.
 # libstdc++6: the g++-built decompile/sleigh binaries need it at
 # runtime (the ldd gate below proves no shared library is missing).
+# ca-certificates: Ghidra logs an ERROR when no OS CA bundle is
+# readable; the bundle keeps the trust store complete and the logs
+# clean. It enables no network use (there is none) and changes no
+# verification behavior (the Java default store stays as fallback).
 # No compilers in this stage: builder-only toolchain stays behind.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3 libstdc++6 \
+    && apt-get install -y --no-install-recommends python3 libstdc++6 ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && mkdir -p /opt/runner /opt/smoke /provenance
 
 COPY --from=jdk /opt/jdk /opt/jdk
 COPY --from=natives /opt/ghidra /opt/ghidra
 COPY --from=natives /provenance-arm64-natives.sha256 /provenance/arm64-natives.sha256
-COPY runner.py /opt/runner/runner.py
-COPY ExportEvidence.java /opt/ghidra/ExportEvidence.java
-COPY fixtures/arm32-smoke.bin /opt/smoke/arm32-smoke.bin
+# COPY preserves host file modes: a checkout created under umask 077
+# yields mode 600, unreadable by www-data (this exact failure blocked
+# the ARM64 build at the post-script). Every repo-file COPY below
+# declares its mode explicitly; the install step re-asserts modes
+# after cp so neither host umask nor cp semantics can regress them.
+COPY --chmod=755 runner.py /opt/runner/runner.py
+COPY --chmod=644 ExportEvidence.java /opt/ghidra/ExportEvidence.java
+COPY --chmod=644 fixtures/arm32-smoke.bin /opt/smoke/arm32-smoke.bin
 
 # Reviewed evidence-export script, installed where analyzeHeadless
 # resolves -postScript names (plus the read-only reviewed copy above).
@@ -183,6 +192,9 @@ COPY fixtures/arm32-smoke.bin /opt/smoke/arm32-smoke.bin
 # this proves COPY carried the verified files, not stale layers.
 RUN cp /opt/ghidra/ExportEvidence.java \
         /opt/ghidra/Ghidra/Features/Base/ghidra_scripts/ExportEvidence.java \
+    && chmod 755 /opt/ghidra/Ghidra/Features/Base/ghidra_scripts \
+    && chmod 644 /opt/ghidra/Ghidra/Features/Base/ghidra_scripts/ExportEvidence.java \
+    && chmod 644 /opt/ghidra/ExportEvidence.java \
     && /opt/jdk/bin/java -version > /provenance/java-version.txt 2>&1 \
     && find /opt/ghidra -name decompile -type f > /provenance/decompile-bins.txt \
     && sha256sum -c /provenance/arm64-natives.sha256 \
@@ -220,6 +232,16 @@ USER www-data
 # is its own labeled layer so the build log names the exact failing
 # check. They run with the image's real home configuration (no
 # HOME=/tmp masking): passwd, $HOME, and Java user.home must agree.
+# Readability comes first: a restrictive host umask must never again
+# surface as a confusing failure deep inside a Ghidra launch.
+RUN echo "--- smoke: runtime inputs readable as www-data ---" \
+    && test -r /opt/ghidra/Ghidra/Features/Base/ghidra_scripts/ExportEvidence.java \
+    && test -r /opt/ghidra/ExportEvidence.java \
+    && test -r /opt/runner/runner.py \
+    && test -r /opt/smoke/arm32-smoke.bin \
+    && test -r /etc/ssl/certs/ca-certificates.crt \
+    && test -x /opt/ghidra/support/analyzeHeadless
+
 RUN echo "--- smoke: python stdlib imports (www-data) ---" \
     && python3 -c "import argparse, fcntl, hashlib, json, os, platform, re, select, shutil, signal, subprocess, sys, time"
 
@@ -262,12 +284,15 @@ RUN echo "--- smoke: headless import executes as www-data ---" \
 # Integration gate: run the REAL runner argv (built by
 # runner.build_argv, not a hand-written copy) over the known
 # 20-byte ARM32 fixture and assert known evidence: schema, the
-# script-created entry function at 0x8000, the exact MOV bytes,
-# and decompiled C containing a return.
+# memory map genuinely rebased to 0x8000, the script-created entry
+# function at 0x8000, the exact MOV bytes AT 0x8000 (address and
+# bytes together — the loader passes no explicit base option, so
+# the rebase must be proven, not assumed), and decompiled C
+# containing a return.
 RUN echo "--- smoke: fixture decompiles via runner argv (www-data) ---" \
     && mkdir -p /tmp/gsmoke && cp /opt/smoke/arm32-smoke.bin /tmp/gsmoke/input.bin \
     && python3 -c "import json,subprocess,sys; sys.path.insert(0,'/opt/runner'); import runner; argv=runner.build_argv('ghidra','headless',{'language':'ARM:LE:32:v8','base':0x8000,'entry':0x8000},'/tmp/gsmoke','/tmp/gsmoke/input.bin'); print(json.dumps(argv)); subprocess.run(argv,check=True,timeout=600,env=runner.tool_env('ghidra','/tmp/gsmoke'))" \
-    && python3 -c "import json; e=json.load(open('/tmp/gsmoke/evidence.json')); assert e['schema']==1,'schema'; assert e['tool']=='ghidra','tool'; assert e['language']=='ARM:LE:32:v8','language'; assert any(f.get('name')=='entry' and f.get('entry')=='0x8000' for f in e['functions']),'entry fn'; assert any(l.get('bytes')=='0100a0e3' for l in e['disassembly']['lines']),'mov bytes'; assert any('r0' in l.get('text','').lower() for l in e['disassembly']['lines']),'r0 text'; d={f.get('entry'):f for f in e['decompilation']['functions']}; assert 'c' in d.get('0x8000',{}),'decompiled c'; assert 'return' in d['0x8000']['c'].lower(),'return in c'; print('FIXTURE EVIDENCE OK')" \
+    && python3 -c "import json; e=json.load(open('/tmp/gsmoke/evidence.json')); assert e['schema']==1,'schema'; assert e['tool']=='ghidra','tool'; assert e['language']=='ARM:LE:32:v8','language'; assert any(m.get('start')=='0x8000' and m.get('size')==20 and m.get('execute')==True for m in e['memory']),'memory map'; assert any(f.get('name')=='entry' and f.get('entry')=='0x8000' for f in e['functions']),'entry fn'; assert any(l.get('address')=='0x8000' and l.get('bytes')=='0100a0e3' for l in e['disassembly']['lines']),'mov at 0x8000'; assert any('r0' in l.get('text','').lower() for l in e['disassembly']['lines']),'r0 text'; d={f.get('entry'):f for f in e['decompilation']['functions']}; assert 'c' in d.get('0x8000',{}),'decompiled c'; assert 'return' in d['0x8000']['c'].lower(),'return in c'; print('FIXTURE EVIDENCE OK')" \
     && rm -rf /tmp/gsmoke
 
 # Scoping gate: after two headless runs, no job files may leak

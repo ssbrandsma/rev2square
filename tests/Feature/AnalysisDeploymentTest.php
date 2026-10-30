@@ -349,8 +349,35 @@ class AnalysisDeploymentTest extends TestCase
             $this->assertStringContainsString($token, $ghidra, "final stage configures {$token}");
         }
         $this->assertStringNotContainsString('export HOME=/tmp', $ghidra, 'no HOME masking in ghidra build');
+        // Deterministic permissions: COPY preserves host modes, so a
+        // umask-077 checkout would install unreadable files. Every
+        // repo-file COPY declares its mode and the install re-asserts
+        // modes after cp; a non-root readability gate runs before any
+        // Ghidra launch.
+        foreach (['COPY --chmod=755 runner.py', 'COPY --chmod=644 ExportEvidence.java', 'COPY --chmod=644 fixtures/arm32-smoke.bin', 'chmod 644 /opt/ghidra/Ghidra/Features/Base/ghidra_scripts/ExportEvidence.java', 'test -r /opt/ghidra/Ghidra/Features/Base/ghidra_scripts/ExportEvidence.java', 'ca-certificates'] as $token) {
+            $this->assertStringContainsString($token, $ghidra, "final stage pins {$token}");
+        }
+        // Base-address proof is strengthened, not relaxed: the MOV
+        // bytes must sit AT 0x8000 and the memory map must show the
+        // rebased block (the loader takes no explicit base option).
+        foreach (["'mov at 0x8000'", "'memory map'"] as $token) {
+            $this->assertStringContainsString($token, $ghidra, "fixture gate asserts {$token}");
+        }
         $this->assertSame(5, substr_count($ghidra, '--- natives:'), 'five labeled native-build steps');
-        $this->assertSame(9, substr_count($ghidra, '--- smoke:'), 'nine labeled runtime gates');
+        $this->assertSame(10, substr_count($ghidra, '--- smoke:'), 'ten labeled runtime gates');
+    }
+
+    public function test_copied_runner_has_deterministic_permissions(): void
+    {
+        // Every runner image COPYs runner.py from a host checkout
+        // that may be mode 600; each Dockerfile must normalize it
+        // explicitly so the non-root user can execute it.
+        $dir = base_path('docker/analysis');
+        foreach (['Dockerfile.binutils', 'Dockerfile.ghidra', 'Dockerfile.jadx', 'Dockerfile.ilspy', 'Dockerfile.extract'] as $dockerfile) {
+            $text = (string) file_get_contents($dir.'/'.$dockerfile);
+            $this->assertStringContainsString('runner.py', $text, "{$dockerfile} ships runner.py");
+            $this->assertStringContainsString('chmod 755 /opt/runner/runner.py', $text, "{$dockerfile} normalizes runner.py mode");
+        }
     }
 
     #[DataProvider('composeFiles')]

@@ -359,6 +359,29 @@ class RunnerCase(unittest.TestCase):
         self.assertEqual(status["state"], "failed")
         self.assertIn("byte cap", status["error"])
 
+    def test_ghidra_missing_evidence_rejected(self):
+        # Headless exits 0 even when the post-script fails: a missing
+        # evidence file must fail the job with an actionable error.
+        os.environ["GHIDRA_HEADLESS"] = self.stub("ghidra", "exit 0\n")
+        self.submit("ghidra", profile="headless",
+                    params={"language": "ARM:LE:32:v8", "base": 0})
+        self.run_once("ghidra")
+        status = self.claim("job1")
+        self.assertEqual(status["state"], "failed")
+        self.assertIn("no evidence.json", status["error"])
+
+    def test_ghidra_wrong_envelope_rejected(self):
+        script = ("python3 -c 'import json;json.dump("
+                  '{"schema":99,"tool":"other"},'
+                  "open(\"evidence.json\",\"w\"))'\n")
+        os.environ["GHIDRA_HEADLESS"] = self.stub("ghidra", script)
+        self.submit("ghidra", profile="headless",
+                    params={"language": "ARM:LE:32:v8", "base": 0})
+        self.run_once("ghidra")
+        status = self.claim("job1")
+        self.assertEqual(status["state"], "failed")
+        self.assertIn("envelope invalid", status["error"])
+
     def test_extract_stored_files_rehashed(self):
         # ubireader argv: [bin -o OUT IN] → OUT is $2.
         os.environ["UBIREADER_BIN"] = self.stub(

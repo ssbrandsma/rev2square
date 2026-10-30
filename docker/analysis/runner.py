@@ -621,6 +621,11 @@ class Runner:
             evidence = read_json(src, MAX_EVIDENCE_BYTES)
             if not isinstance(evidence, dict):
                 fail("ghidra evidence is not a JSON object")
+            if (evidence.get("schema") != SCHEMA or
+                    evidence.get("tool") != "ghidra"):
+                fail("ghidra evidence envelope invalid "
+                     "(schema=%r tool=%r)" % (evidence.get("schema"),
+                                              evidence.get("tool")))
             self._write_evidence(claimdir, evidence)
             info["evidence_bytes"] = size
             info["files"] = 1
