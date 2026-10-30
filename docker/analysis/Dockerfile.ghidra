@@ -11,13 +11,17 @@
 #     license: GPL-2.0-with-Classpath-exception
 #
 # The public release ships Linux natives for x86-64 only, so this
-# build compiles the native components (decompiler, demangler) for
-# linux-aarch64 from the distribution via the documented
-# `gradlew buildNatives` step (needs build-time internet for the
-# Gradle distribution + native build inputs). 12.2 no longer bundles
-# the amd64-only 7-Zip-JBinding, so no amd64-only library remains on
-# the headless path. Debugger/symbolic-execution extras are not
-# enabled: headless import + analysis + decompile only.
+# build compiles the native components for linux_arm_64 (decompile,
+# sleigh, two GNU demanglers, lzfse) from the distribution via the
+# documented `./gradlew buildNatives` step (needs build-time
+# internet for the Gradle distribution + native build inputs).
+# buildNatives links into <module>/build/os/linux_arm_64/ and does
+# NOT install: this Dockerfile copies the five verified outputs
+# into the os/linux_arm_64/ directories Ghidra actually loads from.
+# 12.2 no longer bundles the amd64-only 7-Zip-JBinding, so no
+# amd64-only library remains on the headless path.
+# Debugger/symbolic-execution extras are not enabled: headless
+# import + analysis + decompile only.
 #
 # Build (owner, on the ARM64 server; allow 20-40 min for buildNatives):
 #   docker build -f docker/analysis/Dockerfile.ghidra \
@@ -69,23 +73,73 @@ RUN : "${GHIDRA_VERSION:?missing build input GHIDRA_VERSION}" \
     && : "${GHIDRA_ZIP:?missing build input GHIDRA_ZIP}" \
     && : "${GHIDRA_SHA256:?missing build input GHIDRA_SHA256}"
 
-RUN apt-get update \
+# g++ is required: decompile/sleigh are C++ (the demanglers and
+# lzfse are C). `make` stays as cheap insurance; bison/flex are NOT
+# needed (the build scripts assume up-to-date generated parsers).
+RUN echo "--- natives: install build toolchain ---" \
+    && apt-get update \
     && apt-get install -y --no-install-recommends \
-        ca-certificates curl file gcc make python3 unzip zip \
+        ca-certificates curl file g++ gcc make python3 unzip zip \
     && rm -rf /var/lib/apt/lists/* \
-    && mkdir -p /opt/dist \
+    && mkdir -p /opt/dist
+
+# Toolchain gate BEFORE the expensive download + buildNatives: prove
+# both compilers exist now instead of failing 20 minutes into Gradle
+# with `Could not find C++ compiler 'g++' in system path`.
+RUN echo "--- natives: C and C++ compilers available ---" \
+    && gcc --version \
+    && g++ --version
+
+RUN echo "--- natives: fetch pinned Ghidra distribution ---" \
     && curl -fsSL -o /tmp/ghidra.zip \
         "https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_${GHIDRA_VERSION}_build/${GHIDRA_ZIP}" \
     && echo "${GHIDRA_SHA256}  /tmp/ghidra.zip" | sha256sum -c - \
     && unzip -q /tmp/ghidra.zip -d /opt/dist \
     && rm /tmp/ghidra.zip \
     && mv /opt/dist/ghidra_${GHIDRA_VERSION}_PUBLIC /opt/ghidra \
+    && test -x /opt/ghidra/support/gradle/gradlew
+
+RUN echo "--- natives: buildNatives for linux_arm_64 (20-40 min) ---" \
     && cd /opt/ghidra/support/gradle \
-    && ./gradlew --no-daemon buildNatives \
-    && DECOMPILE=$(find /opt/ghidra -path '*os/linux_aarch64/decompile' -o -path '*os/linux_arm64/decompile' | head -1) \
-    && test -n "${DECOMPILE}" && test -x "${DECOMPILE}" \
-    && file "${DECOMPILE}" | grep -qi 'ARM aarch64' \
-    && echo "${DECOMPILE}" > /provenance-decompile-path.txt
+    && ./gradlew --no-daemon buildNatives
+
+# Native-output discovery is deterministic, from
+# GPL/nativeBuildProperties.gradle: buildNatives links into
+# <module>/build/os/<platform>/ and does NOT install into
+# os/<platform>/ — that copy is done here, explicitly, for exactly
+# the five linux_arm_64 executables the distribution builds
+# (decompile, sleigh, two demanglers, lzfse). No find|head
+# guessing, no invented platform names: the Gradle log's
+# `linux_arm_64` is the os/ directory name by construction.
+RUN echo "--- natives: verify + install linux_arm_64 outputs ---" \
+    && cd /opt/ghidra \
+    && for f in \
+        Ghidra/Features/Decompiler/build/os/linux_arm_64/decompile \
+        Ghidra/Features/Decompiler/build/os/linux_arm_64/sleigh \
+        GPL/DemanglerGnu/build/os/linux_arm_64/demangler_gnu_v2_41 \
+        GPL/DemanglerGnu/build/os/linux_arm_64/demangler_gnu_v2_24 \
+        Ghidra/Features/FileFormats/build/os/linux_arm_64/lzfse \
+    ; do \
+        test -x "$f" || { echo "MISSING NATIVE OUTPUT: $f" >&2; exit 1; }; \
+        file "$f" | grep -qi 'ARM aarch64' || { echo "NOT AARCH64: $f" >&2; exit 1; }; \
+    done \
+    && test "$(ls Ghidra/Features/Decompiler/build/os/linux_arm_64/ | wc -l)" -eq 2 \
+    && test "$(ls GPL/DemanglerGnu/build/os/linux_arm_64/ | wc -l)" -eq 2 \
+    && test "$(ls Ghidra/Features/FileFormats/build/os/linux_arm_64/ | wc -l)" -eq 1 \
+    && mkdir -p Ghidra/Features/Decompiler/os/linux_arm_64 GPL/DemanglerGnu/os/linux_arm_64 Ghidra/Features/FileFormats/os/linux_arm_64 \
+    && cp Ghidra/Features/Decompiler/build/os/linux_arm_64/decompile Ghidra/Features/Decompiler/build/os/linux_arm_64/sleigh Ghidra/Features/Decompiler/os/linux_arm_64/ \
+    && cp GPL/DemanglerGnu/build/os/linux_arm_64/demangler_gnu_v2_41 GPL/DemanglerGnu/build/os/linux_arm_64/demangler_gnu_v2_24 GPL/DemanglerGnu/os/linux_arm_64/ \
+    && cp Ghidra/Features/FileFormats/build/os/linux_arm_64/lzfse Ghidra/Features/FileFormats/os/linux_arm_64/ \
+    && chmod 755 Ghidra/Features/Decompiler/os/linux_arm_64/* GPL/DemanglerGnu/os/linux_arm_64/* Ghidra/Features/FileFormats/os/linux_arm_64/* \
+    && if cmp -s Ghidra/Features/Decompiler/os/linux_arm_64/decompile Ghidra/Features/Decompiler/os/linux_x86_64/decompile; then echo "ARM64 decompile identical to bundled x86_64 copy - install mix-up" >&2; exit 1; fi \
+    && sha256sum \
+        Ghidra/Features/Decompiler/os/linux_arm_64/decompile \
+        Ghidra/Features/Decompiler/os/linux_arm_64/sleigh \
+        GPL/DemanglerGnu/os/linux_arm_64/demangler_gnu_v2_41 \
+        GPL/DemanglerGnu/os/linux_arm_64/demangler_gnu_v2_24 \
+        Ghidra/Features/FileFormats/os/linux_arm_64/lzfse \
+        | sed 's|Ghidra/Features|/opt/ghidra/Ghidra/Features|; s|GPL/|/opt/ghidra/GPL/|' > /provenance-arm64-natives.sha256 \
+    && cat /provenance-arm64-natives.sha256
 
 # ---- Runtime stage --------------------------------------------------
 FROM ${DEBIAN_IMAGE}
@@ -107,33 +161,85 @@ LABEL org.rev2square.tool="ghidra" \
 
 # Full python3 (NOT python3-minimal): the runner needs stdlib
 # modules such as json that the minimal package omits.
+# libstdc++6: the g++-built decompile/sleigh binaries need it at
+# runtime (the ldd gate below proves no shared library is missing).
+# No compilers in this stage: builder-only toolchain stays behind.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3 \
+    && apt-get install -y --no-install-recommends python3 libstdc++6 \
     && rm -rf /var/lib/apt/lists/* \
-    && mkdir -p /opt/runner /provenance
+    && mkdir -p /opt/runner /opt/smoke /provenance
 
 COPY --from=jdk /opt/jdk /opt/jdk
 COPY --from=natives /opt/ghidra /opt/ghidra
+COPY --from=natives /provenance-arm64-natives.sha256 /provenance/arm64-natives.sha256
 COPY runner.py /opt/runner/runner.py
 COPY ExportEvidence.java /opt/ghidra/ExportEvidence.java
+COPY fixtures/arm32-smoke.bin /opt/smoke/arm32-smoke.bin
 
 # Reviewed evidence-export script, installed where analyzeHeadless
 # resolves -postScript names (plus the read-only reviewed copy above).
+# The installed ARM64 natives must hash-match the builder outputs:
+# this proves COPY carried the verified files, not stale layers.
 RUN cp /opt/ghidra/ExportEvidence.java \
         /opt/ghidra/Ghidra/Features/Base/ghidra_scripts/ExportEvidence.java \
     && /opt/jdk/bin/java -version > /provenance/java-version.txt 2>&1 \
     && find /opt/ghidra -name decompile -type f > /provenance/decompile-bins.txt \
-    && chmod 644 /provenance/* \
+    && sha256sum -c /provenance/arm64-natives.sha256 \
+    && chmod 644 /provenance/* /opt/smoke/arm32-smoke.bin \
     && chmod 755 /opt/runner/runner.py
 
 USER www-data
 
-# Runtime self-checks execute as the non-root runtime user: stdlib
-# coverage for every runner.py import, JDK executability, and the
-# dry-run argv path. HOME points at tmpfs (as in production).
-RUN export HOME=/tmp \
-    && python3 -c "import argparse, fcntl, hashlib, json, os, platform, re, select, shutil, signal, subprocess, sys, time" \
-    && /opt/jdk/bin/java -version \
+# Runtime self-checks execute as the non-root runtime user. Each gate
+# is its own labeled layer so the build log names the exact failing
+# check. HOME points at tmpfs (as in production).
+RUN echo "--- smoke: python stdlib imports (www-data) ---" \
+    && export HOME=/tmp \
+    && python3 -c "import argparse, fcntl, hashlib, json, os, platform, re, select, shutil, signal, subprocess, sys, time"
+
+RUN echo "--- smoke: JDK executes (www-data) ---" \
+    && export HOME=/tmp \
+    && /opt/jdk/bin/java -version
+
+# Architecture gate without the `file` package: read the ELF header
+# directly (e_machine == 183 is EM_AARCH64). Validated both ways:
+# accepts ARM64, rejects x86-64 (e_machine 62).
+RUN echo "--- smoke: decompile is AArch64 ELF (www-data) ---" \
+    && python3 -c "import struct,sys; m=struct.unpack('<H', open('/opt/ghidra/Ghidra/Features/Decompiler/os/linux_arm_64/decompile','rb').read()[18:20])[0]; sys.exit(0 if m==183 else 'decompile is not AArch64 ELF')"
+
+# Shared-library gate: every NEEDED entry of the freshly built
+# decompile binary must resolve (this is what mandates libstdc++6
+# above — if another library ever goes missing, this fails loudly
+# instead of crashing the first headless run).
+RUN echo "--- smoke: native runtime deps resolve (www-data) ---" \
+    && export HOME=/tmp \
+    && ldd /opt/ghidra/Ghidra/Features/Decompiler/os/linux_arm_64/decompile > /tmp/decompile-ldd.txt \
+    && if grep -q 'not found' /tmp/decompile-ldd.txt; then echo "MISSING SHARED LIBS:" >&2; cat /tmp/decompile-ldd.txt >&2; exit 1; fi \
+    && grep -q 'libstdc++' /tmp/decompile-ldd.txt
+
+# Headless execution gate: import-only run as www-data (JVM +
+# launcher + loader path, no post-script).
+RUN echo "--- smoke: headless import executes as www-data ---" \
+    && export HOME=/tmp \
+    && mkdir -p /tmp/gimp && cp /opt/smoke/arm32-smoke.bin /tmp/gimp/input.bin \
+    && /opt/ghidra/support/analyzeHeadless /tmp/gimp/proj -import /tmp/gimp/input.bin \
+        -overwrite -processor ARM:LE:32:v8 -cspec default -deleteProject \
+    && rm -rf /tmp/gimp
+
+# Integration gate: run the REAL runner argv (built by
+# runner.build_argv, not a hand-written copy) over the known
+# 20-byte ARM32 fixture and assert known evidence: schema, the
+# script-created entry function at 0x8000, the exact MOV bytes,
+# and decompiled C containing a return.
+RUN echo "--- smoke: fixture decompiles via runner argv (www-data) ---" \
+    && export HOME=/tmp \
+    && mkdir -p /tmp/gsmoke && cp /opt/smoke/arm32-smoke.bin /tmp/gsmoke/input.bin \
+    && python3 -c "import json,subprocess,sys; sys.path.insert(0,'/opt/runner'); import runner; argv=runner.build_argv('ghidra','headless',{'language':'ARM:LE:32:v8','base':0x8000,'entry':0x8000},'/tmp/gsmoke','/tmp/gsmoke/input.bin'); print(json.dumps(argv)); subprocess.run(argv,check=True,timeout=600)" \
+    && python3 -c "import json; e=json.load(open('/tmp/gsmoke/evidence.json')); assert e['schema']==1,'schema'; assert e['tool']=='ghidra','tool'; assert e['language']=='ARM:LE:32:v8','language'; assert any(f.get('name')=='entry' and f.get('entry')=='0x8000' for f in e['functions']),'entry fn'; assert any(l.get('bytes')=='0100a0e3' for l in e['disassembly']['lines']),'mov bytes'; assert any('r0' in l.get('text','').lower() for l in e['disassembly']['lines']),'r0 text'; d={f.get('entry'):f for f in e['decompilation']['functions']}; assert 'c' in d.get('0x8000',{}),'decompiled c'; assert 'return' in d['0x8000']['c'].lower(),'return in c'; print('FIXTURE EVIDENCE OK')" \
+    && rm -rf /tmp/gsmoke
+
+RUN echo "--- smoke: runner dry-run argv (www-data) ---" \
+    && export HOME=/tmp \
     && mkdir -p /tmp/dry \
     && python3 /opt/runner/runner.py --dry-run --tool ghidra \
         --profile headless \

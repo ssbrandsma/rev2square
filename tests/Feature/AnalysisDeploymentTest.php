@@ -309,6 +309,52 @@ class AnalysisDeploymentTest extends TestCase
         $this->assertSame(5, substr_count($ilspy, '--- smoke:'), 'ilspy has five labeled smoke steps');
     }
 
+    public function test_ghidra_builder_has_cpp_toolchain_and_installs_arm64_natives(): void
+    {
+        // The natives stage needs g++ (decompile/sleigh are C++),
+        // must discover the real linux_arm_64 outputs deterministically
+        // (buildNatives links into <module>/build/os/<platform>/ and
+        // does NOT install), must copy exactly those into the os/
+        // directories Ghidra loads, and must keep compilers out of
+        // the final image while shipping the C++ runtime the freshly
+        // built binaries need.
+        $ghidra = (string) file_get_contents(base_path('docker/analysis/Dockerfile.ghidra'));
+        $this->assertStringContainsString('file g++ gcc make', $ghidra, 'builder installs the C/C++ toolchain');
+        $this->assertStringContainsString('g++ --version', $ghidra, 'builder gates on compiler availability');
+        foreach (['build/os/linux_arm_64/decompile', 'build/os/linux_arm_64/sleigh', 'demangler_gnu_v2_41', 'demangler_gnu_v2_24', 'build/os/linux_arm_64/lzfse'] as $token) {
+            $this->assertStringContainsString($token, $ghidra, "natives discovery covers {$token}");
+        }
+        $this->assertStringNotContainsString('linux_aarch64', $ghidra, 'no invented aarch64 platform name');
+        $this->assertStringNotContainsString('os/linux_arm64/', $ghidra, 'no invented arm64 platform name');
+        $this->assertStringContainsString('Decompiler/os/linux_arm_64/', $ghidra, 'natives are installed into os/');
+        $this->assertStringContainsString('install mix-up', $ghidra, 'installed ARM64 output differs from bundled x86_64');
+        $this->assertSame(5, substr_count($ghidra, 'arm64-natives.sha256'), 'builder hashes written, copied, and verified in final stage');
+        $this->assertStringContainsString('libstdc++6', $ghidra, 'final stage ships the C++ runtime');
+
+        $stripped = (string) preg_replace('/^\s*#.*$/m', '', $ghidra);
+        $stages = preg_split('/^FROM [^\n]*$/m', $stripped);
+        $final = (string) end($stages);
+        $this->assertStringNotContainsString('g++', $final, 'final stage has no C++ compiler');
+        $this->assertDoesNotMatchRegularExpression('/\bgcc\b/', $final, 'final stage has no C compiler');
+
+        foreach (['ldd /opt/ghidra', "'not found'", 'm==183', 'analyzeHeadless /tmp/gimp/proj -import', 'build_argv(', 'arm32-smoke.bin', 'FIXTURE EVIDENCE OK'] as $token) {
+            $this->assertStringContainsString($token, $ghidra, "final stage checks {$token}");
+        }
+        $this->assertSame(5, substr_count($ghidra, '--- natives:'), 'five labeled native-build steps');
+        $this->assertSame(7, substr_count($ghidra, '--- smoke:'), 'seven labeled runtime gates');
+    }
+
+    public function test_ghidra_smoke_fixture_matches_known_bytes(): void
+    {
+        // The Docker build-context fixture must stay byte-identical to
+        // the PHP suite's documented A32 sequence (provenance, not
+        // invented bytes).
+        $this->assertSame(
+            \Tests\Support\BinaryFixtures::codeArm32(),
+            (string) file_get_contents(base_path('docker/analysis/fixtures/arm32-smoke.bin'))
+        );
+    }
+
     public function test_jadx_uses_verified_flat_archive_layout(): void
     {
         // The published jadx-1.5.6.zip has bin/ + lib/ at the archive
