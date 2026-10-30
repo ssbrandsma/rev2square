@@ -426,6 +426,7 @@
                                     @case('discussion.posted') started a discussion @break
                                     @case('discussion.update_published') published a project update @break
                                     @case('discussion.moderated') removed a post after review @break
+                                    @case('team.ownership_transferred') transferred ownership from <strong>{{ $event->metadata['from_name'] ?? '—' }}</strong> to <strong>{{ $event->metadata['to_name'] ?? '—' }}</strong> @break
                                     @default {{ $event->event }}
                                 @endswitch
                             </li>

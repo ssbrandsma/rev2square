@@ -6,11 +6,13 @@ use App\Enums\AnalysisStatus;
 use App\Enums\GlobalRole;
 use App\Enums\ReportStatus;
 use App\Jobs\AnalyzeProjectJob;
+use App\Enums\AccountStatus;
 use App\Models\AdminAuditEvent;
 use App\Models\AgentConversation;
 use App\Models\AiUsageEntry;
 use App\Models\AnalysisRun;
 use App\Models\ChatMessage;
+use App\Models\DiscussionPost;
 use App\Models\EvidenceSource;
 use App\Models\Project;
 use App\Models\Repository;
@@ -106,6 +108,112 @@ class AdminInterfaceTest extends TestCase
             'project_id' => $project->id, 'user_id' => $owner->id, 'title' => 'private',
         ]);
         $this->actingAs($moderator)->get(route('projects.agent.show', [$project, $conversation]))->assertForbidden();
+    }
+
+    public function test_moderator_cannot_mutate_roles_settings_or_budgets(): void
+    {
+        $moderator = User::factory()->create();
+        $moderator->forceFill(['global_role' => GlobalRole::Moderator])->save();
+        $victim = User::factory()->create();
+
+        $this->actingAs($moderator)->withSession($this->confirmedSession())
+            ->patch(route('admin.users.update', $victim), [
+                'global_role' => 'moderator', 'ai_enabled' => true,
+                'ai_unlimited' => false, 'reason' => 'crafted',
+            ])->assertForbidden();
+        $this->assertSame(GlobalRole::User, $victim->fresh()->global_role);
+
+        $this->actingAs($moderator)->withSession($this->confirmedSession())
+            ->post(route('admin.users.suspend', $victim), ['reason' => 'crafted'])
+            ->assertForbidden();
+        $this->assertFalse($victim->fresh()->isSuspended());
+
+        $this->actingAs($moderator)->withSession($this->confirmedSession())
+            ->patch(route('admin.settings.update'), ['settings' => ['ai.enabled' => '0'], 'reason' => 'crafted'])
+            ->assertForbidden();
+
+        $this->actingAs($moderator)->withSession($this->confirmedSession())
+            ->patch(route('admin.settings.secrets.update'), ['value' => 'x', 'reason' => 'crafted'])
+            ->assertForbidden();
+    }
+
+    public function test_role_changes_take_effect_on_subsequent_actions(): void
+    {
+        $admin = $this->makeAdmin();
+        $user = User::factory()->create();
+        $secondAdmin = $this->makeAdmin();
+
+        $this->actingAs($admin)->withSession($this->confirmedSession())
+            ->patch(route('admin.users.update', $user), [
+                'global_role' => 'moderator', 'ai_enabled' => true,
+                'ai_unlimited' => false, 'reason' => 'Promoted.',
+            ])->assertRedirect();
+        $this->actingAs($user->fresh())->get(route('admin.moderation.index'))->assertOk();
+        $this->actingAs($user->fresh())->get(route('admin.dashboard'))->assertForbidden();
+
+        $this->actingAs($admin)->withSession($this->confirmedSession())
+            ->patch(route('admin.users.update', $secondAdmin), [
+                'global_role' => 'user', 'ai_enabled' => true,
+                'ai_unlimited' => false, 'reason' => 'Demoted.',
+            ])->assertRedirect();
+        $this->actingAs($secondAdmin->fresh())->get(route('admin.dashboard'))->assertForbidden();
+    }
+
+    public function test_admin_user_edit_page_renders_with_validation_errors(): void
+    {
+        $admin = $this->makeAdmin();
+        $user = User::factory()->create();
+
+        $this->actingAs($admin)->get(route('admin.users.edit', $user))
+            ->assertOk()
+            ->assertSee('Change role or AI limits', false)
+            ->assertSee('Internal reason (required, recorded in the audit log)', false);
+
+        $this->actingAs($admin)->withSession($this->confirmedSession())
+            ->from(route('admin.users.edit', $user))
+            ->followingRedirects()
+            ->patch(route('admin.users.update', $user), [
+                'global_role' => 'superuser',
+                'ai_enabled' => true,
+                'ai_unlimited' => false,
+                'reason' => '',
+            ])
+            ->assertOk()
+            ->assertSee('The selected global role is invalid.', false)
+            ->assertSee('The reason field is required.', false);
+    }
+
+    public function test_global_moderator_and_admin_review_project_queue(): void
+    {
+        $admin = $this->makeAdmin();
+        $moderator = User::factory()->create();
+        $moderator->forceFill(['global_role' => GlobalRole::Moderator])->save();
+        $project = Project::factory()->create();
+        $post = DiscussionPost::factory()->create(['project_id' => $project->id, 'body' => 'Reported content here.']);
+        $report = $post->reports()->create([
+            'user_id' => User::factory()->create()->id,
+            'reason' => 'Looks like spam.',
+            'status' => \App\Enums\ReportStatus::Pending,
+        ]);
+
+        // Neither is a project maintainer, yet both reach the queue.
+        $this->actingAs($admin)->get(route('projects.moderation.index', $project))
+            ->assertOk()->assertSee('Reported content here.', false);
+        $this->actingAs($moderator)->get(route('projects.moderation.index', $project))
+            ->assertOk()->assertSee('Looks like spam.', false);
+
+        $this->actingAs($moderator)
+            ->patch(route('projects.moderation.review', [$project, $report]), ['decision' => 'dismiss'])
+            ->assertRedirect();
+        $this->assertSame(\App\Enums\ReportStatus::Dismissed, $report->fresh()->status);
+
+        // Narrow scope: queue access grants nothing else.
+        $this->actingAs($moderator)->get(route('projects.evidence', $project))->assertForbidden();
+
+        // Suspended moderators lose queue access too.
+        $moderator->forceFill(['account_status' => AccountStatus::Suspended])->save();
+        $this->actingAs($moderator)->get(route('projects.moderation.index', $project))
+            ->assertRedirect(route('suspended'));
     }
 
     public function test_admin_manages_user_through_ui_with_audit(): void

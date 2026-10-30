@@ -61,7 +61,7 @@
                 <p class="mt-1 text-xs text-zinc-500">File offsets locate bytes in the upload; base addresses locate them at runtime. Both are shown — never interchange them.</p>
                 <ul class="mt-2 space-y-1 font-mono text-xs">
                     @foreach($evidence['segments'] ?? [] as $segment)
-                        <li>{{ $segment['name'] }} ({{ $segment['kind'] }}) · base {{ sprintf('0x%x', $segment['base_address']) }} · {{ $segment['length'] }} bytes @if($segment['file_offset'] !== null)· file offset {{ sprintf('0x%x', $segment['file_offset']) }}@else· no file offset (rebuilt from records)@endif</li>
+                        <li>{{ $segment['name'] }} ({{ $segment['kind'] }}) · base @if(($segment['base_address'] ?? null) !== null){{ sprintf('0x%x', $segment['base_address']) }}@else—@endif · {{ $segment['length'] }} bytes @if(($segment['file_offset'] ?? null) !== null)· file offset {{ sprintf('0x%x', $segment['file_offset']) }}@else· no file offset (rebuilt from records)@endif</li>
                     @endforeach
                 </ul>
             </section>
@@ -85,8 +85,8 @@
 
             @foreach($evidence['disassembly']['windows'] ?? [] as $window)
                 <section class="mt-6 rounded-xl border border-zinc-200 bg-white p-6">
-                    <h2 class="font-semibold">Disassembly: {{ $window['segment'] }}</h2>
-                    <p class="mt-1 text-xs text-zinc-500">Base {{ sprintf('0x%x', $window['base_address']) }}@if($window['file_offset'] !== null) · file offset {{ sprintf('0x%x', $window['file_offset']) }}@endif @if($window['truncated'])· <span class="font-semibold text-amber-700">truncated by output budget</span>@endif</p>
+                    <h2 class="font-semibold">Disassembly: {{ $window['segment'] ?? $window['name'] ?? 'output' }}</h2>
+                    <p class="mt-1 text-xs text-zinc-500">Base @if(($window['base_address'] ?? null) !== null){{ sprintf('0x%x', $window['base_address']) }}@else—@endif @if(($window['file_offset'] ?? null) !== null)· file offset {{ sprintf('0x%x', $window['file_offset']) }}@endif @if($window['truncated'])· <span class="font-semibold text-amber-700">truncated by output budget</span>@endif</p>
                     <div class="mt-2 max-h-[32rem] overflow-auto rounded-lg bg-zinc-950 p-3">
                         <table class="w-full border-collapse font-mono text-xs text-zinc-200">
                             <thead><tr class="text-left text-zinc-500"><th class="pr-3 font-semibold">Address</th><th class="pr-3 font-semibold">File&nbsp;off</th><th class="pr-3 font-semibold">Bytes</th><th class="font-semibold">Instruction</th></tr></thead>
@@ -94,7 +94,7 @@
                                 @foreach($window['lines'] as $line)
                                     <tr id="addr-{{ dechex($line['address']) }}" class="scroll-mt-24 border-t border-zinc-800">
                                         <td class="py-0.5 pr-3 text-emerald-400">{{ sprintf('0x%x', $line['address']) }}</td>
-                                        <td class="py-0.5 pr-3 text-zinc-500">{{ sprintf('0x%x', $line['offset']) }}</td>
+                                        <td class="py-0.5 pr-3 text-zinc-500">@if(($line['offset'] ?? null) !== null){{ sprintf('0x%x', $line['offset']) }}@else—@endif</td>
                                         <td class="py-0.5 pr-3 text-zinc-400">{{ $line['bytes'] }}</td>
                                         <td class="py-0.5">{{ $line['text'] }}</td>
                                     </tr>
@@ -104,6 +104,50 @@
                     </div>
                 </section>
             @endforeach
+
+            @if(! empty($evidence['decompilation']['functions'] ?? []))
+                <section class="mt-6 rounded-xl border border-zinc-200 bg-white p-6">
+                    <h2 class="font-semibold">Decompilation ({{ count($evidence['decompilation']['functions']) }} functions)@if($evidence['decompilation']['truncated'] ?? false) · <span class="font-semibold text-amber-700">truncated by output budget</span>@endif</h2>
+                    <p class="mt-1 text-xs text-zinc-500">Tool-generated pseudocode — tentative, possibly wrong. Never original source.</p>
+                    @foreach(array_slice($evidence['decompilation']['functions'], 0, 20) as $fn)
+                        <details class="mt-2 rounded-lg border border-zinc-200">
+                            <summary class="cursor-pointer px-3 py-2 font-mono text-xs font-semibold">{{ $fn['name'] }} · {{ sprintf('0x%x', $fn['address']) }}</summary>
+                            <pre class="overflow-auto border-t border-zinc-200 bg-zinc-950 p-3 font-mono text-xs text-zinc-200">@if(isset($fn['c'])){{ $fn['c'] }}@else<span class="text-amber-400">No pseudocode: {{ $fn['error'] ?? 'unknown' }}</span>@endif</pre>
+                        </details>
+                    @endforeach
+                </section>
+            @endif
+
+            @if(! empty($evidence['reconstruction']['files'] ?? []))
+                <section class="mt-6 rounded-xl border border-zinc-200 bg-white p-6">
+                    <h2 class="font-semibold">Reconstruction ({{ count($evidence['reconstruction']['files']) }} files)@if($evidence['reconstruction']['truncated'] ?? false) · <span class="font-semibold text-amber-700">truncated by output budget</span>@endif</h2>
+                    <p class="mt-1 text-xs text-zinc-500">Java/C#-like reconstruction — never original source. Inline content only for small files.</p>
+                    <ul class="mt-2 max-h-96 space-y-1 overflow-y-auto font-mono text-xs">
+                        @foreach(array_slice($evidence['reconstruction']['files'], 0, 200) as $file)
+                            <li>{{ $file['path'] }} <span class="text-zinc-500">· {{ number_format($file['size']) }} bytes</span></li>
+                        @endforeach
+                    </ul>
+                </section>
+            @endif
+
+            @if(! empty($evidence['extraction']['files'] ?? []))
+                <section class="mt-6 rounded-xl border border-zinc-200 bg-white p-6">
+                    <h2 class="font-semibold">Extracted filesystem ({{ count($evidence['extraction']['files']) }} files, profile {{ $evidence['extraction']['profile'] ?? '?' }})@if($evidence['extraction']['truncated'] ?? false) · <span class="font-semibold text-amber-700">truncated by output budget</span>@endif</h2>
+                    @if(! empty($evidence['extraction']['promoted'] ?? []))
+                        <p class="mt-1 text-xs text-zinc-500">Promoted to child artifacts for CPU analysis:</p>
+                        <ul class="mt-1 space-y-1 font-mono text-xs">
+                            @foreach($evidence['extraction']['promoted'] as $promoted)
+                                <li>{{ $promoted['path'] }} → <a href="{{ route('projects.artifacts.show', [$project, $promoted['artifact_id']]) }}" class="font-semibold text-emerald-700 hover:underline">artifact #{{ $promoted['artifact_id'] }}</a></li>
+                            @endforeach
+                        </ul>
+                    @endif
+                    <ul class="mt-2 max-h-96 space-y-1 overflow-y-auto font-mono text-xs">
+                        @foreach(array_slice($evidence['extraction']['files'], 0, 200) as $file)
+                            <li>{{ $file['path'] }} <span class="text-zinc-500">· {{ number_format($file['size']) }} bytes</span></li>
+                        @endforeach
+                    </ul>
+                </section>
+            @endif
 
             @if(! empty($evidence['vectors']))
                 <section class="mt-6 rounded-xl border border-zinc-200 bg-white p-6">

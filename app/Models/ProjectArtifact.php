@@ -54,6 +54,8 @@ class ProjectArtifact extends Model
 
     public const FORMAT_ARCHIVE = 'archive';
 
+    public const FORMAT_FILESYSTEM = 'filesystem';
+
     public const FORMAT_RAW = 'raw';
 
     public const FORMAT_UNKNOWN = 'unknown';

@@ -35,7 +35,7 @@ final class ArtifactUploadService
         $size = $file->getSize() ?? 0;
 
         if (! $file->isValid()) {
-            return ['ok' => false, 'error' => 'The upload did not complete. Try again with a smaller file.'];
+            return ['ok' => false, 'error' => 'The upload did not complete. Try again.'];
         }
 
         if ($size <= 0) {
@@ -51,13 +51,21 @@ final class ArtifactUploadService
             return ['ok' => false, 'error' => 'This project already stores the maximum number of artifacts. Delete an old one before uploading.'];
         }
 
-        $bytes = @file_get_contents($file->getRealPath());
-        if ($bytes === false || strlen($bytes) !== $size) {
+        $realPath = $file->getRealPath();
+        $sha256 = @hash_file('sha256', $realPath);
+        if ($sha256 === false || ($actual = @filesize($realPath)) === false || $actual !== $size) {
             return ['ok' => false, 'error' => 'The uploaded file could not be read. Try uploading it again.'];
         }
 
-        $sha256 = hash('sha256', $bytes);
+        // Single necessary in-memory pass: format detection needs
+        // arbitrary offsets (PE headers, ZIP central directory). Hashing
+        // and storage stream, so peak memory stays near one copy.
+        $bytes = @file_get_contents($realPath);
+        if ($bytes === false || strlen($bytes) !== $size) {
+            return ['ok' => false, 'error' => 'The uploaded file could not be read. Try uploading it again.'];
+        }
         $format = ArtifactExtractor::detect($bytes, $file->getClientOriginalName());
+        unset($bytes);
 
         // Unrecognized bytes are rejected by default: only an explicit
         // raw-image declaration turns them into a needs-configuration
@@ -94,7 +102,29 @@ final class ArtifactUploadService
             'state' => ProjectArtifact::STATE_QUEUED,
         ]);
 
-        Storage::disk('artifacts')->put($artifact->rawPath(), $bytes);
+        $stream = @fopen($realPath, 'rb');
+        if ($stream === false) {
+            $artifact->delete();
+            return ['ok' => false, 'error' => 'The uploaded file could not be read. Try uploading it again.'];
+        }
+        try {
+            Storage::disk('artifacts')->put($artifact->rawPath(), $stream);
+        } catch (\Throwable) {
+            Storage::disk('artifacts')->delete($artifact->rawPath());
+            $artifact->delete();
+            return ['ok' => false, 'error' => 'The uploaded file could not be stored. Try uploading it again.'];
+        } finally {
+            if (is_resource($stream)) {
+                fclose($stream);
+            }
+        }
+        unset($stream);
+
+        if (Storage::disk('artifacts')->size($artifact->rawPath()) !== $size) {
+            Storage::disk('artifacts')->delete($artifact->rawPath());
+            $artifact->delete();
+            return ['ok' => false, 'error' => 'The uploaded file was stored incompletely. Try uploading it again.'];
+        }
 
         ExtractArtifactJob::dispatch($artifact->id);
 
@@ -104,11 +134,11 @@ final class ArtifactUploadService
     public static function humanBytes(int $bytes): string
     {
         if ($bytes >= 1024 * 1024) {
-            return number_format($bytes / (1024 * 1024), 1).' MB';
+            return number_format($bytes / (1024 * 1024), 1).' MiB';
         }
 
         if ($bytes >= 1024) {
-            return number_format($bytes / 1024, 0).' KB';
+            return number_format($bytes / 1024, 0).' KiB';
         }
 
         return $bytes.' bytes';

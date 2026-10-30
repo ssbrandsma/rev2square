@@ -30,6 +30,24 @@ final class TargetResolver
             return ['ok' => false, 'errors' => ['Unknown processor target “'.$requested.'”. Choose one of: '.implode(', ', array_keys(Targets::all())).'.']];
         }
 
+        // Member analysis: the member is the subject, so archive-level
+        // structural candidates do not apply. The member's real format
+        // is detected from bytes at job time; dispatch validates what
+        // the snapshot already proves (existence, method, size).
+        $member = is_string($input['member'] ?? null) && $input['member'] !== '' ? $input['member'] : null;
+        $memberSize = null;
+        if ($format === ProjectArtifact::FORMAT_ARCHIVE && $member !== null) {
+            $checked = self::checkMember($member, $snapshot);
+            if (! ($checked['ok'] ?? false)) {
+                return ['ok' => false, 'errors' => [$checked['error']]];
+            }
+            $memberSize = $checked['size'];
+            $structural = null;
+        }
+        if ($format === ProjectArtifact::FORMAT_ARCHIVE && $member === null && $structural === null) {
+            return ['ok' => false, 'errors' => ['This archive has no whole-file processor target. Select the archive member to analyze, plus its exact processor target.']];
+        }
+
         // Raw images and address-only formats have no structural
         // target: the user must supply one (no silent default).
         $needsTarget = $structural === null;
@@ -50,6 +68,9 @@ final class TargetResolver
         $source = $requested !== null && $structural !== null && $requested !== $structural['id'] ? 'override' : ($requested !== null && $structural === null ? 'user_config' : $structural['source']);
 
         $config = ['target' => $target, 'source' => $source];
+        if ($member !== null) {
+            $config['member'] = $member;
+        }
         if ($source === 'override' || $source === 'user_config') {
             $config['configured_by'] = $author?->id;
             $config['configured_at'] = now()->toIso8601String();
@@ -87,16 +108,16 @@ final class TargetResolver
             $config['platform'] = $platform;
         }
 
-        // Range validation against the image.
-        $byteSize = (int) $artifact->byte_size;
-        if (isset($config['base_address']) && $format === ProjectArtifact::FORMAT_RAW) {
+        // Range validation against the image (or member) size.
+        $byteSize = $memberSize ?? (int) $artifact->byte_size;
+        if (isset($config['base_address']) && ($format === ProjectArtifact::FORMAT_RAW || $member !== null)) {
             $bits = Targets::get($target)['bits'];
             $max = $bits >= 64 ? PHP_INT_MAX : ((1 << $bits) - 1);
             if ($max < $config['base_address'] + $byteSize - 1) {
                 return ['ok' => false, 'errors' => ['Base address plus image size exceeds the '.$bits.'-bit address space.']];
             }
         }
-        if (isset($config['entry']) && $format === ProjectArtifact::FORMAT_RAW && isset($config['base_address'])) {
+        if (isset($config['entry']) && ($format === ProjectArtifact::FORMAT_RAW || $member !== null) && isset($config['base_address'])) {
             if ($config['entry'] < $config['base_address'] || $config['entry'] >= $config['base_address'] + $byteSize) {
                 return ['ok' => false, 'errors' => ['Entry address lies outside the mapped image range.']];
             }
@@ -114,11 +135,49 @@ final class TargetResolver
     }
 
     /**
+     * Dispatch-time member check against the extraction snapshot.
+     * The job re-validates against the live central directory —
+     * snapshots can be stale, and dispatch must never be trusted.
+     *
+     * @param  array<string, mixed>  $snapshot
+     * @return array{ok: bool, size?: int, error?: string}
+     */
+    public static function checkMember(string $member, array $snapshot): array
+    {
+        $found = null;
+        foreach (($snapshot['data']['members'] ?? []) as $entry) {
+            if (($entry['name'] ?? null) === $member) {
+                $found = $entry;
+                break;
+            }
+        }
+        if ($found === null) {
+            return ['ok' => false, 'error' => 'Archive member “'.$member.'” is not listed in this archive. Pick one from the member list.'];
+        }
+        if (! empty($found['encrypted'])) {
+            return ['ok' => false, 'error' => 'Archive member “'.$member.'” is encrypted. Decrypt it before analysis.'];
+        }
+        if (! in_array($found['method'] ?? null, ['stored', 'deflated'], true)) {
+            return ['ok' => false, 'error' => 'Archive member “'.$member.'” uses an unsupported compression method.'];
+        }
+        $size = (int) ($found['size'] ?? 0);
+        if ($size <= 0) {
+            return ['ok' => false, 'error' => 'Archive member “'.$member.'” is empty. There is nothing to analyze.'];
+        }
+        $cap = (int) config('artifacts.binary_max_archive_member_bytes', 32 * 1024 * 1024);
+        if ($size > $cap) {
+            return ['ok' => false, 'error' => 'Archive member “'.$member.'” ('.number_format($size).' bytes) exceeds the analysis staging cap ('.number_format($cap).' bytes).'];
+        }
+
+        return ['ok' => true, 'size' => $size];
+    }
+
+    /**
      * Overrides that stay within the same architecture family are
      * allowed (ARM state vs Thumb state); cross-architecture swaps
      * are rejected.
      */
-    private static function compatibleOverride(string $format, string $structural, string $requested): bool
+    public static function compatibleOverride(string $format, string $structural, string $requested): bool
     {
         $pair = [$structural, $requested];
         sort($pair);

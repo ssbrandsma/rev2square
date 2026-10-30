@@ -508,7 +508,7 @@ Conservative production defaults (verified in the images, not tuned):
 
 | Consumer | Setting | Idle RSS (reference) |
 |---|---|---|
-| php-fpm pool | dynamic, max 5 children, 128 MB PHP limit | ~45 MB |
+| php-fpm pool | dynamic, max 5 children, 256 MB PHP limit | ~45 MB |
 | queue worker | 1 process, `--sleep=3`, hourly recycle | ~35 MB |
 | scheduler | 1 `schedule:work` process | ~35 MB |
 | nginx | stock + static assets | ~15 MB |
@@ -530,6 +530,15 @@ default single file — rotate host-side if the demo generates volume.
 
 Watch: `docker stats --no-stream`, `./docker/ops/status.sh --variant
 virtualmin` (disk + DB size), host `free -m`, `./backups/` growth.
+
+Research-artifact upload path (all four must agree): 64 MiB per file in
+Laravel (`artifacts.max_upload_bytes`, admin-tunable), PHP
+`upload_max_filesize 65M` / `post_max_size 80M`
+(`docker/php/conf.d-uploads.ini`), nginx `client_max_body_size 80m`
+(`docker/nginx/default.prod.conf`), and no `LimitRequestBody` below
+83886080 bytes in the Virtualmin Apache templates (default 0 =
+unlimited). Aggregate batches are bounded at ~80 MiB: at most 5 files
+per request, large files one at a time.
 
 ## 19. Known limitations
 

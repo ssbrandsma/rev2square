@@ -8,6 +8,7 @@ use App\Services\Admin\Permissions;
 use App\Services\AI\AIProviderInterface;
 use App\Services\AI\MetaAIProvider;
 use App\Services\AI\MeteredAIProvider;
+use App\Services\Binary\Sandbox\SpoolClient;
 use App\Services\GitHub\ArchiveDownloader;
 use App\Services\GitHub\GitHubClient;
 use App\Services\Revival\ArchiveRepositoryImporter;
@@ -38,6 +39,10 @@ class AppServiceProvider extends ServiceProvider
             $app->make(EvidenceManifestBuilder::class),
         ));
         $this->app->singleton(MetaAIProvider::class, fn () => MetaAIProvider::fromConfig());
+        // Coordinator side of the analysis spool. Tests swap this
+        // binding for a spool fake; production always uses the real
+        // file-based client (there is no mock mode outside tests).
+        $this->app->singleton(SpoolClient::class, fn () => SpoolClient::fromConfig());
         $this->app->bind(AIProviderInterface::class, function () {
             if (config('ai.default') === 'mock') {
                 if (! class_exists(MockAIProvider::class)) {

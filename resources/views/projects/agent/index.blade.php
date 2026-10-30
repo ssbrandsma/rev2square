@@ -44,7 +44,7 @@
                 Upload executables (ELF, Windows PE, Mach-O), Android apps (APK/DEX), Java classes, firmware
                 (Intel HEX, S-record, C64 PRG), archives, or network captures (PCAP/PCAPNG).
                 Formats are detected from file contents, not extensions.
-                Limit {{ number_format($maxBytes / 1024 / 1024, 0) }} MB per file, up to 5 files per upload.
+                Limit {{ number_format($maxBytes / 1024 / 1024, 0) }} MiB per file, up to 5 files per upload. Batches are capped at about 80 MiB total — upload large files one at a time.
             </p>
             <p class="mt-2 max-w-[70ch] rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
                 Captures and firmware may contain credentials, tokens, cookies, private keys, and personal data.
@@ -52,12 +52,14 @@
                 AI provider — and only after your explicit confirmation below.
             </p>
 
-            <form method="POST" action="{{ route('projects.artifacts.store', $project) }}" enctype="multipart/form-data" class="mt-4 border-t border-zinc-100 pt-4">
+            {{-- data-batch-bytes must match post_max_size / client_max_body_size (80M). --}}
+            <form method="POST" action="{{ route('projects.artifacts.store', $project) }}" enctype="multipart/form-data" class="mt-4 border-t border-zinc-100 pt-4" data-upload-guard data-per-file-bytes="{{ $maxBytes }}" data-batch-bytes="83886080">
                 @csrf
                 <label for="artifact-files" class="text-sm font-semibold">1. Upload files</label>
                 <input id="artifact-files" name="files[]" type="file" multiple required
                     accept=".elf,.bin,.fw,.pcap,.pcapng,.cap,.exe,.dll,.so,.dylib,.apk,.dex,.class,.jar,.hex,.srec,.s19,.prg,.zip"
                     class="mt-1 block w-full text-sm text-zinc-700 file:mr-3 file:rounded-lg file:border file:border-zinc-300 file:bg-zinc-50 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-zinc-700 hover:file:bg-zinc-100" />
+                <p class="mt-1 hidden text-sm text-red-700" role="alert" data-upload-error></p>
                 @error('files')
                     <p class="mt-1 text-sm text-red-700">{{ $message }}</p>
                 @enderror
@@ -65,8 +67,97 @@
                     <input type="checkbox" name="as_raw" value="1" class="mt-0.5 rounded border-zinc-300" />
                     <span>Treat unrecognized files as raw binary images (headerless ROM/flash dumps I will configure with a processor and base address on the file page).</span>
                 </label>
-                <button type="submit" class="mt-3 rounded-lg border border-zinc-300 px-4 py-2 text-sm font-semibold text-zinc-700 hover:bg-zinc-50">Upload</button>
+                <button type="submit" data-upload-submit class="mt-3 rounded-lg border border-zinc-300 px-4 py-2 text-sm font-semibold text-zinc-700 hover:bg-zinc-50">Upload</button>
+                <div class="mt-3 hidden" data-upload-progress-wrap aria-live="polite">
+                    <div class="flex items-baseline justify-between text-sm">
+                        <span class="font-semibold text-zinc-700">Uploading…</span>
+                        <span class="text-zinc-600" data-upload-progress-text>0%</span>
+                    </div>
+                    <progress class="mt-1 h-2 w-full accent-emerald-600" max="100" value="0" data-upload-progress>0%</progress>
+                </div>
             </form>
+            <script>
+                // Client-side guard + upload progress. The server re-checks
+                // every file; without JS this degrades to a plain form POST.
+                (function () {
+                    var form = document.querySelector('[data-upload-guard]');
+                    if (!form) return;
+                    var input = document.getElementById('artifact-files');
+                    var box = form.querySelector('[data-upload-error]');
+                    var submit = form.querySelector('[data-upload-submit]');
+                    var wrap = form.querySelector('[data-upload-progress-wrap]');
+                    var bar = form.querySelector('[data-upload-progress]');
+                    var label = form.querySelector('[data-upload-progress-text]');
+
+                    function mib(bytes) {
+                        return (bytes / 1024 / 1024).toFixed(1) + ' MiB';
+                    }
+
+                    function fail(message) {
+                        box.textContent = message;
+                        box.classList.remove('hidden');
+                        wrap.classList.add('hidden');
+                        submit.disabled = false;
+                        submit.textContent = 'Upload';
+                    }
+
+                    form.addEventListener('submit', function (e) {
+                        var perFile = parseInt(form.dataset.perFileBytes, 10);
+                        var batch = parseInt(form.dataset.batchBytes, 10);
+                        var total = 0;
+                        for (var i = 0; i < input.files.length; i++) {
+                            if (input.files[i].size > perFile) {
+                                box.textContent = input.files[i].name + ' is larger than the per-file limit. Narrow the capture or split the input and try again.';
+                                box.classList.remove('hidden');
+                                e.preventDefault();
+                                return;
+                            }
+                            total += input.files[i].size;
+                        }
+                        if (total > batch) {
+                            box.textContent = 'This batch is larger than the total request limit. Upload large files one at a time.';
+                            box.classList.remove('hidden');
+                            e.preventDefault();
+                            return;
+                        }
+                        box.classList.add('hidden');
+                        if (!('XMLHttpRequest' in window) || !('upload' in new XMLHttpRequest())) return;
+                        e.preventDefault();
+                        submit.disabled = true;
+                        submit.textContent = 'Uploading…';
+                        wrap.classList.remove('hidden');
+                        bar.value = 0;
+                        label.textContent = '0%';
+                        var xhr = new XMLHttpRequest();
+                        xhr.open('POST', form.action, true);
+                        xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest');
+                        xhr.upload.onprogress = function (ev) {
+                            if (!ev.lengthComputable) return;
+                            var pct = Math.round((ev.loaded / ev.total) * 100);
+                            bar.value = pct;
+                            bar.textContent = pct + '%';
+                            label.textContent = pct + '% · ' + mib(ev.loaded) + ' of ' + mib(ev.total);
+                        };
+                        xhr.onload = function () {
+                            if (xhr.status >= 200 && xhr.status < 300) {
+                                label.textContent = 'Done — loading results…';
+                                bar.value = 100;
+                                window.location.href = xhr.responseURL || form.action;
+                                return;
+                            }
+                            if (xhr.status === 413) {
+                                fail('The server rejected this upload as too large (HTTP 413). Upload large files one at a time.');
+                                return;
+                            }
+                            fail('The upload failed (HTTP ' + xhr.status + '). Nothing was stored — try again.');
+                        };
+                        xhr.onerror = function () {
+                            fail('The upload was interrupted before it completed. Nothing was stored — try again.');
+                        };
+                        xhr.send(new FormData(form));
+                    });
+                })();
+            </script>
 
             <form method="POST" action="{{ route('projects.agent.investigate', $project) }}" class="mt-4 border-t border-zinc-100 pt-4">
                 @csrf

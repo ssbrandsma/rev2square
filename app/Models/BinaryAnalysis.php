@@ -33,6 +33,7 @@ class BinaryAnalysis extends Model
     public const RETRYABLE_ERRORS = [
         'resource_exhausted',
         'backend_crash',
+        'backend_timeout',
         'environmental',
         'job_failed',
         'cancelled_race',

@@ -95,6 +95,90 @@ final class BinaryFixtures
             .hex2bin('744222'); // f0008: MOV A,#$42 ; RETI
     }
 
+    /** x86-64: frame setup, CALL +2, epilogue; callee at +11. */
+    public static function codeX86_64(): string
+    {
+        return hex2bin('554889e5') // push rbp ; mov rbp,rsp
+            .hex2bin('e802000000') // call +2 -> +11
+            .hex2bin('5dc3') // pop rbp ; ret
+            .hex2bin('555dc3'); // +11: push rbp ; pop rbp ; ret
+    }
+
+    /** x86-32: frame setup, CALL +2, epilogue; callee at +10. */
+    public static function codeX86(): string
+    {
+        return hex2bin('5589e5') // push ebp ; mov ebp,esp
+            .hex2bin('e802000000') // call +2 -> +10
+            .hex2bin('5dc3') // pop ebp ; ret
+            .hex2bin('555dc3'); // +10: push ebp ; pop ebp ; ret
+    }
+
+    /** A32: MOV, BL +0 (-> +12), BX LR; callee MOVW-ish + BX LR. */
+    public static function codeArm32(): string
+    {
+        return hex2bin('0100a0e3') // mov r0, #1
+            .hex2bin('000000eb') // bl +0 -> +12
+            .hex2bin('1eff2fe1') // bx lr
+            .hex2bin('0104a0e3') // +12: mov r0, #0x1000000
+            .hex2bin('1eff2fe1'); // bx lr
+    }
+
+    /** T32: MOVS, BL (-> +8), BX LR; callee MOVS + BX LR. */
+    public static function codeThumb(): string
+    {
+        return hex2bin('0120') // movs r0, #1
+            .hex2bin('00f001f8') // bl -> +8
+            .hex2bin('7047') // bx lr
+            .hex2bin('0220') // +8: movs r0, #2
+            .hex2bin('7047'); // bx lr
+    }
+
+    // ---------- ELF ----------
+
+    /**
+     * Minimal little-endian ELF64: one LOAD program header, one
+     * executable .text section holding $code at $vaddr, entry at the
+     * section start unless $entry is given.
+     */
+    public static function elf64(int $machine, string $code, int $vaddr = 0x400000, ?int $entry = null): string
+    {
+        $entry ??= $vaddr;
+        $codeOff = 64 + 56;
+        $strtab = "\0.text\0.shstrtab\0";
+        $strOff = $codeOff + strlen($code);
+        $shoff = (int) (ceil(($strOff + strlen($strtab)) / 8) * 8);
+
+        $ehdr = "\x7fELF\x02\x01\x01\x00".str_repeat("\0", 8)
+            .pack('vvVPPPVvvvvvv', 2, $machine, 1, $entry, 64, $shoff, 0, 64, 56, 1, 64, 3, 2);
+        $phdr = pack('VVPPPPPP', 1, 5, $codeOff, $vaddr, $vaddr, strlen($code), strlen($code), 0x1000);
+        $null = str_repeat("\0", 64);
+        $text = pack('VVPPPPVVPP', 1, 1, 6, $vaddr, $codeOff, strlen($code), 0, 0, 16, 0);
+        $str = pack('VVPPPPVVPP', 7, 3, 0, 0, $strOff, strlen($strtab), 0, 0, 1, 0);
+
+        return $ehdr.$phdr.$code.$strtab.str_repeat("\0", $shoff - $strOff - strlen($strtab)).$null.$text.$str;
+    }
+
+    /**
+     * Minimal little-endian ELF32: same shape as elf64, 32-bit headers.
+     */
+    public static function elf32(int $machine, string $code, int $vaddr = 0x10000, ?int $entry = null): string
+    {
+        $entry ??= $vaddr;
+        $codeOff = 52 + 32;
+        $strtab = "\0.text\0.shstrtab\0";
+        $strOff = $codeOff + strlen($code);
+        $shoff = (int) (ceil(($strOff + strlen($strtab)) / 4) * 4);
+
+        $ehdr = "\x7fELF\x01\x01\x01\x00".str_repeat("\0", 8)
+            .pack('vvVVVVVvvvvvv', 2, $machine, 1, $entry, 52, $shoff, 0, 52, 32, 1, 40, 3, 2);
+        $phdr = pack('VVVVVVVV', 1, 5, $codeOff, $vaddr, $vaddr, strlen($code), strlen($code), 0x1000);
+        $null = str_repeat("\0", 40);
+        $text = pack('VVVVVVVVVV', 1, 1, 6, $vaddr, $codeOff, strlen($code), 0, 0, 16, 0);
+        $str = pack('VVVVVVVVVV', 7, 3, 0, 0, $strOff, strlen($strtab), 0, 0, 1, 0);
+
+        return $ehdr.$phdr.$code.$strtab.str_repeat("\0", $shoff - $strOff - strlen($strtab)).$null.$text.$str;
+    }
+
     // ---------- Windows PE ----------
 
     /**
@@ -359,11 +443,22 @@ final class BinaryFixtures
 
     public static function zip(array $members = ['docs/readme.txt' => 'hello']): string
     {
+        return self::zipWithMethod($members, \ZipArchive::CM_DEFAULT);
+    }
+
+    public static function zipStored(array $members = ['docs/readme.txt' => 'hello']): string
+    {
+        return self::zipWithMethod($members, \ZipArchive::CM_STORE);
+    }
+
+    private static function zipWithMethod(array $members, int $method): string
+    {
         $tmp = tempnam(sys_get_temp_dir(), 'zip');
         $zip = new \ZipArchive;
         $zip->open($tmp, \ZipArchive::OVERWRITE | \ZipArchive::CREATE);
         foreach ($members as $name => $content) {
             $zip->addFromString($name, $content);
+            $zip->setCompressionName($name, $method);
         }
         $zip->close();
 

@@ -34,7 +34,7 @@
                             <td class="whitespace-nowrap px-4 py-3 font-mono text-xs">{{ $event->created_at->format('Y-m-d H:i') }}<br /><span class="text-zinc-400">{{ $event->correlation_id }}</span></td>
                             <td class="px-4 py-3 text-xs">{{ $event->actor?->email ?? 'console' }}</td>
                             <td class="px-4 py-3 font-mono text-xs">{{ $event->action }} <span class="text-zinc-500">({{ $event->outcome }})</span></td>
-                            <td class="px-4 py-3 font-mono text-xs">{{ $event->target_type ? class_basename($event->target_type).' #'.$event->target_id : '—' }}</td>
+                            <td class="px-4 py-3 font-mono text-xs">@if($event->targetAdminUrl())<a href="{{ $event->targetAdminUrl() }}" class="font-semibold text-emerald-700">{{ class_basename($event->target_type).' #'.$event->target_id }}</a>@else{{ $event->target_type ? class_basename($event->target_type).' #'.$event->target_id : '—' }}@endif</td>
                             <td class="max-w-64 px-4 py-3 text-xs">{{ $event->reason ?? '—' }}</td>
                             <td class="max-w-80 px-4 py-3 font-mono text-xs">
                                 @if($event->before || $event->after)

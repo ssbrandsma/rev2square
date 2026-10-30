@@ -10,6 +10,7 @@ services:
       dockerfile: docker/php/Dockerfile
     volumes:
       - .:/var/www
+      - ./docker/php/conf.d-uploads.ini:/usr/local/etc/php/conf.d/uploads.ini:ro
     depends_on:
       db:
         condition: service_healthy
@@ -49,6 +50,7 @@ services:
     command: ["php", "artisan", "queue:work", "--sleep=3", "--tries=3", "--max-time=3600"]
     volumes:
       - .:/var/www
+      - ./docker/php/conf.d-uploads.ini:/usr/local/etc/php/conf.d/uploads.ini:ro
     depends_on:
       db:
         condition: service_healthy
@@ -62,6 +64,7 @@ services:
     command: ["php", "artisan", "schedule:work"]
     volumes:
       - .:/var/www
+      - ./docker/php/conf.d-uploads.ini:/usr/local/etc/php/conf.d/uploads.ini:ro
     depends_on:
       db:
         condition: service_healthy
@@ -86,5 +89,150 @@ services:
     volumes:
       - .:/var/www
 
+  # Restricted analysis coordinator: serves ONLY the 'analysis' queue
+  # on the 'analysis-database' connection. Its environment is an
+  # explicit allowlist (DB + framework basics) — no APP_KEY, no mail,
+  # no AI credentials — and the bind-mounted repo .env is masked by a
+  # minimal non-secret env file so secrets cannot leak in via file.
+  analysis-coordinator:
+    build:
+      context: .
+      dockerfile: docker/php/Dockerfile
+    restart: unless-stopped
+    command: ["php", "artisan", "queue:work", "analysis-database", "--queue=analysis", "--sleep=3", "--tries=1", "--max-time=3600"]
+    volumes:
+      - .:/var/www
+      - ./docker/php/conf.d-uploads.ini:/usr/local/etc/php/conf.d/uploads.ini:ro
+      - ./docker/analysis/coordinator.env:/var/www/.env:ro
+      - analysis-spool:/spool
+      - analysis-results:/results
+    environment:
+      APP_NAME: ${APP_NAME:-Rev2Square}
+      APP_ENV: ${APP_ENV:-local}
+      LOG_CHANNEL: ${LOG_CHANNEL:-single}
+      LOG_LEVEL: ${LOG_LEVEL:-debug}
+      DB_CONNECTION: ${DB_CONNECTION:-mysql}
+      DB_HOST: ${DB_HOST:-db}
+      DB_PORT: ${DB_PORT:-3306}
+      DB_DATABASE: ${DB_DATABASE:-rev2square}
+      DB_USERNAME: ${DB_USERNAME:-root}
+      DB_PASSWORD: ${DB_PASSWORD:-secret}
+      QUEUE_CONNECTION: database
+      CACHE_STORE: database
+      FILESYSTEM_DISK: local
+      BINARY_SPOOL_DIR: /spool
+      BINARY_RESULTS_DIR: /results
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # Isolated tool runners: no network, read-only root, non-root user,
+  # read-only spool mount. One concurrent heavy job server-wide is
+  # enforced by the spool lock (see docker/analysis/runner.py).
+  # NOTE: the tool images ship ARM64 binaries; on x86 dev machines
+  # these services build but cannot run natively (documented).
+  objdump-runner:
+    build:
+      context: docker/analysis
+      dockerfile: Dockerfile.binutils
+    image: rev2square/binutils:2.40-2
+    restart: unless-stopped
+    user: "www-data"
+    network_mode: none
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /work
+    volumes:
+      - analysis-spool:/spool:ro
+      - analysis-results:/results
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  ghidra-runner:
+    build:
+      context: docker/analysis
+      dockerfile: Dockerfile.ghidra
+    image: rev2square/ghidra:12.2
+    restart: unless-stopped
+    user: "www-data"
+    network_mode: none
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /work
+      - /home/www-data
+    volumes:
+      - analysis-spool:/spool:ro
+      - analysis-results:/results
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  jadx-runner:
+    build:
+      context: docker/analysis
+      dockerfile: Dockerfile.jadx
+    image: rev2square/jadx:1.5.6
+    restart: unless-stopped
+    user: "www-data"
+    network_mode: none
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /work
+    volumes:
+      - analysis-spool:/spool:ro
+      - analysis-results:/results
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  ilspy-runner:
+    build:
+      context: docker/analysis
+      dockerfile: Dockerfile.ilspy
+    image: rev2square/ilspy:11.2.0.10050
+    restart: unless-stopped
+    user: "www-data"
+    network_mode: none
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /work
+    volumes:
+      - analysis-spool:/spool:ro
+      - analysis-results:/results
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  extract-runner:
+    build:
+      context: docker/analysis
+      dockerfile: Dockerfile.extract
+    image: rev2square/extract:1.0
+    restart: unless-stopped
+    user: "www-data"
+    network_mode: none
+    read_only: true
+    tmpfs:
+      - /tmp:size=512m
+      - /work:size=1g
+    volumes:
+      - analysis-spool:/spool:ro
+      - analysis-results:/results
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
 volumes:
   db-data:
+  analysis-spool:
+  analysis-results:

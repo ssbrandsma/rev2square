@@ -303,7 +303,13 @@
                             </p>
                             <p class="mt-0.5 font-mono text-xs text-zinc-500">{{ $row['target_source'] }}: {{ $row['note'] }}</p>
                             @if(! $row['available'])
-                                <p class="mt-1 text-xs text-amber-800">{{ $row['availability_reason'] }}</p>
+                                <p class="mt-1 text-xs text-amber-800">This container: {{ $row['availability_reason'] }}</p>
+                            @endif
+                            @if($row['adapter'] !== 'php-native')
+                                <p class="mt-1 text-xs @if($row['worker_verified']) text-zinc-500 @else text-amber-800 @endif">Worker: {{ $row['worker_note'] }}</p>
+                            @endif
+                            @if($row['requestable'])
+                                <p class="mt-1 text-xs font-semibold text-emerald-700">Queueable with this backend and target.</p>
                             @endif
                             <dl class="mt-1 grid grid-cols-2 gap-x-4 gap-y-0.5 font-mono text-xs sm:grid-cols-3">
                                 @foreach($row['capabilities'] as $cap => $level)
@@ -326,11 +332,22 @@
                 @endif
                 <form method="POST" action="{{ route('projects.artifacts.analyses.store', [$project, $artifact]) }}" class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
                     @csrf
+                    @if($artifact->format === 'archive')
+                        <label class="block text-sm sm:col-span-2">Archive member
+                            <select name="member" required class="mt-1 block w-full rounded-lg border border-zinc-300 px-2 py-1.5 font-mono text-sm">
+                                <option value="">— select a member —</option>
+                                @foreach($memberOptions as $memberOption)
+                                    <option value="{{ $memberOption['name'] }}" @selected(old('member') === $memberOption['name']) @disabled($memberOption['disabled'])>{{ $memberOption['label'] }}</option>
+                                @endforeach
+                            </select>
+                        </label>
+                        <p class="-mt-1 text-xs text-zinc-500 sm:col-span-2">One member per run. Its real format is detected from bytes; raw members also need a base address below.</p>
+                    @endif
                     <label class="block text-sm">Target
                         <select name="target" class="mt-1 block w-full rounded-lg border border-zinc-300 px-2 py-1.5 text-sm">
                             <option value="">— structural default —</option>
-                            @foreach($targets as $id => $info)
-                                <option value="{{ $id }}" @selected(old('target') === $id)>{{ $info['name'] }} ({{ $id }})</option>
+                            @foreach($targetOptions as $option)
+                                <option value="{{ $option['id'] }}" @selected(old('target') === $option['id']) @disabled(! $option['requestable']) title="{{ $option['reason'] }}">{{ $option['name'] }} ({{ $option['id'] }})@if(! $option['requestable']) — {{ $option['reason'] }}@endif</option>
                             @endforeach
                         </select>
                     </label>
@@ -347,6 +364,7 @@
                             <option value="c64" @selected(old('platform') === 'c64')>Commodore 64</option>
                         </select>
                     </label>
+                    <p class="text-xs text-zinc-500 sm:col-span-2">Disabled targets explain why inline; full per-capability levels (including honest decompilation availability) are in the table above. Raw members need a base address.</p>
                     <div class="sm:col-span-2">
                         <button type="submit" class="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500">Queue analysis</button>
                     </div>

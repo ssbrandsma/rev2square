@@ -8,7 +8,7 @@ final class AdapterRegistry
     /** @return list<BinaryAdapter> */
     public static function all(): array
     {
-        return [new PhpNativeAdapter, new GhidraAdapter, new JadxAdapter, new IlspyAdapter];
+        return [new PhpNativeAdapter, new ObjdumpAdapter, new GhidraAdapter, new JadxAdapter, new IlspyAdapter, new ExtractAdapter];
     }
 
     public static function get(string $id): ?BinaryAdapter

@@ -55,6 +55,14 @@ final class Permissions
                 'label' => 'Review community reports (dismiss / remove with reason)',
                 'roles' => [GlobalRole::Moderator, GlobalRole::Admin],
             ],
+            'admin.projects.view' => [
+                'label' => 'View the project directory and administrative project metadata',
+                'roles' => [GlobalRole::Admin],
+            ],
+            'admin.projects.transfer' => [
+                'label' => 'Transfer project ownership to an eligible user (audited, password-confirmed)',
+                'roles' => [GlobalRole::Admin],
+            ],
         ];
     }
 

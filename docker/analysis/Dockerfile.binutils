@@ -1,0 +1,54 @@
+# Rev2Square isolated objdump runner (Linux ARM64).
+#
+# Pinned: Debian bookworm binutils-multiarch 2.40-2 (APT-signed).
+# Provides the multiarch objdump whose exact architecture coverage is
+# discovered at build time (see /provenance/objdump-architectures.txt)
+# and qualified by the owner before new -m mappings route traffic.
+# License: GPL-3.0-or-later (GNU binutils).
+#
+# Build (owner, on the ARM64 server):
+#   docker build -f docker/analysis/Dockerfile.binutils \
+#     -t rev2square/binutils:2.40-2 docker/analysis
+ARG DEBIAN_IMAGE=debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3
+
+FROM ${DEBIAN_IMAGE}
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    OBJDUMP_BIN=/usr/bin/objdump \
+    OBJDUMP_MACHINES_FILE=/opt/objdump/machines.txt \
+    TOOL_IMAGE=rev2square/binutils:2.40-2
+
+LABEL org.rev2square.tool="objdump" \
+      org.rev2square.tool-version="2.40-2" \
+      org.rev2square.tool-source="Debian bookworm binutils-multiarch=2.40-2 (APT-signed Release)" \
+      org.rev2square.tool-license="GPL-3.0-or-later" \
+      org.rev2square.base-image="debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3"
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        binutils-multiarch=2.40-2 \
+        python3-minimal \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /opt/objdump /opt/runner /provenance
+
+COPY runner.py /opt/runner/runner.py
+
+# Verified -m allowlist: exactly the two mappings with checked-in
+# integration coverage. Extensions require a verified run first
+# (see GhidraAdapter/ObjdumpAdapter VERIFIED maps + owner protocol).
+RUN printf 'i386\ni386:x86-64\n' > /opt/objdump/machines.txt \
+    && objdump -i > /provenance/objdump-architectures.txt \
+    && objdump --version > /provenance/objdump-version.txt \
+    && python3 --version > /provenance/python-version.txt \
+    && grep -q '^  i386$' /provenance/objdump-architectures.txt \
+    && chmod 644 /opt/objdump/machines.txt /provenance/* \
+    && chmod 755 /opt/runner/runner.py \
+    # Runner self-check: dry-run must emit the exact allowlisted argv.
+    && python3 /opt/runner/runner.py --dry-run --tool objdump \
+        --profile auto --params-json '{}' --workdir /tmp/dry \
+        | grep -q '"-M", "intel"'
+
+USER www-data
+
+CMD ["python3", "/opt/runner/runner.py", "--tool", "objdump", \
+     "--spool", "/spool", "--results", "/results"]

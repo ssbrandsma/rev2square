@@ -31,7 +31,7 @@
                 <h2 class="font-semibold">AI access and usage</h2>
                 <dl class="mt-2 space-y-2 text-sm">
                     <div><dt class="text-zinc-500">AI access</dt><dd class="font-semibold">{{ $user->ai_enabled ? 'Enabled' : 'Disabled' }}@if($user->ai_unlimited) · unlimited (explicit exemption)@endif</dd></div>
-                    <div><dt class="text-zinc-500">Daily limits</dt><dd class="font-mono text-xs">{{ $user->ai_daily_request_limit ?? 'default' }} requests · {{ $user->ai_daily_token_limit !== null ? number_format($user->ai_daily_token_limit) : 'default' }} tokens</dd></div>
+                    <div><dt class="text-zinc-500">Daily limits</dt><dd class="font-mono text-xs">{{ $user->ai_daily_request_limit ?? 'default ('.$aiDefaults['requests'].')' }} requests · {{ $user->ai_daily_token_limit !== null ? number_format($user->ai_daily_token_limit) : 'default ('.number_format($aiDefaults['tokens']).')' }} tokens</dd></div>
                     <div><dt class="text-zinc-500">Today (UTC)</dt><dd class="font-mono text-xs">{{ $todayUsage['requests'] }} requests · {{ number_format($todayUsage['tokens']) }} tokens</dd></div>
                     <div><dt class="text-zinc-500">All time</dt><dd class="font-mono text-xs">{{ $totalUsage['requests'] }} requests · {{ number_format($totalUsage['tokens']) }} tokens</dd></div>
                 </dl>
@@ -45,7 +45,7 @@
                 <p class="mt-1 text-sm text-amber-900">This suspended account still owns {{ count($projectsNeedingAttention) }} project(s). Ownership is never transferred automatically — arrange new maintainers explicitly.</p>
                 <ul class="mt-2 list-inside list-disc text-sm text-amber-900">
                     @foreach($projectsNeedingAttention as $id => $title)
-                        <li>{{ $title }}</li>
+                        <li><a href="{{ route('admin.projects.show', $id) }}" class="font-semibold underline">{{ $title }}</a></li>
                     @endforeach
                 </ul>
             </section>
@@ -61,6 +61,12 @@
                 @endif
                 Requires recent password confirmation. There is deliberately no “log in as user” shortcut and no password viewing or setting here — use the normal password-reset flow.
             </p>
+            @if(! $user->isSuspended() && ! empty($ownedProjects))
+                <p class="mt-2 max-w-[70ch] text-sm font-semibold text-amber-900">This account owns {{ count($ownedProjects) }} project(s). Suspension preserves them — <a href="{{ route('admin.projects.index', ['q' => $user->email]) }}" class="underline">review them here</a> and transfer ownership explicitly if needed.</p>
+            @endif
+            @if($user->id === auth()->id() && ! $user->isSuspended())
+                <p class="mt-2 max-w-[70ch] rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-900">This is your own account. Suspending it revokes your sessions immediately.</p>
+            @endif
             <form method="POST" action="{{ $user->isSuspended() ? route('admin.users.reactivate', $user) : route('admin.users.suspend', $user) }}" class="mt-3 flex flex-col gap-2 sm:flex-row" onsubmit="return confirm('Confirm this account change?');">
                 @csrf
                 <label for="suspend-reason" class="sr-only">Internal reason</label>

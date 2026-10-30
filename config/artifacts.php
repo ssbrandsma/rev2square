@@ -9,8 +9,8 @@ return [
     // Master switch for upload investigation.
     'enabled' => (bool) env('ARTIFACTS_ENABLED', true),
 
-    // Single upload cap (bytes). Default 8 MiB.
-    'max_upload_bytes' => (int) env('ARTIFACTS_MAX_UPLOAD_BYTES', 8 * 1024 * 1024),
+    // Single upload cap (bytes). Default 64 MiB.
+    'max_upload_bytes' => (int) env('ARTIFACTS_MAX_UPLOAD_BYTES', 64 * 1024 * 1024),
 
     // Max stored artifacts per project (oldest failed rows may be
     // replaced; ready evidence is never auto-deleted).
@@ -58,10 +58,56 @@ return [
     // Wall-clock budget per analysis job (seconds).
     'binary_timeout_seconds' => (int) env('BINARY_ANALYSIS_TIMEOUT', 120),
 
+    // Max single archive member staged for analysis (bytes, expanded).
+    // Analysis sweep caps bound the actual work; this bounds staging.
+    'binary_max_archive_member_bytes' => (int) env('BINARY_MAX_ARCHIVE_MEMBER_BYTES', 32 * 1024 * 1024),
+
+    // Worker capability snapshots older than this refuse subprocess
+    // dispatch until refreshed (hourly scheduler + artisan command).
+    'binary_worker_snapshot_ttl_hours' => (int) env('BINARY_WORKER_SNAPSHOT_TTL_HOURS', 24),
+
     // Fixed external-backend paths. Empty = backend not installed.
     // These are read-only probes: the app never installs or downloads.
+    // NOTE: the *_bin paths below are legacy local-subprocess settings
+    // and no longer route traffic. Tool binaries live only inside the
+    // isolated runner images; the coordinator reaches them through the
+    // spool (see docs/analysis-spool-deployment.md).
     'ghidra_headless' => (string) env('GHIDRA_HEADLESS', ''),
     'jadx_bin' => (string) env('JADX_BIN', ''),
     'ilspy_bin' => (string) env('ILSPY_BIN', ''),
+    'objdump_bin' => (string) env('OBJDUMP_BIN', '/usr/bin/objdump'),
+
+    // objdump subprocess bounds (each run additionally respects the
+    // shared instruction/xref/evidence caps above).
+    'binary_objdump_timeout_seconds' => (int) env('BINARY_OBJDUMP_TIMEOUT', 60),
+    'binary_objdump_max_output_bytes' => (int) env('BINARY_OBJDUMP_MAX_OUTPUT_BYTES', 8 * 1024 * 1024),
+
+    // ---- Isolated analysis spool (coordinator <-> runner boundary) ----
+    //
+    // The coordinator writes job specs to the spool dir; isolated
+    // runner containers (read-only spool mount) execute them and write
+    // results to the results dir. In compose these are named volumes
+    // shared only between the coordinator and the runners.
+    'binary_spool_dir' => (string) env('BINARY_SPOOL_DIR', storage_path('app/analysis-spool')),
+    'binary_results_dir' => (string) env('BINARY_RESULTS_DIR', storage_path('app/analysis-results')),
+
+    // Wall-clock budget the runner enforces per sandboxed run
+    // (seconds). The queue job timeout is this plus a grace margin,
+    // and the analysis queue connection's retry_after must exceed the
+    // job timeout (see config/queue.php analysis-database).
+    'binary_spool_wall_seconds' => (int) env('BINARY_SPOOL_WALL_SECONDS', 480),
+
+    // Capability-probe round-trip budget per runner (seconds).
+    'binary_spool_probe_seconds' => (int) env('BINARY_SPOOL_PROBE_SECONDS', 10),
+
+    // Grace after the runner wall clock during which the coordinator
+    // keeps waiting for a terminal runner status before giving up.
+    'binary_spool_grace_seconds' => (int) env('BINARY_SPOOL_GRACE_SECONDS', 30),
+
+    // Dedicated queue + connection for deterministic analysis. NEVER
+    // run these jobs on the general-purpose workers: only the
+    // restricted analysis coordinator serves this queue.
+    'binary_analysis_queue' => (string) env('BINARY_ANALYSIS_QUEUE', 'analysis'),
+    'binary_analysis_connection' => (string) env('BINARY_ANALYSIS_CONNECTION', 'analysis-database'),
 
 ];

@@ -7,7 +7,7 @@
     <div class="mx-auto max-w-6xl px-4 py-10 sm:px-6">
         @include('admin._nav')
         <section class="mb-4 rounded-xl border border-zinc-200 bg-white p-4 text-sm sm:p-6">
-            <p>{{ $user->email }} · {{ $user->global_role->label() }} · {{ $user->account_status->label() }} · AI {{ $user->ai_enabled ? 'enabled' : 'disabled' }}@if($user->ai_unlimited) · unlimited exemption@endif</p>
+            <p>{{ $user->email }} · {{ $user->global_role->label() }} · {{ $user->account_status->label() }} · AI {{ $user->ai_enabled ? 'enabled' : 'disabled' }}{{ $user->ai_unlimited ? ' · unlimited exemption' : '' }}</p>
             <p class="mt-1"><span class="text-zinc-500">Attempts:</span> <span class="font-mono font-semibold">{{ $totals['requests'] }}</span>
             · <span class="text-zinc-500">tokens:</span> <span class="font-mono font-semibold">{{ number_format($totals['tokens']) }}</span>
             · <span class="text-zinc-500">cost:</span> <span class="font-mono font-semibold">{{ $totals['cost'] }}</span> <span class="text-zinc-500">(estimate; unknown when pricing is missing)</span></p>

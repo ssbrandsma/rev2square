@@ -59,7 +59,13 @@ final class LinearSweep
                 'bytes' => bin2hex(substr($bytes, $offset, $decoded['length'])),
                 'text' => $decoded['text'],
             ];
-            $instructions++;
+            // Fixed-width decoders emit uncovered words as kind=data so
+            // the sweep stays aligned; those count as data, not code.
+            if (($decoded['kind'] ?? 'code') === 'data') {
+                $dataBytes++;
+            } else {
+                $instructions++;
+            }
             if (isset($decoded['target']) && in_array($decoded['kind'], ['jump', 'call', 'branch'], true)) {
                 $xrefs[] = ['from' => $address, 'to' => $decoded['target'] & $mask, 'kind' => $decoded['kind']];
             }

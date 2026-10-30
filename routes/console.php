@@ -9,3 +9,5 @@ Artisan::command('inspire', function () {
 })->purpose('Display an inspiring quote');
 
 Schedule::command('revival:sweep-stuck-imports')->everyFiveMinutes();
+Schedule::job(new \App\Jobs\RefreshWorkerCapabilities)->hourly();
+Schedule::job(new \App\Jobs\PruneAnalysisSpool)->hourly();

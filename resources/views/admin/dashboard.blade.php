@@ -20,6 +20,9 @@
                         <li>{{ $warning }}</li>
                     @endforeach
                 </ul>
+                @if(($suspendedMaintainers ?? 0) > 0)
+                    <p class="mt-2 text-sm"><a href="{{ route('admin.projects.index', ['owner_status' => 'suspended']) }}" class="font-semibold text-amber-900 underline">Review projects with suspended owners →</a></p>
+                @endif
             </section>
         @endif
 

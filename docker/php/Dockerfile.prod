@@ -62,6 +62,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Production PHP defaults (display_errors off, log_errors on).
 RUN cp "$PHP_INI_DIR/php.ini-production" "$PHP_INI_DIR/php.ini"
 COPY docker/php/conf.d-opcache-prod.ini /usr/local/etc/php/conf.d/opcache-prod.ini
+COPY docker/php/conf.d-uploads.ini /usr/local/etc/php/conf.d/uploads.ini
 COPY docker/php/entrypoint-prod.sh /usr/local/bin/rev2-entrypoint-prod.sh
 RUN chmod +x /usr/local/bin/rev2-entrypoint-prod.sh
 

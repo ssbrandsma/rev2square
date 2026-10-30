@@ -109,6 +109,15 @@ final class FormatDetector
             return self::report(ProjectArtifact::FORMAT_PRG, $prg);
         }
 
+        // Read-only filesystem images (firmware payloads). Magic only —
+        // extraction happens in the isolated runner, never here.
+        $fs = self::filesystemFlavor($magic4);
+        if ($fs !== null) {
+            return self::report(ProjectArtifact::FORMAT_FILESYSTEM, [
+                ['magic', $fs.' magic '.bin2hex($magic4).' at file offset 0'],
+            ]);
+        }
+
         return self::report(ProjectArtifact::FORMAT_UNKNOWN, [
             ['no_recognized_magic', 'First bytes '.bin2hex(substr($bytes, 0, min(8, strlen($bytes)))).' match no supported container or executable magic'],
         ]);
@@ -148,6 +157,23 @@ final class FormatDetector
     public static function format(string $bytes, ?string $filename = null): string
     {
         return self::detect($bytes, $filename)['format'];
+    }
+
+    /**
+     * Filesystem flavor from the 4-byte magic, or null. CramFS and
+     * SquashFS magics come in endian pairs; UBI eraseblocks start with
+     * UBI#, bare UBIFS nodes with the 0x06101831 node magic.
+     */
+    public static function filesystemFlavor(string $magic4): ?string
+    {
+        return match ($magic4) {
+            "\x45\x3d\xcd\x28" => 'cramfs-le',
+            "\x28\xcd\x3d\x45" => 'cramfs-be',
+            'hsqs', 'sqsh', 'shsq', 'qshs' => 'squashfs',
+            'UBI#' => 'ubi',
+            "\x31\x18\x10\x06" => 'ubifs',
+            default => null,
+        };
     }
 
     /** @return array{format: string, evidence: list<array{claim: string, detail: string}>, warnings: list<string>} */

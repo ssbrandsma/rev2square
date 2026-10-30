@@ -1,0 +1,15 @@
+
+/tmp/codex86.bin:     file format binary
+
+
+Disassembly of section .data:
+
+00008000 <.data>:
+    8000:	55                   	push   ebp
+    8001:	89 e5                	mov    ebp,esp
+    8003:	e8 02 00 00 00       	call   0x800a
+    8008:	5d                   	pop    ebp
+    8009:	c3                   	ret
+    800a:	55                   	push   ebp
+    800b:	5d                   	pop    ebp
+    800c:	c3                   	ret

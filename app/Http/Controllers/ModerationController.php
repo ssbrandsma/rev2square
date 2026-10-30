@@ -47,7 +47,7 @@ class ModerationController extends Controller
 
     public function index(Project $project): View
     {
-        Gate::authorize('update', $project);
+        Gate::authorize('moderate', $project);
 
         $postIds = $project->discussionPosts()->withTrashed()->pluck('id');
         $messageIds = $project->chatMessages()->withTrashed()->pluck('id');
@@ -69,11 +69,7 @@ class ModerationController extends Controller
 
     public function review(Request $request, Project $project, Report $report): RedirectResponse
     {
-        // Project managers review their own queue; global moderators
-        // (and admins) may review any queue by explicit permission.
-        if (! $request->user()->can('update', $project) && ! $request->user()->can('moderate')) {
-            abort(403);
-        }
+        Gate::authorize('moderate', $project);
         abort_unless($report->project()?->id === $project->id, 404);
         abort_unless($report->status === ReportStatus::Pending, 422, 'This report was already reviewed.');
 

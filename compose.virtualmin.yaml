@@ -173,5 +173,207 @@ services:
       retries: 3
       start_period: 60s
 
+  # Restricted analysis coordinator: serves ONLY the 'analysis' queue
+  # on the 'analysis-database' connection. Shares the app image (no
+  # secrets baked in) but takes NO env_file: its environment is an
+  # explicit allowlist interpolated from --env-file .env.virtualmin.
+  # Absent on purpose: APP_KEY, DB_ROOT_PASSWORD, session/mail/AI keys.
+  # Exactly one instance; never scale this service.
+  analysis-coordinator:
+    platform: ${DOCKER_PLATFORM:-linux/arm64}
+    image: rev2square/app:${APP_VERSION:-latest}
+    pull_policy: never
+    command: ["php", "artisan", "queue:work", "analysis-database", "--queue=analysis", "--sleep=3", "--tries=1", "--max-time=3600"]
+    environment:
+      APP_NAME: ${APP_NAME:-Rev2Square}
+      APP_ENV: ${APP_ENV:-production}
+      LOG_CHANNEL: ${LOG_CHANNEL:-stack}
+      LOG_LEVEL: ${LOG_LEVEL:-warning}
+      DB_CONNECTION: ${DB_CONNECTION:-mysql}
+      DB_HOST: ${DB_HOST:-db}
+      DB_PORT: ${DB_PORT:-3306}
+      DB_DATABASE: ${DB_DATABASE:?Set DB_DATABASE in .env.virtualmin (and pass --env-file .env.virtualmin)}
+      DB_USERNAME: ${DB_USERNAME:?Set DB_USERNAME in .env.virtualmin (and pass --env-file .env.virtualmin)}
+      DB_PASSWORD: ${DB_PASSWORD:?Set DB_PASSWORD in .env.virtualmin (and pass --env-file .env.virtualmin)}
+      QUEUE_CONNECTION: database
+      CACHE_STORE: database
+      FILESYSTEM_DISK: local
+      BINARY_SPOOL_DIR: /spool
+      BINARY_RESULTS_DIR: /results
+    volumes:
+      - analysis-spool:/spool
+      - analysis-results:/results
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    user: "www-data"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      replicas: 1
+    healthcheck:
+      test: ["CMD-SHELL", "for f in /proc/[0-9]*/cmdline; do grep -qa 'queue:work' \"$$f\" 2>/dev/null && exit 0; done; exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # Isolated tool runners (see docker/analysis/). Common boundary:
+  # linux/arm64, no network, read-only root, non-root user, dropped
+  # capabilities, read-only spool mount, tmpfs workdirs, bounded RAM
+  # and PIDs. One concurrent heavy job server-wide via the spool
+  # lock. Images are built locally from pinned Dockerfiles (never
+  # pulled); record `docker images --digests` after building.
+  objdump-runner:
+    platform: ${DOCKER_PLATFORM:-linux/arm64}
+    build:
+      context: docker/analysis
+      dockerfile: Dockerfile.binutils
+    image: rev2square/binutils:2.40-2
+    volumes:
+      - analysis-spool:/spool:ro
+      - analysis-results:/results
+    tmpfs:
+      - /tmp
+      - /work
+    restart: unless-stopped
+    user: "www-data"
+    network_mode: none
+    read_only: true
+    mem_limit: 1g
+    pids_limit: 64
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  ghidra-runner:
+    platform: ${DOCKER_PLATFORM:-linux/arm64}
+    build:
+      context: docker/analysis
+      dockerfile: Dockerfile.ghidra
+    image: rev2square/ghidra:12.2
+    volumes:
+      - analysis-spool:/spool:ro
+      - analysis-results:/results
+    tmpfs:
+      - /tmp
+      - /work
+      - /home/www-data
+    restart: unless-stopped
+    user: "www-data"
+    network_mode: none
+    read_only: true
+    mem_limit: 2500m
+    pids_limit: 128
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  jadx-runner:
+    platform: ${DOCKER_PLATFORM:-linux/arm64}
+    build:
+      context: docker/analysis
+      dockerfile: Dockerfile.jadx
+    image: rev2square/jadx:1.5.6
+    volumes:
+      - analysis-spool:/spool:ro
+      - analysis-results:/results
+    tmpfs:
+      - /tmp
+      - /work
+    restart: unless-stopped
+    user: "www-data"
+    network_mode: none
+    read_only: true
+    mem_limit: 1500m
+    pids_limit: 64
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  ilspy-runner:
+    platform: ${DOCKER_PLATFORM:-linux/arm64}
+    build:
+      context: docker/analysis
+      dockerfile: Dockerfile.ilspy
+    image: rev2square/ilspy:11.2.0.10050
+    volumes:
+      - analysis-spool:/spool:ro
+      - analysis-results:/results
+    tmpfs:
+      - /tmp
+      - /work
+    restart: unless-stopped
+    user: "www-data"
+    network_mode: none
+    read_only: true
+    mem_limit: 1500m
+    pids_limit: 64
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  extract-runner:
+    platform: ${DOCKER_PLATFORM:-linux/arm64}
+    build:
+      context: docker/analysis
+      dockerfile: Dockerfile.extract
+    image: rev2square/extract:1.0
+    volumes:
+      - analysis-spool:/spool:ro
+      - analysis-results:/results
+    tmpfs:
+      - /tmp:size=512m
+      - /work:size=1g
+    restart: unless-stopped
+    user: "www-data"
+    network_mode: none
+    read_only: true
+    mem_limit: 1g
+    pids_limit: 64
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 volumes:
   db-data:
+  analysis-spool:
+  analysis-results:

@@ -3,8 +3,13 @@
 namespace App\Jobs;
 
 use App\Models\BinaryAnalysis;
+use App\Models\ProjectArtifact;
 use App\Services\Binary\Adapters\AdapterRegistry;
 use App\Services\Binary\Adapters\AnalysisFailedException;
+use App\Services\Binary\Adapters\ExternalBackend;
+use App\Services\Binary\Adapters\SandboxedBackend;
+use App\Services\Binary\ArchiveMember;
+use App\Services\Binary\Sandbox\EvidenceValidator;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\Storage;
@@ -18,7 +23,36 @@ class AnalyzeBinaryJob implements ShouldQueue
 
     public function __construct(public readonly int $analysisId)
     {
-        $this->timeout = (int) config('artifacts.binary_timeout_seconds', 120);
+        // Dedicated coordinator routing: analysis jobs must never run
+        // on the general-purpose workers.
+        $this->connection = (string) config('artifacts.binary_analysis_connection', 'analysis-database');
+        $this->queue = (string) config('artifacts.binary_analysis_queue', 'analysis');
+
+        $this->timeout = self::timeoutFor($analysisId);
+    }
+
+    /**
+     * Sandboxed runs get the spool wall budget plus grace; in-process
+     * adapters keep the short budget. Resolved at dispatch so the
+     * worker never has to guess.
+     */
+    public static function timeoutFor(int $analysisId): int
+    {
+        $default = (int) config('artifacts.binary_timeout_seconds', 120);
+        try {
+            $analysis = BinaryAnalysis::find($analysisId);
+            if ($analysis === null) {
+                return $default;
+            }
+            $adapter = AdapterRegistry::get((string) $analysis->adapter);
+            if ($adapter instanceof SandboxedBackend) {
+                return (int) config('artifacts.binary_spool_wall_seconds', 480) + 60;
+            }
+        } catch (\Throwable) {
+            // Dispatch-time lookup failed; the job itself re-validates.
+        }
+
+        return $default;
     }
 
     public function handle(): void
@@ -63,6 +97,29 @@ class AnalyzeBinaryJob implements ShouldQueue
             }
 
             $snapshot = $artifact->readSnapshot() ?? [];
+            $config = $analysis->config ?? [];
+
+            $memberName = $config['member'] ?? null;
+            if ($artifact->format === ProjectArtifact::FORMAT_ARCHIVE && is_string($memberName) && $memberName !== '') {
+                $analysis->forceFill(['progress_note' => 'Extracting archive member…'])->save();
+                $staged = ArchiveMember::prepare($bytes, $memberName, $analysis->target, $config);
+                if (! ($staged['ok'] ?? false)) {
+                    $this->finishFailed($analysis, $staged['code'], $staged['message']);
+
+                    return;
+                }
+                $bytes = $staged['bytes'];
+                $snapshot = $staged['snapshot'];
+                $config = array_merge($config, [
+                    'member_format' => $staged['format'],
+                    'member_arch' => $staged['arch'],
+                    'member_info' => $staged['info'],
+                ]);
+                if (($analysis->target === null || $analysis->target === '') && ($staged['target'] ?? '') !== '') {
+                    $analysis->forceFill(['target' => $staged['target']])->save();
+                }
+            }
+
             $adapter = AdapterRegistry::get($analysis->adapter);
             if ($adapter === null) {
                 $this->finishFailed($analysis, 'unknown_adapter', 'The requested backend is no longer registered.');
@@ -70,10 +127,47 @@ class AnalyzeBinaryJob implements ShouldQueue
                 return;
             }
 
+            // Execution-time re-validation: the worker that runs this
+            // job re-checks its own backend — never trusts dispatch.
+            // Sandboxed adapters re-probe through the spool (the runner
+            // may have been replaced since dispatch).
+            if ($adapter instanceof SandboxedBackend) {
+                $probe = $adapter->probe();
+                if (! $probe['available']) {
+                    $this->finishFailed($analysis, 'worker_unavailable', 'The isolated backend is unavailable at execution time: '.$probe['reason']);
+
+                    return;
+                }
+                $live = $adapter->version();
+                if ($live !== $analysis->adapter_version) {
+                    $this->finishFailed($analysis, 'worker_mismatch', 'Backend version changed between queue and execution (queued '.($analysis->adapter_version ?? 'unknown').', worker has '.($live ?? 'unknown').'). Queue a fresh run.');
+
+                    return;
+                }
+            }
+            if ($adapter instanceof ExternalBackend) {
+                $probe = $adapter->probe();
+                if (! $probe['available']) {
+                    $this->finishFailed($analysis, 'worker_unavailable', 'The worker no longer has this backend: '.$probe['reason']);
+
+                    return;
+                }
+                $live = $adapter->version();
+                if ($live !== $analysis->adapter_version) {
+                    $this->finishFailed($analysis, 'worker_mismatch', 'Backend version changed between queue and execution (queued '.($analysis->adapter_version ?? 'unknown').', worker has '.($live ?? 'unknown').'). Queue a fresh run.');
+
+                    return;
+                }
+            }
+
             $analysis->forceFill(['progress_note' => 'Disassembling executable segments…'])->save();
             $heartbeat = fn (): bool => $analysis->fresh()?->status === BinaryAnalysis::STATUS_ANALYZING;
 
-            $evidence = $adapter->analyze($analysis, $bytes, $snapshot, $analysis->config ?? [], $heartbeat);
+            $evidence = $adapter->analyze($analysis, $bytes, $snapshot, $config, $heartbeat);
+
+            // Single choke point: normalize + bound + reject hostile
+            // evidence before anything is stored or rendered.
+            $evidence = EvidenceValidator::validate($adapter->id(), $evidence);
 
             $encoded = self::fitEvidence($evidence);
             if ($encoded === null) {

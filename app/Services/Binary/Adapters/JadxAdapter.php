@@ -6,12 +6,12 @@ use App\Models\BinaryAnalysis;
 use App\Models\ProjectArtifact;
 
 /**
- * JADX adapter (DEX/APK/Java reconstruction). Same honesty contract
- * as GhidraAdapter: probing + argv validation ship; analysis refuses
- * until a verified run exists. Reconstructed output would be
- * labelled Java-like code, never original source.
+ * JADX adapter (isolated runner): Dalvik/DEX, APK, and Java class
+ * reconstruction. Output is labelled Java-like reconstruction, never
+ * original source. Resources ARE decoded (manifest, resource table)
+ * because they are first-class APK evidence; caps bound the tree.
  */
-final class JadxAdapter extends ExternalBackend implements BinaryAdapter
+final class JadxAdapter extends SandboxedBackend
 {
     public function id(): string
     {
@@ -20,26 +20,12 @@ final class JadxAdapter extends ExternalBackend implements BinaryAdapter
 
     public function name(): string
     {
-        return 'JADX';
+        return 'JADX (isolated)';
     }
 
-    public function version(): ?string
+    public function tool(): string
     {
-        return $this->probeVersion($this->binaryPath(), ['--version'], '/\d+\.\d+(\.\d+)?/');
-    }
-
-    public function probe(): array
-    {
-        if ($this->binaryPath() === '' || ! is_executable($this->binaryPath())) {
-            return ['available' => false, 'reason' => 'JADX binary not found. Owner setup required (docs/binary-analysis-setup.md).', 'setup_doc' => 'docs/binary-analysis-setup.md'];
-        }
-
-        return ['available' => false, 'reason' => 'JADX binary present but the integration has no verified run on this installation.', 'setup_doc' => 'docs/binary-analysis-setup.md'];
-    }
-
-    public function binaryPath(): string
-    {
-        return (string) config('artifacts.jadx_bin');
+        return 'jadx';
     }
 
     public function formats(): array
@@ -49,15 +35,12 @@ final class JadxAdapter extends ExternalBackend implements BinaryAdapter
 
     public function targets(): array
     {
-        return [];
+        return $this->probe()['available'] ? ['dalvik', 'jvm'] : [];
     }
 
     public function candidateTargets(): array
     {
-        return [
-            ['id' => 'dalvik', 'backend_id' => 'dalvik', 'note' => 'Documented JADX input; unverified on this installation.'],
-            ['id' => 'jvm', 'backend_id' => 'jvm', 'note' => 'Documented JADX input; unverified on this installation.'],
-        ];
+        return [];
     }
 
     public function capabilities(string $format, ?string $target): array
@@ -65,40 +48,113 @@ final class JadxAdapter extends ExternalBackend implements BinaryAdapter
         if (! in_array($format, $this->formats(), true)) {
             return array_fill_keys(Capability::all(), Capability::UNSUPPORTED);
         }
+        if (($format === ProjectArtifact::FORMAT_DEX || $format === ProjectArtifact::FORMAT_APK) && $target !== 'dalvik') {
+            return array_fill_keys(Capability::all(), Capability::UNSUPPORTED);
+        }
+        if ($format === ProjectArtifact::FORMAT_CLASS && $target !== 'jvm') {
+            return array_fill_keys(Capability::all(), Capability::UNSUPPORTED);
+        }
+        if (! in_array($target, ['dalvik', 'jvm'], true)) {
+            $caps = array_fill_keys(Capability::all(), Capability::DEPENDENCY_UNAVAILABLE);
+            $caps[Capability::DETECTION] = Capability::SUPPORTED;
+            $caps[Capability::METADATA] = Capability::SUPPORTED;
 
-        $caps = array_fill_keys(Capability::all(), Capability::DEPENDENCY_UNAVAILABLE);
-        $caps[Capability::DETECTION] = Capability::SUPPORTED;
-        $caps[Capability::METADATA] = Capability::SUPPORTED;
+            return $caps;
+        }
 
-        return $caps;
+        return [
+            Capability::DETECTION => Capability::SUPPORTED,
+            Capability::METADATA => Capability::SUPPORTED,
+            Capability::STRINGS => Capability::SUPPORTED,
+            Capability::SEGMENTS => Capability::UNSUPPORTED,
+            Capability::DISASSEMBLY => Capability::UNSUPPORTED,
+            Capability::FUNCTIONS => Capability::PARTIAL,
+            Capability::XREFS => Capability::UNSUPPORTED,
+            Capability::CALLGRAPH => Capability::UNSUPPORTED,
+            Capability::DECOMPILATION => Capability::SUPPORTED,
+            Capability::EXTRACTION => Capability::UNSUPPORTED,
+            Capability::AI_EXPLAIN => Capability::SUPPORTED,
+            Capability::COMPARISON => Capability::PARTIAL,
+        ];
     }
 
     public function analyze(BinaryAnalysis $analysis, string $bytes, array $snapshot, array $config, callable $heartbeat): array
     {
-        throw new AnalysisFailedException('backend_unverified', 'The JADX integration has no verified run on this installation. See docs/binary-analysis-setup.md for the owner verification protocol.');
+        $started = microtime(true);
+        $format = (string) ($config['member_format'] ?? $analysis->artifact->format);
+        $ext = match ($format) {
+            ProjectArtifact::FORMAT_APK => '.apk',
+            ProjectArtifact::FORMAT_DEX => '.dex',
+            ProjectArtifact::FORMAT_CLASS => '.class',
+            default => '.zip',
+        };
+        if (! $heartbeat()) {
+            throw new AnalysisFailedException('cancelled_race', 'The run was cancelled before the isolated backend started.');
+        }
+
+        $result = $this->runSandbox('apk', ['threads' => 2], 'input'.$ext, $bytes, $heartbeat);
+        $tree = $this->normalizeTree($result['evidence']);
+
+        $warnings = [];
+        if ($tree['truncated']) {
+            $warnings[] = 'reconstruction_capped';
+        }
+
+        return $this->envelope($analysis, $config, $started, 'JADX reconstruction of Dalvik/Java bytecode (Java-like output, never original source); resources decoded.', [
+            'tool' => [
+                'name' => 'JADX',
+                'version' => $this->version(),
+                'profile' => 'apk',
+            ],
+            'reconstruction' => [
+                'files' => $tree['files'],
+                'inline' => $tree['inline'],
+                'classes' => self::classes($tree['files'], '.java'),
+                'truncated' => $tree['truncated'],
+            ],
+            'warnings' => $warnings,
+        ]);
     }
 
     /**
+     * Documented jadx argv contract (runner-side paths). Enforcement
+     * lives in the runner; this builder exists so the PHP side and the
+     * conformance tests share one shape. Null when inputs are rejected.
+     *
      * @param  array{job_dir: string, input: string, output: string, threads?: int}  $params
      */
     public function buildCommand(array $params): ?array
     {
-        $binary = $this->binaryPath();
-        if ($binary === '' || ! is_executable($binary)) {
-            return null;
+        foreach (['job_dir', 'input', 'output'] as $key) {
+            if (! isset($params[$key]) || ! is_string($params[$key]) || $params[$key] === '') {
+                return null;
+            }
         }
-        $jobDir = $params['job_dir'] ?? '';
-        $input = isset($params['input']) ? $this->confine($jobDir, $params['input']) : null;
-        $output = isset($params['output']) ? $this->confine($jobDir, $params['output']) : null;
-        if ($input === null || $output === null) {
-            return null;
-        }
-
         $threads = (int) ($params['threads'] ?? 2);
         if ($threads < 1 || $threads > 4) {
             return null;
         }
 
-        return [$binary, '--no-res', '--no-src-save-cache', '-j', (string) $threads, '-d', $output, $input];
+        return ['/opt/jadx/bin/jadx', '--no-src-save-cache', '-j', (string) $threads, '-d', $params['output'], $params['input']];
+    }
+
+    /** @param list<array{path: string, size: int, sha256: string}> $files @return list<array{name: string, file: string}> */
+    public static function classes(array $files, string $suffix): array
+    {
+        $out = [];
+        foreach ($files as $file) {
+            if (! str_ends_with($file['path'], $suffix)) {
+                continue;
+            }
+            $base = substr($file['path'], 0, -strlen($suffix));
+            // Strip jadx's sources/ root so names read as packages.
+            $base = preg_replace('#^(sources|resources)/#', '', $base) ?? $base;
+            $out[] = ['name' => str_replace('/', '.', $base), 'file' => $file['path']];
+            if (count($out) >= 500) {
+                break;
+            }
+        }
+
+        return $out;
     }
 }

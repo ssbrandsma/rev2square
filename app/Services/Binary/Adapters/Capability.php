@@ -33,6 +33,8 @@ final class Capability
 
     public const DECOMPILATION = 'decompilation';
 
+    public const EXTRACTION = 'extraction';
+
     public const AI_EXPLAIN = 'ai_explain';
 
     public const COMPARISON = 'comparison';
@@ -43,8 +45,26 @@ final class Capability
         return [
             self::DETECTION, self::METADATA, self::STRINGS, self::SEGMENTS,
             self::DISASSEMBLY, self::FUNCTIONS, self::XREFS, self::CALLGRAPH,
-            self::DECOMPILATION, self::AI_EXPLAIN, self::COMPARISON,
+            self::DECOMPILATION, self::EXTRACTION, self::AI_EXPLAIN, self::COMPARISON,
         ];
+    }
+
+    /** Primary outputs: a run is requestable when any is supported. */
+    public static function primaryOutputs(): array
+    {
+        return [self::DISASSEMBLY, self::DECOMPILATION, self::EXTRACTION];
+    }
+
+    /** @param array<string, string> $caps */
+    public static function requestable(array $caps): bool
+    {
+        foreach (self::primaryOutputs() as $output) {
+            if (($caps[$output] ?? null) === self::SUPPORTED) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public static function label(string $capability): string
@@ -59,6 +79,7 @@ final class Capability
             self::XREFS => 'Cross-references',
             self::CALLGRAPH => 'Call graph',
             self::DECOMPILATION => 'Deterministic decompilation',
+            self::EXTRACTION => 'Filesystem extraction',
             self::AI_EXPLAIN => 'AI explanation / tentative pseudocode',
             self::COMPARISON => 'Cross-artifact comparison',
             default => $capability,

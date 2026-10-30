@@ -6,8 +6,10 @@ use App\Jobs\AnalyzeBinaryJob;
 use App\Models\BinaryAnalysis;
 use App\Models\ProjectArtifact;
 use App\Models\User;
+use App\Models\WorkerCapability;
 use App\Services\Binary\Adapters\AdapterRegistry;
 use App\Services\Binary\Adapters\Capability;
+use App\Services\Binary\Adapters\ExternalBackend;
 use Illuminate\Database\QueryException;
 
 /**
@@ -42,17 +44,31 @@ final class AnalysisRequest
 
         $adapter = $adapterId !== null ? AdapterRegistry::get($adapterId) : self::defaultAdapter($artifact, $resolved['target']);
         if ($adapter === null) {
-            return ['ok' => false, 'error' => 'No available backend can disassemble the “'.$resolved['target'].'” target for this file. '.self::missingBackendHint($artifact, $resolved['target'])];
+            return ['ok' => false, 'error' => 'No available backend can analyze the “'.$resolved['target'].'” target for this file. '.self::missingBackendHint($artifact, $resolved['target'])];
         }
 
-        $probe = $adapter->probe();
-        if (! $probe['available']) {
-            return ['ok' => false, 'error' => 'Backend “'.$adapter->name().'” is unavailable: '.$probe['reason']];
+        // Worker-executed backends (subprocess or sandboxed): the
+        // worker snapshot — not this container's binaries — decides.
+        if ($adapter instanceof ExternalBackend || $adapter instanceof Adapters\SandboxedBackend) {
+            $worker = WorkerCapability::verifiedFor($adapter);
+            if (! $worker['verified']) {
+                return ['ok' => false, 'error' => 'Backend “'.$adapter->name().'” is not worker-verified: '.$worker['note']];
+            }
+        } else {
+            $probe = $adapter->probe();
+            if (! $probe['available']) {
+                return ['ok' => false, 'error' => 'Backend “'.$adapter->name().'” is unavailable: '.$probe['reason']];
+            }
         }
 
         $caps = $adapter->capabilities($artifact->format, $resolved['target']);
-        if (($caps[Capability::DISASSEMBLY] ?? Capability::UNSUPPORTED) !== Capability::SUPPORTED) {
-            return ['ok' => false, 'error' => 'Backend “'.$adapter->name().'” cannot disassemble this file/target pair ('.Capability::levelLabel($caps[Capability::DISASSEMBLY] ?? Capability::UNSUPPORTED).'). '.self::missingBackendHint($artifact, $resolved['target'])];
+        if (! Capability::requestable($caps)) {
+            $levels = [];
+            foreach (Capability::primaryOutputs() as $output) {
+                $levels[] = Capability::label($output).': '.Capability::levelLabel($caps[$output] ?? Capability::UNSUPPORTED);
+            }
+
+            return ['ok' => false, 'error' => 'Backend “'.$adapter->name().'” produces no supported output for this file/target pair ('.implode('; ', $levels).'). '.self::missingBackendHint($artifact, $resolved['target'])];
         }
 
         $version = $adapter->version();
@@ -105,9 +121,8 @@ final class AnalysisRequest
             if (! in_array($artifact->format, $adapter->formats(), true)) {
                 continue;
             }
-            $probe = $adapter->probe();
             $caps = $adapter->capabilities($artifact->format, $target);
-            if ($probe['available'] && ($caps[Capability::DISASSEMBLY] ?? null) === Capability::SUPPORTED) {
+            if (self::dispatchReady($adapter) && Capability::requestable($caps)) {
                 return $adapter;
             }
         }
@@ -115,15 +130,41 @@ final class AnalysisRequest
         return null;
     }
 
+    public static function dispatchReady(Adapters\BinaryAdapter $adapter): bool
+    {
+        // Snapshot-gated backends never consult a live probe at
+        // dispatch: the web container has no spool access, and only a
+        // worker-side capture proves execution readiness.
+        if ($adapter instanceof ExternalBackend || $adapter instanceof Adapters\SandboxedBackend) {
+            return WorkerCapability::verifiedFor($adapter)['verified'];
+        }
+
+        return $adapter->probe()['available'];
+    }
+
     private static function missingBackendHint(ProjectArtifact $artifact, string $target): string
     {
+        // A backend that supports the pair but is not execution-ready
+        // (stale/missing worker snapshot) is the most actionable story.
+        foreach (AdapterRegistry::all() as $adapter) {
+            if (! in_array($artifact->format, $adapter->formats(), true)) {
+                continue;
+            }
+            $caps = $adapter->capabilities($artifact->format, $target);
+            if (Capability::requestable($caps) && ! self::dispatchReady($adapter)) {
+                $worker = WorkerCapability::verifiedFor($adapter);
+
+                return 'Ready backend found but not execution-ready: '.$adapter->name().': '.$worker['note'];
+            }
+        }
+
         foreach (AdapterRegistry::all() as $adapter) {
             if (! in_array($artifact->format, $adapter->formats(), true)) {
                 continue;
             }
             foreach ($adapter->candidateTargets() as $candidate) {
                 if ($candidate['id'] === $target) {
-                    return 'Documented backend: '.$adapter->name().' ('.$candidate['backend_id'].', unverified). Owner setup: docs/binary-analysis-setup.md.';
+                    return 'Documented backend: '.$adapter->name().' ('.$candidate['backend_id'].', unverified). Owner setup: docs/analysis-spool-deployment.md.';
                 }
             }
         }

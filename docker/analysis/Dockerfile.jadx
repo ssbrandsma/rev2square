@@ -1,0 +1,74 @@
+# Rev2Square isolated JADX runner (Linux ARM64, CLI only).
+#
+# Pinned:
+#   JADX 1.5.6, jadx-1.5.6.zip
+#     sha256:545ea2be9c242511bc145755cf4bda2485ade42966e096f8b4d3da2a230e8974
+#     source: https://github.com/skylot/jadx/releases/tag/v1.5.6
+#     license: Apache-2.0
+#   Eclipse Temurin JRE 17.0.21+9 (aarch64, hotspot)
+#     sha256:1114f09d6174f54270c3117410b5e4022b43ebc0b43b751af08b927c55ed7bb5
+#     source: https://api.adoptium.net (temurin17-binaries jdk-17.0.21+9)
+#     license: GPL-2.0-with-Classpath-exception
+#
+# JADX needs Java 11+; JRE 17 is the runtime its own docs point at,
+# kept separate from Ghidra's JDK 25 on purpose. GUI launchers are
+# removed: headless `jadx` only. No Android SDK is bundled.
+#
+# Build (owner, on the ARM64 server):
+#   docker build -f docker/analysis/Dockerfile.jadx \
+#     -t rev2square/jadx:1.5.6 docker/analysis
+ARG DEBIAN_IMAGE=debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3
+ARG JADX_VERSION=1.5.6
+ARG JADX_SHA256=545ea2be9c242511bc145755cf4bda2485ade42966e096f8b4d3da2a230e8974
+ARG TEMURIN_JRE_URL=https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.21%2B9/OpenJDK17U-jre_aarch64_linux_hotspot_17.0.21_9.tar.gz
+ARG TEMURIN_JRE_SHA256=1114f09d6174f54270c3117410b5e4022b43ebc0b43b751af08b927c55ed7bb5
+
+FROM ${DEBIAN_IMAGE}
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    JAVA_HOME=/opt/jre \
+    PATH=/opt/jre/bin:${PATH} \
+    JADX_BIN=/opt/jadx/bin/jadx \
+    TOOL_IMAGE=rev2square/jadx:1.5.6
+
+LABEL org.rev2square.tool="jadx" \
+      org.rev2square.tool-version="1.5.6" \
+      org.rev2square.tool-source="https://github.com/skylot/jadx/releases/tag/v1.5.6" \
+      org.rev2square.tool-sha256="545ea2be9c242511bc145755cf4bda2485ade42966e096f8b4d3da2a230e8974" \
+      org.rev2square.tool-license="Apache-2.0" \
+      org.rev2square.jre="temurin-17.0.21+9-aarch64" \
+      org.rev2square.jre-sha256="1114f09d6174f54270c3117410b5e4022b43ebc0b43b751af08b927c55ed7bb5" \
+      org.rev2square.base-image="debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3"
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates curl python3-minimal unzip \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /opt/jre /opt/jadx /opt/runner /provenance \
+    && curl -fsSL -o /tmp/jre.tar.gz "${TEMURIN_JRE_URL}" \
+    && echo "${TEMURIN_JRE_SHA256}  /tmp/jre.tar.gz" | sha256sum -c - \
+    && tar -xzf /tmp/jre.tar.gz -C /opt/jre --strip-components=1 \
+    && rm /tmp/jre.tar.gz \
+    && curl -fsSL -o /tmp/jadx.zip \
+        "https://github.com/skylot/jadx/releases/download/v${JADX_VERSION}/jadx-${JADX_VERSION}.zip" \
+    && echo "${JADX_SHA256}  /tmp/jadx.zip" | sha256sum -c - \
+    && unzip -q /tmp/jadx.zip -d /tmp/jadxdist \
+    && rm /tmp/jadx.zip \
+    && cp -r /tmp/jadxdist/jadx-${JADX_VERSION}/. /opt/jadx/ \
+    && rm -rf /tmp/jadxdist \
+    && rm -f /opt/jadx/bin/jadx-gui /opt/jadx/bin/jadx-gui.bat
+
+COPY runner.py /opt/runner/runner.py
+
+RUN /opt/jadx/bin/jadx --version > /provenance/jadx-version.txt 2>&1 \
+    && /opt/jre/bin/java -version > /provenance/java-version.txt 2>&1 \
+    && chmod 644 /provenance/* \
+    && chmod 755 /opt/runner/runner.py /opt/jadx/bin/jadx \
+    && python3 /opt/runner/runner.py --dry-run --tool jadx \
+        --profile apk --params-json '{"threads":2}' --workdir /tmp/dry \
+        | grep -q -- '--no-src-save-cache'
+
+USER www-data
+
+CMD ["python3", "/opt/runner/runner.py", "--tool", "jadx", \
+     "--spool", "/spool", "--results", "/results"]

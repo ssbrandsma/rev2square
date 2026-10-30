@@ -9,8 +9,10 @@ use App\Http\Controllers\Controller;
 use App\Models\AiUsageEntry;
 use App\Models\Report;
 use App\Models\User;
+use App\Models\WorkerCapability;
 use App\Services\Admin\AppSettings;
 use App\Services\Admin\CostEstimates;
+use App\Services\Binary\Adapters\AdapterRegistry;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\View\View;
 
@@ -45,6 +47,18 @@ class DashboardController extends Controller
         if ($suspendedMaintainers > 0) {
             $warnings[] = $suspendedMaintainers.' suspended account(s) still own projects — review ownership, which is never transferred automatically.';
         }
+        $unverifiedInstalled = [];
+        foreach (AdapterRegistry::all() as $adapter) {
+            if ($adapter->id() === 'php-native') {
+                continue;
+            }
+            if ($adapter->probe()['available'] && ! WorkerCapability::verifiedFor($adapter)['verified']) {
+                $unverifiedInstalled[] = $adapter->name();
+            }
+        }
+        if ($unverifiedInstalled !== []) {
+            $warnings[] = 'Installed analysis backend(s) lack a fresh worker snapshot ('.implode(', ', $unverifiedInstalled).') — their targets cannot queue until refreshed (php artisan binary:worker-capabilities --refresh).';
+        }
 
         return view('admin.dashboard', [
             'userCounts' => [
@@ -66,6 +80,7 @@ class DashboardController extends Controller
             ],
             'keySource' => AppSettings::source('meta.api_key'),
             'warnings' => $warnings,
+            'suspendedMaintainers' => $suspendedMaintainers,
         ]);
     }
 }

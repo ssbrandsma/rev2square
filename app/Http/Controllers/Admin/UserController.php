@@ -8,6 +8,7 @@ use App\Models\AdminAuditEvent;
 use App\Models\AiUsageEntry;
 use App\Models\User;
 use App\Services\Admin\AdminUserService;
+use App\Services\Admin\AppSettings;
 use App\Services\Admin\AiBudgets;
 use App\Services\Admin\LastAdminException;
 use Illuminate\Http\RedirectResponse;
@@ -60,16 +61,19 @@ class UserController extends Controller
             ->selectRaw('COUNT(*) AS requests, COALESCE(SUM(input_tokens),0)+COALESCE(SUM(output_tokens),0) AS tokens')
             ->first();
 
-        $projectsNeedingAttention = $user->isSuspended()
-            ? $user->ownedProjects()->orderBy('title')->pluck('title', 'id')->all()
-            : [];
+        $ownedProjects = $user->ownedProjects()->orderBy('title')->pluck('title', 'id')->all();
 
         return view('admin.users.show', [
             'user' => $user,
             'lastActivity' => $lastSession !== null ? now()->createFromTimestamp($lastSession) : null,
             'todayUsage' => AiBudgets::todayUsage($user->id),
             'totalUsage' => ['requests' => (int) ($usage->requests ?? 0), 'tokens' => (int) ($usage->tokens ?? 0)],
-            'projectsNeedingAttention' => $projectsNeedingAttention,
+            'projectsNeedingAttention' => $user->isSuspended() ? $ownedProjects : [],
+            'ownedProjects' => $ownedProjects,
+            'aiDefaults' => [
+                'requests' => AppSettings::get('ai.default_daily_request_limit'),
+                'tokens' => AppSettings::get('ai.default_daily_token_limit'),
+            ],
             'recentAudits' => AdminAuditEvent::where('target_type', $user->getMorphClass())
                 ->where('target_id', $user->id)
                 ->latest('id')

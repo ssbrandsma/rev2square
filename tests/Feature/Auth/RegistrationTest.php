@@ -2,6 +2,9 @@
 
 namespace Tests\Feature\Auth;
 
+use App\Enums\AccountStatus;
+use App\Enums\GlobalRole;
+use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -27,5 +30,19 @@ class RegistrationTest extends TestCase
 
         $this->assertAuthenticated();
         $response->assertRedirect(route('dashboard', absolute: false));
+    }
+
+    public function test_new_registrations_default_to_ordinary_active_user(): void
+    {
+        $this->post('/register', [
+            'name' => 'Plain User',
+            'email' => 'plain@example.com',
+            'password' => 'password',
+            'password_confirmation' => 'password',
+        ]);
+
+        $user = User::where('email', 'plain@example.com')->firstOrFail();
+        $this->assertSame(GlobalRole::User, $user->global_role);
+        $this->assertSame(AccountStatus::Active, $user->account_status);
     }
 }

@@ -14,7 +14,8 @@
             <h2 class="font-semibold">{{ $user->name }} <span class="font-normal text-zinc-500">{{ $user->email }}</span></h2>
             <p class="mt-1 max-w-[70ch] text-sm text-zinc-600">
                 Current: {{ $user->global_role->label() }} · {{ $user->account_status->label() }} ·
-                AI {{ $user->ai_enabled ? 'enabled' : 'disabled' }}@if($user->ai_unlimited) · unlimited exemption@endif.
+                AI {{ $user->ai_enabled ? 'enabled' : 'disabled' }}{{ $user->ai_unlimited ? ' · unlimited exemption' : '' }}.
+                @if($user->id === auth()->id()) Changing your own account takes effect on your next request.@endif
                 Role changes require recent password confirmation. This application has no MFA facility; password confirmation is the available reauthentication step.
             </p>
             <form method="POST" action="{{ route('admin.users.update', $user) }}" class="mt-4 max-w-xl space-y-4 text-sm" onsubmit="return confirm('Apply these account changes?');">

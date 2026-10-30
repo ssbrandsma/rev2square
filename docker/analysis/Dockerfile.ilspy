@@ -1,0 +1,79 @@
+# Rev2Square isolated ILSpyCmd runner (Linux ARM64).
+#
+# Pinned:
+#   ilspycmd 11.2.0.10050 (NuGet .NET tool, framework-dependent "any"
+#     package — this is what runs on linux-arm64; the release's native
+#     AOT packages are linux-x64/win-x64 only and are NOT used here)
+#     source: https://www.nuget.org/packages/ilspycmd/11.2.0.10050
+#     upstream release: https://github.com/icsharpcode/ILSpy/releases/tag/v11.2
+#     license: MIT ; targets net10.0
+#   .NET SDK 10.0 (build stage only, installs the tool):
+#     mcr.microsoft.com/dotnet/sdk:10.0@sha256:de4fe90a98845d75910b9769662465c84de1a934665c431279d1382b2bddc02b
+#   .NET runtime 10.0 files are copied from the SDK stage into the
+#     Debian runtime stage (linux-arm64 verified present in the
+#     mcr manifest list). Invariant globalization is enabled, so no
+#     ICU package is needed.
+#
+# Build (owner, on the ARM64 server; needs build-time internet for
+# NuGet over TLS; the tool version is pinned):
+#   docker build -f docker/analysis/Dockerfile.ilspy \
+#     -t rev2square/ilspy:11.2.0.10050 docker/analysis
+ARG DEBIAN_IMAGE=debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3
+ARG DOTNET_SDK_IMAGE=mcr.microsoft.com/dotnet/sdk:10.0@sha256:de4fe90a98845d75910b9769662465c84de1a934665c431279d1382b2bddc02b
+ARG ILSPYCMD_VERSION=11.2.0.10050
+
+FROM ${DOTNET_SDK_IMAGE} AS tooling
+
+ARG ILSPYCMD_VERSION
+
+ENV DOTNET_CLI_TELEMETRY_OPTOUT=1 \
+    DOTNET_NOLOGO=1
+
+RUN dotnet tool install ilspycmd --version "${ILSPYCMD_VERSION}" \
+        --tool-path /opt/ilspy \
+    && /opt/ilspy/ilspycmd --version
+
+FROM ${DEBIAN_IMAGE}
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    DOTNET_ROOT=/usr/share/dotnet \
+    PATH=/usr/share/dotnet:/opt/ilspy:${PATH} \
+    DOTNET_CLI_TELEMETRY_OPTOUT=1 \
+    DOTNET_NOLOGO=1 \
+    DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 \
+    ILSPY_BIN=/opt/ilspy/ilspycmd \
+    TOOL_IMAGE=rev2square/ilspy:11.2.0.10050
+
+LABEL org.rev2square.tool="ilspycmd" \
+      org.rev2square.tool-version="11.2.0.10050" \
+      org.rev2square.tool-source="https://www.nuget.org/packages/ilspycmd/11.2.0.10050" \
+      org.rev2square.tool-license="MIT" \
+      org.rev2square.dotnet-sdk="mcr.microsoft.com/dotnet/sdk:10.0@sha256:de4fe90a98845d75910b9769662465c84de1a934665c431279d1382b2bddc02b" \
+      org.rev2square.base-image="debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3"
+
+# .NET 10 runtime native deps (Debian names); ICU omitted on purpose
+# (invariant globalization — see ilspycmd csproj + env above).
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        libssl3 libgssapi-krb5-2 zlib1g libstdc++6 python3-minimal \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /opt/runner /provenance
+
+COPY --from=tooling /usr/share/dotnet /usr/share/dotnet
+COPY --from=tooling /opt/ilspy /opt/ilspy
+COPY runner.py /opt/runner/runner.py
+
+RUN chmod -R a+rX /opt/ilspy /usr/share/dotnet \
+    && /opt/ilspy/ilspycmd --version > /provenance/ilspycmd-version.txt 2>&1 \
+    && dotnet --list-runtimes > /provenance/dotnet-runtimes.txt 2>&1 \
+    && grep -q 'linux-arm64' /provenance/dotnet-runtimes.txt \
+    && chmod 644 /provenance/* \
+    && chmod 755 /opt/runner/runner.py \
+    && python3 /opt/runner/runner.py --dry-run --tool ilspy \
+        --profile assembly --params-json '{}' --workdir /tmp/dry \
+        | grep -q 'ilspycmd'
+
+USER www-data
+
+CMD ["python3", "/opt/runner/runner.py", "--tool", "ilspy", \
+     "--spool", "/spool", "--results", "/results"]

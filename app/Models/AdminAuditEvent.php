@@ -36,6 +36,23 @@ class AdminAuditEvent extends Model
     }
 
     /**
+     * Admin detail page for linkable targets. Only User and Project
+     * targets link; anything else renders as plain text.
+     */
+    public function targetAdminUrl(): ?string
+    {
+        if ($this->target_type === (new User)->getMorphClass()) {
+            return route('admin.users.show', $this->target_id);
+        }
+
+        if ($this->target_type === (new Project)->getMorphClass()) {
+            return route('admin.projects.show', $this->target_id);
+        }
+
+        return null;
+    }
+
+    /**
      * @param  array<string, mixed>|null  $before
      * @param  array<string, mixed>|null  $after
      */

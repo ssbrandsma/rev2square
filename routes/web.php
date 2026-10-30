@@ -1,8 +1,10 @@
 <?php
 
+use App\Http\Controllers\Admin\AnalysisController as AdminAnalysisController;
 use App\Http\Controllers\Admin\AuditController as AdminAuditController;
 use App\Http\Controllers\Admin\DashboardController as AdminDashboardController;
 use App\Http\Controllers\Admin\ModerationController as AdminModerationController;
+use App\Http\Controllers\Admin\ProjectController as AdminProjectController;
 use App\Http\Controllers\Admin\SettingController as AdminSettingController;
 use App\Http\Controllers\Admin\UsageController as AdminUsageController;
 use App\Http\Controllers\Admin\UserController as AdminUserController;
@@ -291,6 +293,12 @@ Route::middleware(['auth', 'can:admin'])->prefix('admin')->name('admin.')->group
     Route::get('/usage/export', [AdminUsageController::class, 'export'])->name('usage.export');
     Route::get('/usage/users/{user}', [AdminUsageController::class, 'user'])->name('usage.user');
     Route::get('/audit', [AdminAuditController::class, 'index'])->name('audit.index');
+    Route::get('/analysis', [AdminAnalysisController::class, 'index'])->name('analysis.index');
+    Route::get('/projects', [AdminProjectController::class, 'index'])->name('projects.index');
+    Route::get('/projects/{project}', [AdminProjectController::class, 'show'])->name('projects.show');
+    Route::get('/projects/{project}/transfer', [AdminProjectController::class, 'transfer'])->name('projects.transfer');
+    Route::post('/projects/{project}/transfer', [AdminProjectController::class, 'preview'])->name('projects.transfer.preview');
+    Route::post('/projects/{project}/transfer/confirm', [AdminProjectController::class, 'confirm'])->middleware('password.confirm')->name('projects.transfer.confirm');
 });
 
 Route::middleware(['auth', 'can:moderate'])->prefix('admin')->name('admin.')->group(function () {

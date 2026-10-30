@@ -25,21 +25,22 @@ final class Targets
         'mos6502' => ['name' => 'MOS 6502 / 6510', 'arch' => 'mos6502', 'bits' => 16, 'endian' => 'little', 'native' => true, 'note' => 'NMOS 6502; covers the 6510 CPU in C64 platform context.'],
         'z80' => ['name' => 'Zilog Z80', 'arch' => 'z80', 'bits' => 16, 'endian' => 'little', 'native' => true, 'note' => 'Full map incl. CB/ED/DD/FD. 8080/8085 object code largely decodes but is not a verified target.'],
         'i8051' => ['name' => 'Intel 8051', 'arch' => 'i8051', 'bits' => 16, 'endian' => 'little', 'native' => true, 'note' => 'Classic core; 0xA5 reserved. Silicon variants (SFR layout) need device context.'],
-        'x86' => ['name' => 'x86 (32-bit)', 'arch' => 'x86', 'bits' => 32, 'endian' => 'little', 'native' => false, 'note' => 'Needs the Ghidra backend (not installed).'],
-        'x86-64' => ['name' => 'x86-64', 'arch' => 'x86-64', 'bits' => 64, 'endian' => 'little', 'native' => false, 'note' => 'Needs the Ghidra backend (not installed).'],
-        'arm32' => ['name' => 'ARM 32-bit (ARM state)', 'arch' => 'arm32', 'bits' => 32, 'endian' => 'little', 'native' => false, 'note' => 'Needs the Ghidra backend (not installed). Exact core/ARM version from device context.'],
-        'arm32-thumb' => ['name' => 'ARM 32-bit (Thumb state)', 'arch' => 'arm32', 'bits' => 32, 'endian' => 'little', 'native' => false, 'note' => 'Thumb vs ARM state must be known per function; needs the Ghidra backend (not installed).'],
-        'aarch64' => ['name' => 'AArch64', 'arch' => 'aarch64', 'bits' => 64, 'endian' => 'little', 'native' => false, 'note' => 'Needs the Ghidra backend (not installed).'],
-        'mips32' => ['name' => 'MIPS32', 'arch' => 'mips', 'bits' => 32, 'endian' => 'either', 'native' => false, 'note' => 'Endianness per file; needs the Ghidra backend (not installed).'],
-        'riscv32' => ['name' => 'RISC-V 32-bit', 'arch' => 'riscv32', 'bits' => 32, 'endian' => 'little', 'native' => false, 'note' => 'Needs the Ghidra backend (not installed).'],
-        'riscv64' => ['name' => 'RISC-V 64-bit', 'arch' => 'riscv64', 'bits' => 64, 'endian' => 'little', 'native' => false, 'note' => 'Needs the Ghidra backend (not installed).'],
-        'ppc32' => ['name' => 'PowerPC 32-bit', 'arch' => 'ppc', 'bits' => 32, 'endian' => 'big', 'native' => false, 'note' => 'Needs the Ghidra backend (not installed).'],
-        'avr' => ['name' => 'AVR 8-bit (classic)', 'arch' => 'avr', 'bits' => 16, 'endian' => 'little', 'native' => false, 'note' => 'Classic AVR only — AVR32 is a different architecture. Needs a verified backend.'],
-        'pic18' => ['name' => 'PIC18', 'arch' => 'pic18', 'bits' => 16, 'endian' => 'little', 'native' => false, 'note' => 'Needs a verified backend; baseline/mid-range/PIC24/dsPIC/PIC32 are separate targets.'],
-        'msp430' => ['name' => 'MSP430', 'arch' => 'msp430', 'bits' => 16, 'endian' => 'little', 'native' => false, 'note' => 'Needs a verified backend (not installed).'],
-        'dalvik' => ['name' => 'Dalvik bytecode', 'arch' => 'dalvik', 'bits' => 32, 'endian' => 'little', 'native' => false, 'note' => 'Metadata only in the bundled adapter; reconstruction needs JADX (not installed).'],
-        'jvm' => ['name' => 'Java bytecode', 'arch' => 'jvm', 'bits' => 32, 'endian' => 'big', 'native' => false, 'note' => 'Metadata only in the bundled adapter; reconstruction needs JADX (not installed).'],
-        'clr' => ['name' => '.NET CIL', 'arch' => 'clr', 'bits' => 32, 'endian' => 'little', 'native' => false, 'note' => 'Runtime detection only; method bodies need ILSpy (not installed).'],
+        'x86' => ['name' => 'x86 (32-bit)', 'arch' => 'x86', 'bits' => 32, 'endian' => 'little', 'native' => false, 'note' => 'Disassembled by the isolated multiarch objdump runner; deterministic decompilation needs the Ghidra runner (owner setup).'],
+        'x86-64' => ['name' => 'x86-64', 'arch' => 'x86-64', 'bits' => 64, 'endian' => 'little', 'native' => false, 'note' => 'Disassembled by the isolated multiarch objdump runner; deterministic decompilation needs the Ghidra runner (owner setup).'],
+        'arm32' => ['name' => 'ARM 32-bit (ARM state)', 'arch' => 'arm32', 'bits' => 32, 'endian' => 'little', 'native' => true, 'note' => 'Bundled A32 decoder: integer core covered; coprocessor/NEON/signed-halfword forms decode as .word data. Exact core/ARM version from device context.'],
+        'arm32-thumb' => ['name' => 'ARM 32-bit (Thumb state)', 'arch' => 'arm32', 'bits' => 32, 'endian' => 'little', 'native' => true, 'note' => 'Bundled T32 decoder: 16-bit Thumb plus common 32-bit forms (BL, B.W, MOVW/T, ADD/SUB.W, MRS/MSR, barriers). ARM and Thumb states are distinct targets — never mixed silently.'],
+        'aarch64' => ['name' => 'AArch64', 'arch' => 'aarch64', 'bits' => 64, 'endian' => 'little', 'native' => false, 'note' => 'No verified backend. Paths: multi-arch objdump (disassembly) or Ghidra (disassembly + decompilation); both need owner setup.'],
+        'mips32' => ['name' => 'MIPS32', 'arch' => 'mips', 'bits' => 32, 'endian' => 'either', 'native' => false, 'note' => 'No verified backend; endianness per file. Paths: multi-arch objdump or Ghidra; both need owner setup.'],
+        'riscv32' => ['name' => 'RISC-V 32-bit', 'arch' => 'riscv32', 'bits' => 32, 'endian' => 'little', 'native' => false, 'note' => 'No verified backend. Paths: multi-arch objdump or Ghidra; both need owner setup.'],
+        'riscv64' => ['name' => 'RISC-V 64-bit', 'arch' => 'riscv64', 'bits' => 64, 'endian' => 'little', 'native' => false, 'note' => 'No verified backend (riscv64 needs its own machine mapping, not the riscv32 one). Paths: multi-arch objdump or Ghidra; both need owner setup.'],
+        'ppc32' => ['name' => 'PowerPC 32-bit', 'arch' => 'ppc', 'bits' => 32, 'endian' => 'big', 'native' => false, 'note' => 'No verified backend. Paths: multi-arch objdump or Ghidra; both need owner setup.'],
+        'avr' => ['name' => 'AVR 8-bit (classic)', 'arch' => 'avr', 'bits' => 16, 'endian' => 'little', 'native' => false, 'note' => 'Classic AVR only — AVR32 is a different architecture. No verified backend: multi-arch objdump disassembly (mapping unverified, owner setup); Ghidra ships no built-in AVR and would need a vetted extension.'],
+        'pic18' => ['name' => 'PIC18', 'arch' => 'pic18', 'bits' => 16, 'endian' => 'little', 'native' => false, 'note' => 'No verified backend; baseline/mid-range/PIC24/dsPIC/PIC32 are separate targets. Binutils cannot decode PIC — Ghidra ships a built-in PIC module (mapping unverified, owner setup).'],
+        'msp430' => ['name' => 'MSP430', 'arch' => 'msp430', 'bits' => 16, 'endian' => 'little', 'native' => false, 'note' => 'No verified backend. Paths: multi-arch objdump disassembly, or Ghidra (built-in MSP430 module, mapping unverified); both need owner setup.'],
+        'dalvik' => ['name' => 'Dalvik bytecode', 'arch' => 'dalvik', 'bits' => 32, 'endian' => 'little', 'native' => false, 'note' => 'Metadata only in the bundled adapter; reconstruction needs the isolated JADX runner (owner setup).'],
+        'jvm' => ['name' => 'Java bytecode', 'arch' => 'jvm', 'bits' => 32, 'endian' => 'big', 'native' => false, 'note' => 'Metadata only in the bundled adapter; reconstruction needs the isolated JADX runner (owner setup).'],
+        'clr' => ['name' => '.NET CIL', 'arch' => 'clr', 'bits' => 32, 'endian' => 'little', 'native' => false, 'note' => 'Runtime detection only; method bodies need the isolated ILSpy runner (owner setup).'],
+        'extract' => ['name' => 'Filesystem extraction (no CPU)', 'arch' => 'none', 'bits' => 32, 'endian' => 'none', 'native' => false, 'note' => 'Not a processor: unpacks a detected filesystem image in the isolated extract runner so contained executables can be analyzed.'],
     ];
 
     /** @return array<string, array{name: string, arch: string, bits: int, endian: string, native: bool, note: string}> */
@@ -78,6 +79,10 @@ final class Targets
 
         if ($format === ProjectArtifact::FORMAT_PRG) {
             return [['id' => 'mos6502', 'source' => 'structural', 'note' => 'C64 PRG implies a 6502-family CPU (6510 in C64 context).']];
+        }
+
+        if ($format === ProjectArtifact::FORMAT_FILESYSTEM) {
+            return [['id' => 'extract', 'source' => 'structural', 'note' => 'Filesystem image: extraction must precede CPU analysis.']];
         }
 
         if ($format === ProjectArtifact::FORMAT_DEX || $format === ProjectArtifact::FORMAT_APK) {

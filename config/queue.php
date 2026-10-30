@@ -44,6 +44,21 @@ return [
             'after_commit' => false,
         ],
 
+        // Dedicated connection for deterministic binary analysis. Only
+        // the restricted analysis coordinator serves it (queue name
+        // 'analysis'). retry_after must exceed the longest job timeout
+        // (spool wall budget + grace, default 480 + 60) so long
+        // isolated runs are never double-executed after a visibility
+        // timeout. See docs/analysis-spool-deployment.md.
+        'analysis-database' => [
+            'driver' => 'database',
+            'connection' => env('DB_QUEUE_CONNECTION'),
+            'table' => env('DB_QUEUE_TABLE', 'jobs'),
+            'queue' => env('DB_QUEUE', 'default'),
+            'retry_after' => (int) env('ANALYSIS_QUEUE_RETRY_AFTER', 900),
+            'after_commit' => false,
+        ],
+
         'beanstalkd' => [
             'driver' => 'beanstalkd',
             'host' => env('BEANSTALKD_QUEUE_HOST', 'localhost'),

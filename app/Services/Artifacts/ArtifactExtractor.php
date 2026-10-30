@@ -12,6 +12,7 @@ use App\Services\Binary\MachOParser;
 use App\Services\Binary\PeParser;
 use App\Services\Binary\PrgParser;
 use App\Services\Binary\ZipReader;
+use Illuminate\Filesystem\FilesystemAdapter;
 use Illuminate\Support\Facades\Storage;
 
 /**
@@ -58,8 +59,15 @@ final class ArtifactExtractor
                 return;
             }
 
+            if ($disk->size($artifact->rawPath()) !== (int) $artifact->byte_size
+                || self::streamSha256($disk, $artifact->rawPath()) !== $artifact->sha256) {
+                self::fail($artifact, 'integrity_mismatch', 'The stored file failed its integrity check. Re-upload it to investigate.');
+
+                return;
+            }
+
             $bytes = $disk->get($artifact->rawPath());
-            if (strlen($bytes) !== (int) $artifact->byte_size || hash('sha256', $bytes) !== $artifact->sha256) {
+            if (strlen($bytes) !== (int) $artifact->byte_size) {
                 self::fail($artifact, 'integrity_mismatch', 'The stored file failed its integrity check. Re-upload it to investigate.');
 
                 return;
@@ -76,6 +84,32 @@ final class ArtifactExtractor
             if ($format === ProjectArtifact::FORMAT_UNKNOWN) {
                 $artifact->forceFill(['format' => $format]);
                 self::fail($artifact, 'unsupported_format', 'This file was not recognized as a supported executable, firmware, or capture format.');
+
+                return;
+            }
+
+            // Filesystem images: record the detected flavor, then stop.
+            // Content extraction runs isolated via the extract backend
+            // (Queue analysis with the extraction target) — the
+            // extractor itself never unpacks untrusted filesystems.
+            if ($format === ProjectArtifact::FORMAT_FILESYSTEM) {
+                $flavor = FormatDetector::filesystemFlavor(substr($bytes, 0, 4));
+                $artifact->forceFill([
+                    'format' => $format,
+                    'state' => ProjectArtifact::STATE_NEEDS_CONFIGURATION,
+                    'failure_code' => null,
+                    'failure_message' => null,
+                    'extractor' => 'filesystem-php/1.0.0',
+                    'extraction_schema' => ProjectArtifact::EXTRACTION_SCHEMA,
+                    'warnings' => [],
+                    'limits_applied' => [],
+                    'tech_attributes' => [
+                        'detection' => $detection['evidence'],
+                        'byte_size' => strlen($bytes),
+                        'filesystem_flavor' => $flavor,
+                    ],
+                    'extracted_at' => now(),
+                ])->save();
 
                 return;
             }
@@ -236,7 +270,7 @@ final class ArtifactExtractor
     }
 
     /** @return array<string, int> */
-    private static function elfLimits(): array
+    public static function elfLimits(): array
     {
         return [
             'max_sections' => (int) config('artifacts.elf_max_sections'),
@@ -259,7 +293,7 @@ final class ArtifactExtractor
     }
 
     /** @return array<string, int> */
-    private static function peLimits(): array
+    public static function peLimits(): array
     {
         return [
             'max_sections' => 96,
@@ -476,6 +510,29 @@ final class ArtifactExtractor
             'no_parser' => 'No parser is available for this format.',
             default => 'This file could not be inspected ('.$format.').',
         };
+    }
+
+    /**
+     * Constant-memory SHA-256 over the stored file. Returns null when
+     * the file cannot be streamed (treated as an integrity failure).
+     */
+    private static function streamSha256(FilesystemAdapter $disk, string $path): ?string
+    {
+        try {
+            $stream = $disk->readStream($path);
+        } catch (\Throwable) {
+            return null;
+        }
+        if ($stream === false) {
+            return null;
+        }
+        $context = hash_init('sha256');
+        hash_update_stream($context, $stream);
+        if (is_resource($stream)) {
+            fclose($stream);
+        }
+
+        return hash_final($context);
     }
 
     private static function fail(ProjectArtifact $artifact, string $code, string $message): void

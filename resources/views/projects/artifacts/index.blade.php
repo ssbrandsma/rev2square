@@ -16,7 +16,7 @@
         <section class="rounded-xl border border-zinc-200 bg-white p-6">
             <h2 class="font-semibold">Files ({{ $artifacts->count() }} of {{ $maxPerProject }})</h2>
             <p class="mt-1 max-w-[70ch] text-sm text-zinc-600">
-                Executables, firmware, and captures, detected from contents. Limit {{ number_format($maxBytes / 1024 / 1024, 0) }} MB per file.
+                Executables, firmware, and captures, detected from contents. Limit {{ number_format($maxBytes / 1024 / 1024, 0) }} MiB per file.
                 Files stay in private project storage and never appear in public exports.
             </p>
             @if($artifacts->isEmpty())

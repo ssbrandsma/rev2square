@@ -1,123 +1,199 @@
-# Binary analysis: owner-operated setup
+# Binary analysis: owner-operated setup (isolated runners)
 
-The bundled analyzer (pure-PHP detection, metadata, and 6502/Z80/8051
-disassembly) works with no extra setup. External backends (Ghidra,
-JADX, ILSpy) and production-grade isolation need the owner-operated
-steps below. **Do not run untrusted uploads through external backends
-until isolation (§3) is in place.** Application-level timeouts alone
-are insufficient for hostile input.
+Working with no extra setup: the bundled PHP analyzer (detection,
+metadata, and 6502/Z80/8051/ARM-A32/Thumb-T32 disassembly). Everything
+else — x86/x86-64 disassembly, Ghidra disassembly + deterministic
+decompilation, JADX/ILSpy reconstruction, filesystem extraction —
+runs in **isolated runner containers** fed by a restricted
+**analysis coordinator** through a file spool. No tool binaries are
+installed on the application host or in the PHP image, and the old
+`GHIDRA_HEADLESS` / `JADX_BIN` / `ILSPY_BIN` / `OBJDUMP_BIN` worker
+paths are retired (kept in config only as documented, non-functional
+legacy keys).
 
-## 1. Backend installation (all optional)
+Current coverage (see `muse/binary-target-backend-completion.md` and
+`muse/arm64-local-analysis-deployment.md` for the tested matrix):
 
-Install on the **worker host only** (never on the web container unless
-you accept the risk), as root or your provisioning user:
+| Backend | Targets (verified) | Output |
+|---|---|---|
+| Bundled PHP (`php-native`) | mos6502, z80, i8051, arm32, arm32-thumb | Assembly only, by design |
+| GNU objdump (`objdump`) | x86, x86-64 | Assembly only (objdump cannot decompile) |
+| Ghidra (`ghidra`) | x86, x86-64, arm32, arm32-thumb, aarch64 → runner-qualified | Assembly + tool-generated decompilation |
+| JADX (`jadx`) | dalvik, jvm → runner-qualified | Java-like reconstruction |
+| ILSpy (`ilspy`) | clr → runner-qualified | C#-like reconstruction |
+| Extraction (`extract`) | extract (filesystem images) → runner-qualified | File manifest + promoted child artifacts |
 
-### Ghidra (native disassembly/decompilation)
+“Runner-qualified” means: the mapping additionally needs a passing
+owner qualification run on the isolated runner (§4). Until qualified,
+mappings stay visible-but-unrouted — this is deliberate.
 
-1. Install a JDK 17+ runtime (Ghidra's requirement — check the release notes).
-2. Download a Ghidra release from the official distribution and unpack it to
-   `/opt/ghidra` (read-only mount preferred).
-3. Set the environment for the queue worker:
-   `GHIDRA_HEADLESS=/opt/ghidra/support/analyzeHeadless`
-4. Restart the queue worker (see your deployment's worker management).
+## 1. Architecture (what runs where)
 
-### JADX (DEX/APK/Java reconstruction)
-
-1. Download a JADX release (needs a JRE) and unpack it to `/opt/jadx`.
-2. Set `JADX_BIN=/opt/jadx/bin/jadx` for the queue worker.
-3. Restart the queue worker.
-
-### ILSpy (ilspycmd, .NET assemblies)
-
-1. Install the .NET runtime required by the ilspycmd release, then ilspycmd
-   itself to `/opt/ilspycmd`.
-2. Set `ILSPY_BIN=/opt/ilspycmd/ilspycmd` for the queue worker.
-3. Restart the queue worker.
-
-The application **probes** these paths read-only: missing binaries
-surface as `dependency_unavailable` in the capability matrix — never
-as failures, and the app never downloads or installs anything itself.
-
-## 2. Backend verification protocol (required before use)
-
-Presence is not integration. After installing a backend:
-
-1. Restart the worker and open any matching artifact page (PE for
-   Ghidra, APK for JADX, CLR PE for ILSpy).
-2. The capability row still reports the backend as unavailable until a
-   verified run exists — this is deliberate. Verification currently
-   requires developer work: the headless export path
-   (`ExportEvidence.java` for Ghidra, output parsers for JADX/ILSpy)
-   has **no verified run on any installation** and the adapters refuse
-   with `backend_unverified` even when the binary exists.
-3. To qualify a backend, a developer must run the documented synthetic
-   fixtures through it end-to-end, compare output against the checked-in
-   golden expectations, and record the backend version in the release
-   notes. Do not mark a backend verified from documentation alone.
-
-Until then, treat every external-backend row as unavailable regardless
-of what is installed.
-
-## 3. Analysis-worker isolation (required for untrusted uploads)
-
-Run the queue worker that executes `AnalyzeBinaryJob` (and extraction)
-under **all** of the following:
-
-- Dedicated non-root OS user, no sudo.
-- No network egress (firewall DROP / network namespace without a route).
-- No Docker socket, no production mounts, no secrets in environment
-  beyond Laravel's own `APP_KEY` (needed for encryption).
-- Per-job temp directories with cleanup (`TMPDIR` on a size-capped
-  filesystem); never reuse working directories across projects.
-- cgroup limits: CPU shares, memory max, process count, and disk quota.
-- Wall-clock timeouts (the job also enforces
-  `BINARY_ANALYSIS_TIMEOUT`, default 120s, and PHP queue `--timeout`).
-- Tool installations mounted read-only.
-- Cancellation must terminate the whole process tree
-  (`queue:work --timeout` + SIGKILL escalation on the deployment side).
-
-Suggested shape (systemd unit fragment, adapt paths):
-
-```ini
-[Service]
-User=rev2-analysis
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=true
-RestrictAddressFamilies=AF_UNIX AF_NETLINK
-MemoryMax=2G
-TasksMax=128
-TimeoutStopSec=150
-ExecStart=/usr/bin/php /srv/rev2square/artisan queue:work --timeout=120 --tries=1
+```
+Browser / Agent
+  → app (Laravel) + general queue workers (full env, all secrets)
+  → analysis-coordinator (queue `analysis` only, 13-var env allowlist,
+     DB + spool volumes only — NO app key, NO mail, NO AI keys)
+       → spool volume (coordinator writes jobs; runners mount read-only)
+       → objdump/ghidra/jadx/ilspy/extract runners
+         (no network, read-only root, non-root, no secrets,
+          private tmpfs workdir, one heavy job server-wide)
+       → results volume (runners write bounded evidence; coordinator
+          validates, ingests, and cleans up)
 ```
 
-`RestrictAddressFamilies` without `AF_INET/AF_INET6` blocks egress while
-keeping the local database socket working (adjust if your database is
-remote — prefer a local socket or an explicit proxy rule).
+Trust boundary details, the job/evidence schemas, and every isolation
+control are specified in `docs/analysis-spool-protocol.md`.
 
-## 4. Environment reference
+## 2. First-time provisioning (production, ARM64 server)
+
+Run in `/srv/rev2square` with `--env-file /etc/rev2square/.env.virtualmin`
+on every compose invocation. All steps are owner-operated.
+
+```sh
+cd /srv/rev2square
+
+# 1. Build the five pinned tool images (needs build-time internet
+#    for the pinned releases; Ghidra's native build takes 20-40 min).
+docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin \
+  build objdump-runner ghidra-runner jadx-runner ilspy-runner extract-runner
+
+# 2. Record what you built (paste into the deployment log).
+docker images --digests 'rev2square/*'
+
+# 3. (Re)create the coordinator + runners. App/nginx/db/queue keep
+#    running; only these six services recycle.
+docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin \
+  up -d analysis-coordinator objdump-runner ghidra-runner jadx-runner ilspy-runner extract-runner
+
+# 4. Check the runners answer (versions + ARM64 arch, no secrets shown).
+docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin \
+  exec analysis-coordinator php artisan analysis:diagnostics
+
+# 5. Capture worker capability snapshots FROM the runners.
+docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin \
+  exec analysis-coordinator php artisan binary:worker-capabilities --refresh
+# …wait a minute, then inspect:
+docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin \
+  exec analysis-coordinator php artisan binary:worker-capabilities
+```
+
+Then qualify the mappings you intend to offer (§4) before announcing
+them. Admins can watch readiness at `/admin/analysis`.
+
+Normal `update_prod.sh` runs keep working: the coordinator shares the
+app image (rebuilt with it), while the tool images only rebuild when
+you run `build` for them explicitly. After ANY app deploy or tool
+rebuild, repeat steps 4–5: snapshots older than
+`BINARY_WORKER_SNAPSHOT_TTL_HOURS` (default 24) refuse dispatch until
+refreshed, and version changes fail queued runs as `worker_mismatch`
+rather than running them against a new backend silently.
+
+## 3. Development
+
+```sh
+# Coordinator + runners (runners need ARM64 hardware to EXECUTE;
+# on x86 they build but stay unavailable — documented, never silent).
+docker compose -f compose.dev.yaml up -d analysis-coordinator \
+  objdump-runner ghidra-runner jadx-runner ilspy-runner extract-runner
+docker compose -f compose.dev.yaml exec analysis-coordinator php artisan analysis:diagnostics
+```
+
+On x86 dev machines the sandboxed adapters report unavailable and the
+bundled PHP backends keep working. The spool protocol itself is covered
+by `tests/Unit/Binary/Sandbox/*` (phpunit, stub runner) and
+`docker/analysis/tests/test_runner.py` (host python3, stub tools).
+
+## 4. Qualification protocol (required before use)
+
+Presence is not integration. After provisioning or any backend change:
+
+1. Refresh the snapshot (§2 step 5) and open any matching artifact
+   page. Unverified mappings stay visible-but-unrouted.
+2. Queue the synthetic fixtures end-to-end and compare against the
+   checked-in expectations — real instructions/functions, never
+   “non-empty output”:
+   - `tests/Unit/Binary/Sandbox/SpooledAdaptersTest.php` — adapter
+     normalization incl. the byte-identical objdump 2.44 fixture;
+   - `tests/Feature/BinaryTargetMatrixTest.php` — routing plus
+     dispatch→worker→evidence runs per target/backend pair;
+   - `docker/analysis/tests/test_runner.py` — runner claim, timeout,
+     cancel, tree-kill, caps, argv conformance;
+   - for new objdump `-m` / Ghidra language mappings: extend the
+     adapter's verified table **only together with** a passing
+     integration test on the isolated runner (see the existing
+     x86/x86-64/ARM cases).
+3. For Ghidra specifically, confirm one run shows tool-generated
+   pseudocode for a known function, and that an `arm32-thumb`
+   fixture decodes Thumb (not ARM) instructions.
+4. For extraction, confirm one SquashFS fixture promotes its
+   contained executable to a child artifact you can then analyze.
+5. Record backend name + version + image digest in the release notes.
+   Do not mark a backend verified from documentation alone.
+
+Until qualified, treat the mapping as unavailable regardless of what
+is installed.
+
+## 5. Operating notes
+
+- One concurrent heavy analysis job per server (spool lock). The
+  queue may hold more; they run in order. Raise only after measuring
+  (§6 of the delivery doc).
+- Timeouts: runner wall clock `BINARY_SPOOL_WALL_SECONDS` (default
+  480) kills the whole tool process tree; the coordinator waits
+  `BINARY_SPOOL_GRACE_SECONDS` longer, and the queue connection's
+  `retry_after` (900) exceeds both so long runs never double-execute.
+- Cancellation terminates the runner process group, not just the
+  queue record; orphaned spool entries are pruned hourly by
+  `PruneAnalysisSpool` on the coordinator.
+- Resource-limit failures (`analysis_timeout`, `evidence_rejected`,
+  `runner_failed`) are categorized per run and summarized at
+  `/admin/analysis` and via `analysis:diagnostics`.
+- In-flight jobs during a deploy: stop the coordinator, wait one wall
+  budget + grace, then redeploy; queued (not started) runs survive in
+  the database queue. Never delete the spool volumes mid-run.
+- Rollback: previous tool images stay tagged locally; `up -d` with
+  the previous compose revision restores them. Re-run §2 steps 4–5.
+
+## 6. Environment reference
+
+Coordinator allowlist (the only vars the coordinator ever sees):
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `GHIDRA_HEADLESS` | _(empty)_ | Fixed path to `analyzeHeadless`; empty = not installed |
-| `JADX_BIN` | _(empty)_ | Fixed path to `jadx` |
-| `ILSPY_BIN` | _(empty)_ | Fixed path to `ilspycmd` |
+| `DB_CONNECTION/HOST/PORT/DATABASE/USERNAME/PASSWORD` | mysql/db | Coordinator database access |
+| `QUEUE_CONNECTION` | `database` | Always database on the coordinator |
+| `CACHE_STORE` | `database` | |
+| `FILESYSTEM_DISK` | `local` | Artifact disk access |
+| `BINARY_SPOOL_DIR` / `BINARY_RESULTS_DIR` | `/spool` / `/results` | Spool mount points |
+
+Analysis tuning (coordinator + job behavior):
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `BINARY_SPOOL_WALL_SECONDS` | 480 | Runner wall clock per run (s) |
+| `BINARY_SPOOL_GRACE_SECONDS` | 30 | Coordinator grace after the wall clock |
+| `BINARY_SPOOL_PROBE_SECONDS` | 10 | Capability-probe round-trip budget |
+| `BINARY_ANALYSIS_TIMEOUT` | 120 | Job budget for in-process adapters (s) |
+| `ANALYSIS_QUEUE_RETRY_AFTER` | 900 | Queue visibility timeout (must exceed wall+grace) |
+| `BINARY_WORKER_SNAPSHOT_TTL_HOURS` | 24 | Snapshot freshness for dispatch |
 | `BINARY_MAX_INSTRUCTIONS` | 20000 | Disassembly cap per run |
-| `BINARY_MAX_SWEEP_BYTES` | 1048576 | Sweep cap per run |
 | `BINARY_MAX_FUNCTIONS` | 2000 | Function cap per run |
 | `BINARY_MAX_XREFS` | 10000 | Cross-reference cap per run |
 | `BINARY_MAX_EVIDENCE_BYTES` | 524288 | Evidence JSON cap per run |
-| `BINARY_ANALYSIS_TIMEOUT` | 120 | Job wall-clock budget (s) |
+| `BINARY_OBJDUMP_TIMEOUT` | 60 | Legacy local-subprocess budget (unused by the runner path) |
+| `BINARY_OBJDUMP_MAX_OUTPUT_BYTES` | 8388608 | objdump text cap (enforced runner-side too) |
 
-Changes apply on the next dispatched job; no code deploy needed, but a
-long-running worker picks up new environment only after a restart.
+Retired (documented, non-functional): `OBJDUMP_BIN`,
+`GHIDRA_HEADLESS`, `JADX_BIN`, `ILSPY_BIN`. Tool binaries live only
+inside the runner images.
 
-## 5. What stays local-only
+## 7. What stays local-only
 
 - Uploaded binaries and extracted evidence never leave the `artifacts`
   disk except as bounded, redacted, consent-gated excerpts to the
   configured Meta AI provider. No binary-analysis upload services, no
   external AI decompilers, no model downloads.
-- AI inference uses the existing Meta integration exclusively; see the
-  admin delivery report for provider configuration and usage ledgers.
+- AI inference uses the existing Meta integration exclusively.
+- Local deterministic analysis never requires a paid AI call, and no
+  Meta response is ever presented as disassembler output.

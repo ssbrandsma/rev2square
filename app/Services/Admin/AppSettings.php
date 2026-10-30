@@ -35,17 +35,17 @@ final class AppSettings
             'ai.max_completion_tokens' => [
                 'type' => 'int', 'default' => 16000, 'env' => 'META_MAX_TOKENS',
                 'config' => 'ai.meta.max_completion_tokens', 'min' => 256, 'max' => 64000,
-                'help' => 'Per-request output cap.',
+                'help' => 'Per-request output cap, in tokens.',
             ],
             'ai.analysis_token_budget' => [
                 'type' => 'int', 'default' => 60000, 'env' => 'AI_ANALYSIS_TOKEN_BUDGET',
                 'config' => 'ai.analysis_token_budget', 'min' => 1000, 'max' => 500000,
-                'help' => 'Evidence-selection input budget per revival analysis.',
+                'help' => 'Evidence-selection input budget per revival analysis, in tokens.',
             ],
             'ai.architecture_token_budget' => [
                 'type' => 'int', 'default' => 12000, 'env' => 'AI_ARCHITECTURE_TOKEN_BUDGET',
                 'config' => 'ai.architecture_token_budget', 'min' => 1000, 'max' => 64000,
-                'help' => 'Output budget for one architecture snapshot.',
+                'help' => 'Output budget for one architecture snapshot, in tokens.',
             ],
             'ai.agent_token_budget' => [
                 'type' => 'int', 'default' => 30000, 'env' => 'AI_AGENT_TOKEN_BUDGET',
@@ -65,12 +65,12 @@ final class AppSettings
             'ai.price_input_per_1k_micros' => [
                 'type' => 'int', 'default' => null, 'env' => 'AI_PRICE_INPUT_PER_1K_MICROS',
                 'config' => 'ai.price_input_per_1k_micros', 'min' => 0,
-                'help' => 'Optional operator-entered input price (micro-USD per 1k tokens). Empty means costs are unknown, never zero.',
+                'help' => 'Optional operator-entered input price in micro-USD per 1k tokens (1,000 = $0.001). Empty means costs are unknown, never zero.',
             ],
             'ai.price_output_per_1k_micros' => [
                 'type' => 'int', 'default' => null, 'env' => 'AI_PRICE_OUTPUT_PER_1K_MICROS',
                 'config' => 'ai.price_output_per_1k_micros', 'min' => 0,
-                'help' => 'Optional operator-entered output price (micro-USD per 1k tokens).',
+                'help' => 'Optional operator-entered output price in micro-USD per 1k tokens (1,000 = $0.001).',
             ],
             'ai.price_version' => [
                 'type' => 'string', 'default' => null, 'env' => 'AI_PRICE_VERSION',
@@ -80,7 +80,7 @@ final class AppSettings
             'ai.daily_cost_cap_micros' => [
                 'type' => 'int', 'default' => null, 'env' => 'AI_DAILY_COST_CAP_MICROS',
                 'config' => 'ai.daily_cost_cap_micros', 'min' => 0,
-                'help' => 'Optional per-user daily spend cap (micro-USD). Unset = token/request limits only. When set, requests are refused unless pricing is configured, because an unenforceable cap is worse than none.',
+                'help' => 'Optional per-user daily spend cap in micro-USD (1,000,000 = $1). Unset = token/request limits only. When set, requests are refused unless pricing is configured, because an unenforceable cap is worse than none.',
             ],
             'artifacts.enabled' => [
                 'type' => 'bool', 'default' => true, 'env' => 'ARTIFACTS_ENABLED',
@@ -93,9 +93,9 @@ final class AppSettings
                 'help' => 'Owner-managed deployment lock: uploads stay off until OS isolation is configured.',
             ],
             'artifacts.max_upload_bytes' => [
-                'type' => 'int', 'default' => 8388608, 'env' => 'ARTIFACTS_MAX_UPLOAD_BYTES',
+                'type' => 'int', 'default' => 67108864, 'env' => 'ARTIFACTS_MAX_UPLOAD_BYTES',
                 'config' => 'artifacts.max_upload_bytes', 'min' => 1024, 'max' => 1073741824,
-                'help' => 'Single upload cap in bytes.',
+                'help' => 'Single upload cap in bytes (67,108,864 = 64 MiB). Lower values are honored as-is.',
             ],
             'registration.open' => [
                 'type' => 'bool', 'default' => true, 'env' => 'REGISTRATION_OPEN',

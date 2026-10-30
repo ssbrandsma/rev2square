@@ -1,0 +1,121 @@
+# Rev2Square isolated Ghidra headless runner (Linux ARM64).
+#
+# Pinned:
+#   Ghidra 12.2, ghidra_12.2_PUBLIC_20261016.zip
+#     sha256:2c2cd776db3c1f6a097ba418922378ac3649cadd5e844a6f5f088ae628a7be67
+#     source: https://github.com/NationalSecurityAgency/ghidra/releases/tag/Ghidra_12.2_build
+#     license: Apache-2.0
+#   Eclipse Temurin JDK 25.0.5+8 (aarch64, hotspot, LTS)
+#     sha256:bb5b2ded252f21c6090cf780b0a408ad0d83bbb557e702955643557f13231880
+#     source: https://api.adoptium.net (temurin25-binaries jdk-25.0.5+8)
+#     license: GPL-2.0-with-Classpath-exception
+#
+# The public release ships Linux natives for x86-64 only, so this
+# build compiles the native components (decompiler, demangler) for
+# linux-aarch64 from the distribution via the documented
+# `gradlew buildNatives` step (needs build-time internet for the
+# Gradle distribution + native build inputs). 12.2 no longer bundles
+# the amd64-only 7-Zip-JBinding, so no amd64-only library remains on
+# the headless path. Debugger/symbolic-execution extras are not
+# enabled: headless import + analysis + decompile only.
+#
+# Build (owner, on the ARM64 server; allow 20-40 min for buildNatives):
+#   docker build -f docker/analysis/Dockerfile.ghidra \
+#     -t rev2square/ghidra:12.2 docker/analysis
+ARG DEBIAN_IMAGE=debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3
+ARG GHIDRA_VERSION=12.2
+ARG GHIDRA_ZIP=ghidra_12.2_PUBLIC_20261016.zip
+ARG GHIDRA_SHA256=2c2cd776db3c1f6a097ba418922378ac3649cadd5e844a6f5f088ae628a7be67
+ARG TEMURIN_JDK_URL=https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.5%2B8/OpenJDK25U-jdk_aarch64_linux_hotspot_25.0.5_8.tar.gz
+ARG TEMURIN_JDK_SHA256=bb5b2ded252f21c6090cf780b0a408ad0d83bbb557e702955643557f13231880
+
+# ---- JDK stage ------------------------------------------------------
+FROM ${DEBIAN_IMAGE} AS jdk
+
+ARG TEMURIN_JDK_URL
+ARG TEMURIN_JDK_SHA256
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /opt/jdk \
+    && curl -fsSL -o /tmp/jdk.tar.gz "${TEMURIN_JDK_URL}" \
+    && echo "${TEMURIN_JDK_SHA256}  /tmp/jdk.tar.gz" | sha256sum -c - \
+    && tar -xzf /tmp/jdk.tar.gz -C /opt/jdk --strip-components=1 \
+    && rm /tmp/jdk.tar.gz \
+    && /opt/jdk/bin/java -version
+
+# ---- Native-build stage ---------------------------------------------
+FROM ${DEBIAN_IMAGE} AS natives
+
+ARG GHIDRA_VERSION
+ARG GHIDRA_ZIP
+ARG GHIDRA_SHA256
+
+COPY --from=jdk /opt/jdk /opt/jdk
+ENV JAVA_HOME=/opt/jdk \
+    PATH=/opt/jdk/bin:${PATH}
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates curl file gcc make python3-minimal unzip zip \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /opt/dist \
+    && curl -fsSL -o /tmp/ghidra.zip \
+        "https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_${GHIDRA_VERSION}_build/${GHIDRA_ZIP}" \
+    && echo "${GHIDRA_SHA256}  /tmp/ghidra.zip" | sha256sum -c - \
+    && unzip -q /tmp/ghidra.zip -d /opt/dist \
+    && rm /tmp/ghidra.zip \
+    && mv /opt/dist/ghidra_${GHIDRA_VERSION}_PUBLIC /opt/ghidra \
+    && cd /opt/ghidra/support/gradle \
+    && ./gradlew --no-daemon buildNatives \
+    && DECOMPILE=$(find /opt/ghidra -path '*os/linux_aarch64/decompile' -o -path '*os/linux_arm64/decompile' | head -1) \
+    && test -n "${DECOMPILE}" && test -x "${DECOMPILE}" \
+    && file "${DECOMPILE}" | grep -qi 'ARM aarch64' \
+    && echo "${DECOMPILE}" > /provenance-decompile-path.txt
+
+# ---- Runtime stage --------------------------------------------------
+FROM ${DEBIAN_IMAGE}
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    JAVA_HOME=/opt/jdk \
+    PATH=/opt/jdk/bin:${PATH} \
+    GHIDRA_HEADLESS=/opt/ghidra/support/analyzeHeadless \
+    TOOL_IMAGE=rev2square/ghidra:12.2
+
+LABEL org.rev2square.tool="ghidra" \
+      org.rev2square.tool-version="12.2" \
+      org.rev2square.tool-source="https://github.com/NationalSecurityAgency/ghidra/releases/tag/Ghidra_12.2_build" \
+      org.rev2square.tool-sha256="2c2cd776db3c1f6a097ba418922378ac3649cadd5e844a6f5f088ae628a7be67" \
+      org.rev2square.tool-license="Apache-2.0" \
+      org.rev2square.jdk="temurin-25.0.5+8-aarch64" \
+      org.rev2square.jdk-sha256="bb5b2ded252f21c6090cf780b0a408ad0d83bbb557e702955643557f13231880" \
+      org.rev2square.base-image="debian:bookworm-slim@sha256:99c0b25c46d0214d5a2091092e7908907dcaecd6a962cde0ac700acee222b6f3"
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends python3-minimal \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /opt/runner /provenance
+
+COPY --from=jdk /opt/jdk /opt/jdk
+COPY --from=natives /opt/ghidra /opt/ghidra
+COPY runner.py /opt/runner/runner.py
+COPY ExportEvidence.java /opt/ghidra/ExportEvidence.java
+
+# Reviewed evidence-export script, installed where analyzeHeadless
+# resolves -postScript names (plus the read-only reviewed copy above).
+RUN cp /opt/ghidra/ExportEvidence.java \
+        /opt/ghidra/Ghidra/Features/Base/ghidra_scripts/ExportEvidence.java \
+    && /opt/jdk/bin/java -version > /provenance/java-version.txt 2>&1 \
+    && find /opt/ghidra -name decompile -type f > /provenance/decompile-bins.txt \
+    && chmod 644 /provenance/* \
+    && chmod 755 /opt/runner/runner.py \
+    && python3 /opt/runner/runner.py --dry-run --tool ghidra \
+        --profile headless \
+        --params-json '{"language":"ARM:LE:32:v8","base":134217728}' \
+        --workdir /tmp/dry | grep -q 'ExportEvidence.java'
+
+USER www-data
+
+CMD ["python3", "/opt/runner/runner.py", "--tool", "ghidra", \
+     "--spool", "/spool", "--results", "/results"]

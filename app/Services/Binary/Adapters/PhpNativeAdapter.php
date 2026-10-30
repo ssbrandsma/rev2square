@@ -4,21 +4,24 @@ namespace App\Services\Binary\Adapters;
 
 use App\Models\BinaryAnalysis;
 use App\Models\ProjectArtifact;
+use App\Services\Binary\Disasm\Arm32Decoder;
 use App\Services\Binary\Disasm\I8051Decoder;
 use App\Services\Binary\Disasm\InstructionDecoder;
 use App\Services\Binary\Disasm\LinearSweep;
 use App\Services\Binary\Disasm\Mos6502Decoder;
+use App\Services\Binary\Disasm\ThumbDecoder;
 use App\Services\Binary\Disasm\Z80Decoder;
 use App\Services\Binary\HexRecords;
 use App\Services\Binary\Targets;
 
 /**
- * Bundled pure-PHP adapter: in-process disassembly for 6502, Z80 and
- * 8051 targets, function seeding from entries/symbols/call targets,
- * one-level call graphs, and candidate vector detection.
+ * Bundled pure-PHP adapter: in-process disassembly for the native
+ * targets (6502, Z80, 8051, ARM A32, Thumb T32), function seeding
+ * from entries/symbols/call targets, one-level call graphs, and
+ * candidate vector detection.
  *
  * No subprocesses, no network, no model calls. Anything outside the
- * three native targets is refused (not approximated).
+ * native targets is refused (not approximated).
  */
 final class PhpNativeAdapter implements BinaryAdapter
 {
@@ -53,6 +56,7 @@ final class PhpNativeAdapter implements BinaryAdapter
             ProjectArtifact::FORMAT_RAW,
             ProjectArtifact::FORMAT_IHEX,
             ProjectArtifact::FORMAT_SREC,
+            ProjectArtifact::FORMAT_ARCHIVE,
         ];
     }
 
@@ -77,6 +81,7 @@ final class PhpNativeAdapter implements BinaryAdapter
 
         $needsConfig = $target === null && in_array($format, [
             ProjectArtifact::FORMAT_RAW, ProjectArtifact::FORMAT_IHEX, ProjectArtifact::FORMAT_SREC,
+            ProjectArtifact::FORMAT_ARCHIVE,
         ], true);
 
         if ($needsConfig) {
@@ -110,6 +115,7 @@ final class PhpNativeAdapter implements BinaryAdapter
             Capability::XREFS => Capability::PARTIAL,
             Capability::CALLGRAPH => Capability::PARTIAL,
             Capability::DECOMPILATION => Capability::UNSUPPORTED,
+            Capability::EXTRACTION => Capability::UNSUPPORTED,
             Capability::AI_EXPLAIN => Capability::SUPPORTED,
             Capability::COMPARISON => Capability::PARTIAL,
         ];
@@ -124,8 +130,8 @@ final class PhpNativeAdapter implements BinaryAdapter
             throw new AnalysisFailedException('target_unsupported', 'The bundled analyzer cannot disassemble the “'.$target.'” target. Install the documented backend or pick a supported target.');
         }
 
-        $format = $analysis->artifact->format;
-        $segments = $this->segments($format, $bytes, $snapshot, $config);
+        $format = (string) ($config['member_format'] ?? $analysis->artifact->format);
+        $segments = self::segments($format, $bytes, $snapshot, $config);
         if ($segments === []) {
             throw new AnalysisFailedException('no_executable_segments', 'No executable byte ranges could be mapped for this format and target.');
         }
@@ -172,8 +178,8 @@ final class PhpNativeAdapter implements BinaryAdapter
             }
         }
 
-        $functions = $this->functions($format, $bytes, $snapshot, $config, $segments, $allXrefs);
-        $calls = $this->callGraph($functions, $allXrefs);
+        $functions = self::functions($format, $bytes, $snapshot, $config, $segments, $allXrefs);
+        $calls = self::callGraph($functions, $allXrefs);
         $vectors = $this->vectors($target, $segments);
         $ioNotes = $this->ioNotes($target, $config, $windows);
 
@@ -192,7 +198,8 @@ final class PhpNativeAdapter implements BinaryAdapter
             'artifact' => [
                 'id' => $analysis->artifact->id,
                 'sha256' => $analysis->artifact->sha256,
-                'format' => $format,
+                'format' => $analysis->artifact->format,
+                'member' => $config['member_info'] ?? null,
             ],
             'target' => $target,
             'config' => $config,
@@ -229,6 +236,8 @@ final class PhpNativeAdapter implements BinaryAdapter
             'mos6502' => new Mos6502Decoder,
             'z80' => new Z80Decoder,
             'i8051' => new I8051Decoder,
+            'arm32' => new Arm32Decoder,
+            'arm32-thumb' => new ThumbDecoder,
             default => null,
         };
     }
@@ -239,7 +248,7 @@ final class PhpNativeAdapter implements BinaryAdapter
      *
      * @return list<array{name: string, kind: string, bytes: string, base: int, file_offset: ?int}>
      */
-    private function segments(string $format, string $bytes, array $snapshot, array $config): array
+    public static function segments(string $format, string $bytes, array $snapshot, array $config): array
     {
         $data = $snapshot['data'] ?? [];
         $maxBytes = (int) config('artifacts.binary_max_sweep_bytes');
@@ -337,7 +346,7 @@ final class PhpNativeAdapter implements BinaryAdapter
      *
      * @return list<array{id: string, address: int, file_offset: ?int, name: ?string, source: string, size: ?int, size_tentative: bool}>
      */
-    private function functions(string $format, string $bytes, array $snapshot, array $config, array $segments, array $xrefs): array
+    public static function functions(string $format, string $bytes, array $snapshot, array $config, array $segments, array $xrefs): array
     {
         $data = $snapshot['data'] ?? [];
         $maxFunctions = (int) config('artifacts.binary_max_functions');
@@ -452,7 +461,7 @@ final class PhpNativeAdapter implements BinaryAdapter
      *
      * @return array<string, array{callers: list<string>, callees: list<string>}>
      */
-    private function callGraph(array $functions, array $xrefs): array
+    public static function callGraph(array $functions, array $xrefs): array
     {
         $byAddress = [];
         foreach ($functions as $function) {
@@ -539,6 +548,37 @@ final class PhpNativeAdapter implements BinaryAdapter
                 if ($covered($address)) {
                     $vectors[] = ['address' => $address, 'kind' => $kind, 'points_to' => null, 'note' => 'Candidate interrupt vector (classic 8051 map).'];
                 }
+            }
+        } elseif ($target === 'arm32' || $target === 'arm32-thumb') {
+            $read32 = function (int $address) use ($segments): ?int {
+                foreach ($segments as $segment) {
+                    $end = $segment['base'] + strlen($segment['bytes']);
+                    if ($address >= $segment['base'] && $address + 3 < $end) {
+                        $off = $address - $segment['base'];
+
+                        return ord($segment['bytes'][$off]) | (ord($segment['bytes'][$off + 1]) << 8)
+                            | (ord($segment['bytes'][$off + 2]) << 16) | (ord($segment['bytes'][$off + 3]) << 24);
+                    }
+                }
+
+                return null;
+            };
+            // Vector-table head at the image base: M-profile reads this
+            // as (initial SP, reset handler); A/R-profile as a branch
+            // table. Both readings stay candidates — the profile is
+            // device context, and raw points_to values are NOT masked.
+            foreach ($segments as $segment) {
+                if ($segment['kind'] !== 'flat' && $segment['kind'] !== 'records') {
+                    continue;
+                }
+                foreach ([0 => 'vector-table[0] (M-profile: initial stack pointer / A-profile: reset branch)', 4 => 'vector-table[1] (M-profile: reset handler, Thumb bit set / A-profile: undefined-instruction branch)'] as $delta => $kind) {
+                    $at = $segment['base'] + $delta;
+                    $value = $read32($at);
+                    if ($value !== null) {
+                        $vectors[] = ['address' => $at, 'kind' => $kind, 'points_to' => $value, 'note' => 'Candidate: profile and mapping need device context; the value is shown unmasked.'];
+                    }
+                }
+                break;
             }
         }
 

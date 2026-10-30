@@ -19,7 +19,12 @@
                 <h2 class="font-semibold">Ordinary settings</h2>
                 <p class="mt-1 max-w-[70ch] text-sm text-zinc-600">Typed allowlist only. Environment-managed values are locked and cannot be changed here. Changes apply to web requests immediately and to queue workers on their next job.</p>
                 <div class="mt-4 space-y-4">
+                    @php($settingGroup = null)
                     @foreach($settings as $key => $entry)
+                        @if(Str::before($key, '.') !== $settingGroup)
+                            @php($settingGroup = Str::before($key, '.'))
+                            <h3 class="pt-2 text-sm font-semibold text-zinc-700">{{ ['ai' => 'AI', 'artifacts' => 'Uploads', 'registration' => 'Registration'][$settingGroup] ?? ucfirst($settingGroup) }}</h3>
+                        @endif
                         <div class="border-t border-zinc-100 pt-4">
                             <label class="block text-sm" for="setting-{{ $loop->index }}">
                                 <span class="font-mono font-semibold">{{ $key }}</span>

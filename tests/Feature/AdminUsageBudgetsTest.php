@@ -315,14 +315,31 @@ class AdminUsageBudgetsTest extends TestCase
         $this->assertStringNotContainsString('password', strtolower($body));
     }
 
+    public function test_dashboard_warns_when_installed_backend_lacks_worker_snapshot(): void
+    {
+        $adapter = new \App\Services\Binary\Adapters\ObjdumpAdapter;
+        if (! $adapter->probe()['available']) {
+            $this->markTestSkipped('isolated objdump runner is not available in this environment.');
+        }
+        $admin = $this->makeAdmin();
+
+        $this->actingAs($admin)->get(route('admin.dashboard'))->assertOk()->assertSee('worker snapshot');
+
+        \App\Models\WorkerCapability::capture($adapter, 'test');
+        $this->actingAs($admin)->get(route('admin.dashboard'))->assertOk()->assertDontSee('worker snapshot');
+    }
+
     public function test_admin_pages_render_with_key_markers(): void
     {
         $admin = $this->makeAdmin();
+        $user = User::factory()->create();
 
         $this->actingAs($admin)->get(route('admin.dashboard'))->assertOk()->assertSee('AI usage today');
         $this->actingAs($admin)->get(route('admin.users.index'))->assertOk();
+        $this->actingAs($admin)->get(route('admin.users.edit', $user))->assertOk();
         $this->actingAs($admin)->get(route('admin.settings.index'))->assertOk()->assertSee('ai.enabled');
         $this->actingAs($admin)->get(route('admin.usage.index'))->assertOk();
+        $this->actingAs($admin)->get(route('admin.usage.user', $user))->assertOk();
         $this->actingAs($admin)->get(route('admin.audit.index'))->assertOk();
         $this->actingAs($admin)->get(route('admin.moderation.index'))->assertOk();
     }

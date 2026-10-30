@@ -41,7 +41,7 @@ class BinaryAnalysisTest extends TestCase
         return [$project->fresh(), $owner];
     }
 
-    private function storeBytes(Project $project, User $uploader, string $bytes, string $name): ProjectArtifact
+    private function storeBytes(Project $project, User $uploader, string $bytes, string $name, ?string $format = null): ProjectArtifact
     {
         $artifact = ProjectArtifact::create([
             'project_id' => $project->id,
@@ -50,7 +50,9 @@ class BinaryAnalysisTest extends TestCase
             'byte_size' => strlen($bytes),
             'sha256' => hash('sha256', $bytes),
             'storage_key' => str()->random(40),
-            'format' => ArtifactExtractor::detect($bytes, $name),
+            // Explicit format mirrors the upload "treat as raw" opt-in
+            // for unrecognized bytes (without it they fail extraction).
+            'format' => $format ?? ArtifactExtractor::detect($bytes, $name),
             'state' => ProjectArtifact::STATE_QUEUED,
         ]);
         Storage::disk('artifacts')->put($artifact->rawPath(), $bytes);
@@ -329,17 +331,20 @@ class BinaryAnalysisTest extends TestCase
 
     public function test_unsupported_target_refuses_without_placeholder_run(): void
     {
+        // x86-64 routes to objdump since the backend completion work;
+        // pic18 has no verified backend anywhere, so it keeps the
+        // original refusal intent of this test.
         Storage::fake('artifacts');
         [$project, $owner] = $this->seedProject();
-        $pe = $this->storeBytes($project, $owner, BinaryFixtures::pe()['bytes'], 'app.exe');
+        $raw = $this->storeBytes($project, $owner, "\x00\x01\x02\x03", 'firmware.bin', ProjectArtifact::FORMAT_RAW);
 
         $response = $this->actingAs($owner)->post(
-            route('projects.artifacts.analyses.store', [$project, $pe]),
-            ['target' => 'x86-64']
+            route('projects.artifacts.analyses.store', [$project, $raw]),
+            ['target' => 'pic18', 'base_address' => '0x8000']
         );
 
         $response->assertSessionHas('error');
-        $this->assertStringContainsString('Ghidra', (string) session('error'));
+        $this->assertStringContainsString('No available backend', (string) session('error'));
         $this->assertSame(0, BinaryAnalysis::count());
     }
 

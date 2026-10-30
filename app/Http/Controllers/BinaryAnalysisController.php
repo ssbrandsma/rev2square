@@ -38,6 +38,7 @@ class BinaryAnalysisController extends Controller
             'entry' => 'nullable|string|max:32',
             'platform' => 'nullable|string|max:32',
             'adapter' => 'nullable|string|max:32',
+            'member' => 'nullable|string|max:200',
         ]);
 
         $result = AnalysisRequest::request($artifact, $request->user(), $data);

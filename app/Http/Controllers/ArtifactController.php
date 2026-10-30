@@ -12,6 +12,7 @@ use App\Services\Binary\CapabilityMatrix;
 use App\Services\Binary\Targets;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\View\View;
@@ -42,17 +43,45 @@ class ArtifactController extends Controller
     {
         Gate::authorize('view', $project);
 
+        // PHP silently empties the request when the body exceeds
+        // post_max_size. Detect that here so an oversized batch is
+        // never misreported as a missing file or a CSRF failure.
+        $postMax = self::phpBytes((string) ini_get('post_max_size'));
+        $contentLength = (int) $request->headers->get('Content-Length', 0);
+        if ($postMax > 0 && $contentLength > $postMax) {
+            return back()
+                ->withInput($request->only(['investigation_question', 'device_context']))
+                ->with('error', 'This upload batch exceeds the server request limit of '
+                    .ArtifactUploadService::humanBytes($postMax).' in total. Upload large files one at a time.');
+        }
+
         $data = $request->validate([
             'files' => 'required|array|min:1|max:5',
-            'files.*' => 'required|file|max:'.((int) config('artifacts.max_upload_bytes') / 1024),
+            'files.*' => 'required',
             'as_raw' => 'nullable|boolean',
         ]);
 
+        $maxBytes = (int) config('artifacts.max_upload_bytes');
         $stored = [];
         $reused = 0;
         $errors = [];
 
-        foreach ($data['files'] as $file) {
+        foreach ($request->file('files', []) as $file) {
+            if (! $file instanceof UploadedFile) {
+                $errors[] = 'One upload slot did not contain a file. Select the files again.';
+                continue;
+            }
+            $name = $file->getClientOriginalName() ?: 'file';
+            if (! $file->isValid()) {
+                $errors[] = $name.': '.self::uploadErrorMessage($file->getError(), $maxBytes);
+                continue;
+            }
+            if (($file->getSize() ?? 0) > $maxBytes) {
+                $errors[] = $name.': this file is '.ArtifactUploadService::humanBytes((int) $file->getSize())
+                    .'; the limit is '.ArtifactUploadService::humanBytes($maxBytes).'. Narrow the capture or split the input and try again.';
+                continue;
+            }
+
             $result = ArtifactUploadService::store($project, $request->user(), $file, (bool) ($data['as_raw'] ?? false));
 
             if ($result['ok']) {
@@ -62,7 +91,7 @@ class ArtifactController extends Controller
                     $stored[] = $result['artifact'];
                 }
             } else {
-                $errors[] = ($file->getClientOriginalName() ?? 'file').': '.$result['error'];
+                $errors[] = $name.': '.$result['error'];
             }
         }
 
@@ -120,9 +149,36 @@ class ArtifactController extends Controller
             'backToConversation' => $backToConversation,
             'analyses' => $analyses,
             'capabilities' => CapabilityMatrix::forArtifact($artifact, $snapshot),
-            'targets' => Targets::all(),
+            'targetOptions' => CapabilityMatrix::targetOptions($artifact, $snapshot),
+            'memberOptions' => self::memberOptions($artifact, $snapshot),
             'candidates' => Targets::candidatesFor($artifact->format, $artifact->arch, $snapshot ?? []),
         ]);
+    }
+
+    /**
+     * @param  array<string, mixed>|null  $snapshot
+     * @return list<array{name: string, label: string, disabled: bool}>
+     */
+    private static function memberOptions(ProjectArtifact $artifact, ?array $snapshot): array
+    {
+        if ($artifact->format !== ProjectArtifact::FORMAT_ARCHIVE) {
+            return [];
+        }
+        $cap = (int) config('artifacts.binary_max_archive_member_bytes', 32 * 1024 * 1024);
+        $options = [];
+        foreach (($snapshot['data']['members'] ?? []) as $member) {
+            $size = (int) ($member['size'] ?? 0);
+            $method = $member['method'] ?? '?';
+            $disabled = ! empty($member['encrypted']) || $size <= 0 || $size > $cap || ! in_array($method, ['stored', 'deflated'], true);
+            $note = ! empty($member['encrypted']) ? 'encrypted' : ($size <= 0 ? 'empty' : ($size > $cap ? 'over staging cap' : $method));
+            $options[] = [
+                'name' => (string) ($member['name'] ?? '?'),
+                'label' => (string) ($member['name'] ?? '?').' ('.number_format($size).' bytes, '.$note.')',
+                'disabled' => $disabled,
+            ];
+        }
+
+        return $options;
     }
 
     public function retry(Project $project, ProjectArtifact $artifact): RedirectResponse
@@ -173,5 +229,45 @@ class ArtifactController extends Controller
         if ($artifact->project_id !== $project->id) {
             abort(404);
         }
+    }
+
+    /**
+     * Distinct, actionable message per PHP upload failure. Oversized
+     * files name the application limit; interruptions and server-side
+     * failures say so instead of blaming the file format.
+     */
+    private static function uploadErrorMessage(int $error, int $maxBytes): string
+    {
+        return match ($error) {
+            UPLOAD_ERR_INI_SIZE, UPLOAD_ERR_FORM_SIZE => 'exceeds the per-file limit of '
+                .ArtifactUploadService::humanBytes($maxBytes).'. Narrow the capture or split the input and try again.',
+            UPLOAD_ERR_PARTIAL => 'was interrupted during upload. Check the connection and try again.',
+            UPLOAD_ERR_NO_FILE => 'no file was received. Select the file again.',
+            UPLOAD_ERR_NO_TMP_DIR, UPLOAD_ERR_CANT_WRITE, UPLOAD_ERR_EXTENSION => 'could not be saved on the server. Try again later.',
+            default => 'did not complete. Try again.',
+        };
+    }
+
+    /**
+     * Parse a php.ini shorthand byte value (e.g. "80M", "1G", "512K").
+     * Returns 0 for unlimited/empty.
+     */
+    private static function phpBytes(string $value): int
+    {
+        $value = trim($value);
+        if ($value === '' || $value === '-1') {
+            return 0;
+        }
+        $last = strtolower(substr($value, -1));
+        if (ctype_digit($last)) {
+            return (int) $value;
+        }
+
+        return match ($last) {
+            'g' => (int) substr($value, 0, -1) * 1024 * 1024 * 1024,
+            'm' => (int) substr($value, 0, -1) * 1024 * 1024,
+            'k' => (int) substr($value, 0, -1) * 1024,
+            default => (int) $value,
+        };
     }
 }
