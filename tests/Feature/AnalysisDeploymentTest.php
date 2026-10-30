@@ -287,6 +287,28 @@ class AnalysisDeploymentTest extends TestCase
         }
     }
 
+    public function test_ilspy_smoke_uses_structured_arch_signal_and_decompiles(): void
+    {
+        // `dotnet --list-runtimes` prints no runtime identifier, so
+        // grepping it for 'linux-arm64' fails on every architecture
+        // (verified against real output). The arch gate must use the
+        // documented RID/Architecture fields of `dotnet --info`, and
+        // --version alone is not integration proof: the smoke must
+        // decompile a known assembly end to end. Each gate is a
+        // labeled layer so the log names the failing check.
+        $ilspy = (string) file_get_contents(base_path('docker/analysis/Dockerfile.ilspy'));
+        $this->assertStringNotContainsString("grep -q 'linux-arm64' /provenance/dotnet-runtimes.txt", $ilspy);
+        $code = (string) preg_replace('/^\s*#.*$/m', '', $ilspy);
+        $this->assertSame(2, substr_count($code, 'dotnet --info'), 'ilspy captures + live-checks dotnet --info');
+        foreach (['RID:', 'linux-arm64', 'Architecture:', 'arm64'] as $token) {
+            $this->assertStringContainsString($token, $ilspy, "ilspy arch gate references {$token}");
+        }
+        foreach (['System.Console', 'class Console', 'ReadLine'] as $token) {
+            $this->assertStringContainsString($token, $ilspy, "ilspy decompile smoke references {$token}");
+        }
+        $this->assertSame(5, substr_count($ilspy, '--- smoke:'), 'ilspy has five labeled smoke steps');
+    }
+
     public function test_jadx_uses_verified_flat_archive_layout(): void
     {
         // The published jadx-1.5.6.zip has bin/ + lib/ at the archive

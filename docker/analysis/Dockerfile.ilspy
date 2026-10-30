@@ -4,6 +4,10 @@
 #   ilspycmd 11.2.0.10050 (NuGet .NET tool, framework-dependent "any"
 #     package — this is what runs on linux-arm64; the release's native
 #     AOT packages are linux-x64/win-x64 only and are NOT used here)
+#     Verified: the `ilspycmd` id is a metapackage whose tool settings
+#     map win-x64 / linux-x64 / any; linux-arm64 falls back to the
+#     `ilspycmd.any` binaries (confirmed by nupkg inspection and by
+#     `--version` output on the ARM64 server).
 #     source: https://www.nuget.org/packages/ilspycmd/11.2.0.10050
 #     upstream release: https://github.com/icsharpcode/ILSpy/releases/tag/v11.2
 #     license: MIT ; targets net10.0
@@ -72,19 +76,51 @@ COPY runner.py /opt/runner/runner.py
 RUN chmod -R a+rX /opt/ilspy /usr/share/dotnet \
     && /opt/ilspy/ilspycmd --version > /provenance/ilspycmd-version.txt 2>&1 \
     && dotnet --list-runtimes > /provenance/dotnet-runtimes.txt 2>&1 \
+    && dotnet --info > /provenance/dotnet-info.txt 2>&1 \
     && chmod 644 /provenance/* \
     && chmod 755 /opt/runner/runner.py
 
 USER www-data
 
-# Runtime self-checks execute as the non-root runtime user: stdlib
-# coverage for every runner.py import, ilspycmd executability, the
-# linux-arm64 runtime assertion, and the dry-run argv path. HOME
+# Runtime self-checks execute as the non-root runtime user. Each gate
+# is its own labeled layer so the build log names the exact failing
+# check instead of a bare exit code from a long && chain. HOME
 # points at tmpfs (as in production).
-RUN export HOME=/tmp \
-    && python3 -c "import argparse, fcntl, hashlib, json, os, platform, re, select, shutil, signal, subprocess, sys, time" \
-    && /opt/ilspy/ilspycmd --version \
-    && grep -q 'linux-arm64' /provenance/dotnet-runtimes.txt \
+RUN echo "--- smoke: python stdlib imports (www-data) ---" \
+    && export HOME=/tmp \
+    && python3 -c "import argparse, fcntl, hashlib, json, os, platform, re, select, shutil, signal, subprocess, sys, time"
+
+RUN echo "--- smoke: ilspycmd executes (www-data) ---" \
+    && export HOME=/tmp \
+    && /opt/ilspy/ilspycmd --version
+
+# Architecture gate: `dotnet --list-runtimes` prints NO runtime
+# identifier (verified against real output — grepping it for
+# 'linux-arm64' can never match on any arch). The documented
+# structured signal is the RID + Architecture fields of
+# `dotnet --info`, matched field-anchored below.
+RUN echo "--- smoke: linux-arm64 runtime RID (www-data) ---" \
+    && export HOME=/tmp \
+    && dotnet --info > /tmp/dotnet-info.txt \
+    && grep -qE '(^|[[:space:]])RID:[[:space:]]+linux-arm64([[:space:]]|$)' /tmp/dotnet-info.txt \
+    && grep -qE '(^|[[:space:]])Architecture:[[:space:]]+arm64([[:space:]]|$)' /tmp/dotnet-info.txt
+
+# Integration gate: --version only proves startup. Decompile a known
+# framework assembly end to end (IL -> C#) and assert known type +
+# member names in the output. Validated with the same ilspycmd.any
+# binaries (see header comment) against System.Console.
+RUN echo "--- smoke: ilspycmd decompiles a known assembly (www-data) ---" \
+    && export HOME=/tmp \
+    && mkdir -p /tmp/ilspy-out \
+    && DLL=$(ls /usr/share/dotnet/shared/Microsoft.NETCore.App/*/System.Console.dll | head -1) \
+    && test -n "${DLL}" \
+    && /opt/ilspy/ilspycmd "${DLL}" -o /tmp/ilspy-out \
+    && grep -rq 'class Console' /tmp/ilspy-out \
+    && grep -rq 'ReadLine' /tmp/ilspy-out \
+    && rm -rf /tmp/ilspy-out
+
+RUN echo "--- smoke: runner dry-run argv (www-data) ---" \
+    && export HOME=/tmp \
     && mkdir -p /tmp/dry \
     && python3 /opt/runner/runner.py --dry-run --tool ilspy \
         --profile assembly --params-json '{}' --workdir /tmp/dry \
