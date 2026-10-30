@@ -37,6 +37,10 @@ class BinaryAnalysis extends Model
         'environmental',
         'job_failed',
         'cancelled_race',
+        // Storage outages (missing mount, restore in progress): the bytes
+        // may come back, so retry stays available after a restore.
+        'missing_original',
+        'storage_unreadable',
     ];
 
     protected $fillable = [

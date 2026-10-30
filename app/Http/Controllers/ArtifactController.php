@@ -7,6 +7,7 @@ use App\Models\BinaryAnalysis;
 use App\Models\Project;
 use App\Models\ProjectArtifact;
 use App\Services\Artifacts\ArtifactEvidence;
+use App\Services\Artifacts\ArtifactStorage;
 use App\Services\Artifacts\ArtifactUploadService;
 use App\Services\Binary\CapabilityMatrix;
 use App\Services\Binary\Targets;
@@ -14,6 +15,7 @@ use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\View\View;
 
@@ -128,6 +130,26 @@ class ArtifactController extends Controller
         $this->authorizeArtifact($project, $artifact);
 
         $snapshot = $artifact->isUsable() ? $artifact->readSnapshot() : null;
+        // A usable artifact always has a snapshot: a null read means the
+        // stored files are currently unavailable, not that extraction is
+        // still running. Say so explicitly instead of rendering an
+        // unexplained empty viewer.
+        $storageNotice = null;
+        if ($artifact->isUsable() && $snapshot === null) {
+            $status = ArtifactStorage::status('artifacts', $artifact->snapshotPath());
+            if ($status === ArtifactStorage::OK) {
+                Log::warning('Stored artifact snapshot failed to decode.', [
+                    'artifact_id' => $artifact->id,
+                    'project_id' => $project->id,
+                ]);
+            } else {
+                ArtifactStorage::logUnavailable('artifacts', $artifact->snapshotPath(), $status, [
+                    'artifact_id' => $artifact->id,
+                    'project_id' => $project->id,
+                ]);
+            }
+            $storageNotice = 'The stored analysis files are temporarily unavailable, so details below may be incomplete. Reload shortly; nothing needs re-uploading unless this persists.';
+        }
         $analyses = BinaryAnalysis::where('project_artifact_id', $artifact->id)->latest('id')->get();
 
         $backToConversation = null;
@@ -144,6 +166,7 @@ class ArtifactController extends Controller
             'project' => $project,
             'artifact' => $artifact,
             'snapshot' => $snapshot,
+            'storageNotice' => $storageNotice,
             'details' => ArtifactEvidence::viewerDetails($artifact, $snapshot),
             'disclosure' => ArtifactEvidence::disclosure($artifact),
             'backToConversation' => $backToConversation,
@@ -190,8 +213,14 @@ class ArtifactController extends Controller
             return back()->with('error', 'Only failed uploads can be retried. This artifact is '.$artifact->stateLabel().'.');
         }
 
-        if (! Storage::disk('artifacts')->exists($artifact->rawPath())) {
-            return back()->with('error', 'The stored file is gone. Upload it again to investigate.');
+        $status = ArtifactStorage::status('artifacts', $artifact->rawPath());
+        if ($status !== ArtifactStorage::OK) {
+            ArtifactStorage::logUnavailable('artifacts', $artifact->rawPath(), $status, [
+                'artifact_id' => $artifact->id,
+                'project_id' => $project->id,
+            ]);
+
+            return back()->with('error', 'The stored file is still unavailable, so there is nothing to retry yet. Wait for the restore to finish, then retry again; re-upload only if the file never comes back.');
         }
 
         $artifact->forceFill([

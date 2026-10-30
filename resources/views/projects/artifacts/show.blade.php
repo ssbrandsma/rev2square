@@ -18,6 +18,9 @@
         @if(session('error'))
             <p class="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-800">{{ session('error') }}</p>
         @endif
+        @if(! empty($storageNotice ?? null))
+            <p class="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-900">{{ $storageNotice }}</p>
+        @endif
 
         <section class="rounded-xl border border-zinc-200 bg-white p-6">
             <h2 class="font-semibold">File details</h2>

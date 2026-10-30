@@ -384,6 +384,9 @@ cannot fill the disk.
 [root]# cd /srv/rev2square
 [root]# git fetch origin
 [root]# git checkout <new-release-sha>
+# First upgrade carrying app-storage: run the section 18 storage
+# migration runbook BEFORE the build/up below (inventory + back up
+# container-layer files first; a new empty volume would hide them).
 [root]# ./docker/backup/backup.sh --variant virtualmin   # safety backup first
 [root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin build && \
   docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin up -d
@@ -602,6 +605,73 @@ and effective (64M/80M) under both CLI and php-fpm. Same owner rebuild
 as above; after it, `cat .../uploads.ini` must succeed (no Permission
 denied), `php --ini` must list uploads.ini, and `php-fpm -i` must show
 64M/80M. A `restart` without `build` cannot fix baked-in modes.
+
+Shared private storage (`app-storage` volume): `storage/app` (research
+artifacts, presentation media, avatars, attachments, imports) is a
+named volume mounted read-write on exactly the services that read or
+write it — `app` (uploads, viewers), `queue` (extraction snapshots,
+media derivatives), `analysis-coordinator` (analysis evidence,
+promoted children). Sessions/cache/queue are database-backed, so
+`storage/framework` and logs intentionally stay per-container.
+`scheduler` only touches the database and dispatches jobs, so it stays
+off the mount; isolated runners keep only their per-job spool inputs
+(no artifact or app-secret mounts). Every mounted service runs as
+www-data and the image pre-chowns `/var/www/storage` to www-data, so
+the volume preserves uid 33 with private modes and no chmod. Without
+this mount each container kept its own `storage/app`: web uploads were
+invisible to workers (`missing_input`/`missing_original` within
+seconds) and any recreation lost them. Integration proof on disposable
+infrastructure: `docker/ops/verify-shared-storage.sh` (HTTP upload →
+separate-worker extraction → viewer/reload → recreation retention).
+
+Storage migration runbook — REQUIRED before the first recreation with
+`app-storage` (a new empty volume hides container-layer files, so
+inventory and back up FIRST; never `down -v`, prune, delete
+containers/volumes, or auto-delete failed rows):
+
+```sh
+[root]# cd /srv/rev2square
+# 0. Read-only inventory: what lives where right now.
+[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin ps
+[root]# for s in app queue analysis-coordinator; do echo "== $s"; docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin exec -T $s sh -c 'find /var/www/storage/app -type f | head -50; echo; du -sh /var/www/storage/app'; done
+[root]# docker inspect $(docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin ps -q app) --format '{{json .Mounts}}'
+# expect: no app-storage yet (first migration); note any anonymous volumes
+[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin exec -T app php artisan tinker --execute="foreach (\App\Models\ProjectArtifact::orderBy(\"id\")->get() as \$a) echo \$a->id.' '.\$a->state.' '.\$a->byte_size.' '.\$a->sha256.' '.\$a->rawPath().PHP_EOL;" > /root/artifact-rows-$(date +%Y%m%d).txt
+[root]# ./docker/backup/backup.sh --variant virtualmin   # database safety backup
+# 1. Back up per-container files (each container holds DIFFERENT pieces:
+# app = raw uploads, queue = snapshots, coordinator = evidence/children).
+[root]# ts=$(date +%Y%m%d-%H%M%S); mkdir -p backups/storage-app-$ts
+[root]# for s in app queue analysis-coordinator; do cid=$(docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin ps -q $s); docker cp $cid:/var/www/storage/app backups/storage-app-$ts/$s; done
+[root]# find backups/storage-app-$ts -type f | sort | xargs sha256sum > backups/storage-app-$ts/SHA256SUMS; wc -l backups/storage-app-$ts/SHA256SUMS
+# 2. Deploy (recreates app/queue/coordinator with the new empty volume).
+[root]# git fetch origin && git checkout <sha-with-app-storage>
+[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin build app && docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin up -d
+# 3. Merge the three trees (disjoint names expected: raws vs snapshots
+# vs evidence) and restore into the volume as www-data (no root chown
+# needed: exec runs as the compose user).
+[root]# cd /srv/rev2square/backups/storage-app-$ts && rm -rf merged && mkdir merged
+[root]# for s in app queue analysis-coordinator; do (cd $s && tar cf - .) | (cd merged && tar xkf -); done
+[root]# echo "merged: $(find merged -type f | wc -l) source: $(find app queue analysis-coordinator -type f | wc -l)"
+# expect equal counts (no collisions); stop and inspect if they differ
+[root]# cd /srv/rev2square && (cd backups/storage-app-$ts/merged && tar cf - .) | docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin exec -T app tar xf - -C /var/www/storage/app
+# 4. Verify SHA-256 per row, then retry failed rows from the UI.
+[root]# docker compose -f compose.virtualmin.yaml --env-file .env.virtualmin exec -T app php artisan artifacts:verify-storage
+# Rows whose file is back report "retry from the artifact page": open
+# each failed artifact/analysis and press Retry (extraction re-runs;
+# analyses failed missing_original/storage_unreadable are retryable).
+# Re-run verify-storage until clean. Re-upload is the last resort,
+# only for rows whose bytes exist nowhere.
+```
+
+Recovery/retry behavior after storage is restored: extraction rows
+failed `missing_input`/`storage_unreadable` show Retry extraction
+(which re-queues once the file is back); analyses failed
+`missing_original`/`storage_unreadable` are retryable via Retry run;
+viewers show an amber "temporarily unavailable" notice (never a 500)
+while snapshots are missing and go full on reload. Missing vs
+permission-denied is distinguished in operator logs and failure codes;
+public messages stay generic and retry-first. `artifacts:verify-storage`
+is the pre/post check; it never modifies rows or files.
 
 ## 19. Known limitations
 

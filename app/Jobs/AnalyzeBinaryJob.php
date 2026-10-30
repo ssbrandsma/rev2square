@@ -4,6 +4,7 @@ namespace App\Jobs;
 
 use App\Models\BinaryAnalysis;
 use App\Models\ProjectArtifact;
+use App\Services\Artifacts\ArtifactStorage;
 use App\Services\Binary\Adapters\AdapterRegistry;
 use App\Services\Binary\Adapters\AnalysisFailedException;
 use App\Services\Binary\Adapters\ExternalBackend;
@@ -83,8 +84,14 @@ class AnalyzeBinaryJob implements ShouldQueue
 
         try {
             $disk = Storage::disk('artifacts');
-            if (! $disk->exists($artifact->rawPath())) {
-                $this->finishFailed($analysis, 'missing_original', 'The stored file is no longer available. Re-upload it to analyze.');
+            $status = ArtifactStorage::status('artifacts', $artifact->rawPath());
+            if ($status !== ArtifactStorage::OK) {
+                ArtifactStorage::logUnavailable('artifacts', $artifact->rawPath(), $status, [
+                    'analysis_id' => $analysis->id,
+                    'artifact_id' => $artifact->id,
+                    'project_id' => $artifact->project_id,
+                ]);
+                $this->finishFailed($analysis, $status === ArtifactStorage::MISSING ? 'missing_original' : 'storage_unreadable', ArtifactStorage::unavailableMessage());
 
                 return;
             }

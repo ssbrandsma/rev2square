@@ -12,6 +12,8 @@ name: rev2square-prod
 #   nginx; only Caddy publishes host ports (80/443).
 # - Queue/scheduler run the same hardened image as app (www-data,
 #   no-new-privileges, no Linux capabilities).
+# - app-storage named volume shares durable private user data
+#   (storage/app) between app and queue.
 # - Secrets come from .env.production (chmod 600, never committed).
 
 services:
@@ -23,6 +25,14 @@ services:
     env_file:
       - path: .env.production
         required: true
+    volumes:
+      # Shared private user data (research artifacts, presentation
+      # media, avatars, attachments, imports): durable across container
+      # recreation and visible to every authorized reader/writer (app,
+      # queue). The image pre-chowns /var/www/storage to www-data, so
+      # the named-volume init copy preserves uid 33 on both sides and
+      # modes stay private. Framework/logs dirs stay per-container.
+      - app-storage:/var/www/storage/app
     depends_on:
       db:
         condition: service_healthy
@@ -136,6 +146,11 @@ services:
     env_file:
       - path: .env.production
         required: true
+    volumes:
+      # Shared private user data (see the app service comment): the
+      # worker reads web uploads and writes extraction snapshots and
+      # media derivatives here.
+      - app-storage:/var/www/storage/app
     depends_on:
       db:
         condition: service_healthy
@@ -193,3 +208,7 @@ volumes:
   db-data:
   caddy-data:
   caddy-config:
+  # Durable private user data shared by app/queue (see the app service
+  # comment). Never `down -v`: that destroys uploads. Migrate existing
+  # container-layer files BEFORE the first recreation with this mount.
+  app-storage:

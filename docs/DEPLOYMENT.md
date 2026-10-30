@@ -203,7 +203,17 @@ docker compose -f compose.prod.yaml --env-file .env.production exec -T app php a
 
 `up -d` recreates only containers whose image or configuration changed.
 The `db-data` and `caddy-data` volumes are untouched by rebuilds, so the
-database and TLS certificates survive every upgrade.
+database and TLS certificates survive every upgrade. The same holds for
+the `app-storage` volume (private user data in `storage/app`, shared by
+app and queue): never `down -v`.
+
+First upgrade carrying `app-storage`: each container currently keeps its
+own `storage/app`, and the new empty volume would hide those files.
+Before recreating, inventory and back up per-container files read-only,
+then merge, restore, and verify per the storage migration runbook in
+DEPLOYMENT_VIRTUALMIN_ARM64.md section 18 (same steps with
+`-f compose.prod.yaml --env-file .env.production`; this variant has no
+analysis-coordinator, so inventory covers app and queue only).
 
 ## 8. Backups and restore
 

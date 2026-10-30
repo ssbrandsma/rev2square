@@ -17,6 +17,8 @@ name: rev2square-virtualmin
 #   for local behavior validation on amd64).
 # - Same hardened images, users, capabilities, healthchecks, and restart
 #   policies as compose.prod.yaml; the Dockerfiles are shared unchanged.
+# - app-storage named volume shares durable private user data
+#   (storage/app) between app, queue, and analysis-coordinator.
 # - Secrets come from .env.virtualmin (chmod 600, never committed).
 
 services:
@@ -32,6 +34,17 @@ services:
     env_file:
       - path: .env.virtualmin
         required: true
+    volumes:
+      # Shared private user data (research artifacts, presentation
+      # media, avatars, attachments, imports): durable across container
+      # recreation and visible to every authorized reader/writer (app,
+      # queue, analysis-coordinator). Without this mount each container
+      # keeps its own storage/app and workers cannot see web uploads.
+      # The image pre-chowns /var/www/storage to www-data, so the
+      # named-volume init copy preserves uid 33 on both sides; every
+      # mounted service runs as www-data, so no chmod is needed and
+      # modes stay private. Framework/logs dirs stay per-container.
+      - app-storage:/var/www/storage/app
     depends_on:
       db:
         condition: service_healthy
@@ -125,6 +138,11 @@ services:
     env_file:
       - path: .env.virtualmin
         required: true
+    volumes:
+      # Shared private user data (see the app service comment): the
+      # worker reads web uploads and writes extraction snapshots and
+      # media derivatives here.
+      - app-storage:/var/www/storage/app
     depends_on:
       db:
         condition: service_healthy
@@ -209,6 +227,10 @@ services:
     volumes:
       - analysis-spool:/spool
       - analysis-results:/results
+      # Shared private user data (see the app service comment): the
+      # coordinator reads artifact originals and writes analysis
+      # evidence plus promoted child artifacts here.
+      - app-storage:/var/www/storage/app
     depends_on:
       db:
         condition: service_healthy
@@ -391,3 +413,8 @@ volumes:
   db-data:
   analysis-spool:
   analysis-results:
+  # Durable private user data shared by app/queue/analysis-coordinator
+  # (see the app service comment). Never `down -v`: that destroys
+  # uploads. Migrate existing container-layer files BEFORE the first
+  # recreation with this mount (docs/DEPLOYMENT_VIRTUALMIN_ARM64.md).
+  app-storage:

@@ -53,8 +53,13 @@ final class ArtifactExtractor
 
         try {
             $disk = Storage::disk('artifacts');
-            if (! $disk->exists($artifact->rawPath())) {
-                self::fail($artifact, 'missing_input', 'The stored file is no longer available. Re-upload it to investigate.');
+            $status = ArtifactStorage::status('artifacts', $artifact->rawPath());
+            if ($status !== ArtifactStorage::OK) {
+                ArtifactStorage::logUnavailable('artifacts', $artifact->rawPath(), $status, [
+                    'artifact_id' => $artifact->id,
+                    'project_id' => $artifact->project_id,
+                ]);
+                self::fail($artifact, $status === ArtifactStorage::MISSING ? 'missing_input' : 'storage_unreadable', ArtifactStorage::unavailableMessage());
 
                 return;
             }
@@ -516,7 +521,8 @@ final class ArtifactExtractor
      * Constant-memory SHA-256 over the stored file. Returns null when
      * the file cannot be streamed (treated as an integrity failure).
      */
-    private static function streamSha256(FilesystemAdapter $disk, string $path): ?string
+    /** Streaming SHA-256 over a stored file; null when it cannot be read. */
+    public static function streamSha256(FilesystemAdapter $disk, string $path): ?string
     {
         try {
             $stream = $disk->readStream($path);
