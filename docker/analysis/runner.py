@@ -106,6 +106,30 @@ def fail(message):
     raise ValueError(message)
 
 
+def _log(message):
+    """One bounded status line to stderr; never raises and never
+    carries job content, secrets, or absolute paths — only tool
+    names (allowlisted), sanitized job ids, states, and bounded
+    single-line error summaries. stderr only: stdout stays clean
+    for --dry-run JSON."""
+    try:
+        sys.stderr.write("runner: %s\n" % message)
+        sys.stderr.flush()
+    except OSError:
+        pass
+
+
+def _safe_id(name):
+    """Job id sanitized for logs: spool names are untrusted."""
+    return "".join(c if c.isascii() and (c.isalnum() or c in "._-")
+                   else "?" for c in str(name)[:64])
+
+
+def _one_line(text, limit=120):
+    """Error text collapsed to one bounded line for logs."""
+    return " ".join(str(text).split())[:limit]
+
+
 def read_json(path, max_bytes=65536):
     size = os.path.getsize(path)
     if size > max_bytes:
@@ -171,6 +195,30 @@ def _tool_path(env_name, default):
     if not os.path.isfile(path) or not os.access(path, os.X_OK):
         fail("tool binary missing or not executable: %s" % path)
     return path
+
+
+def _ghidra_properties_version(headless_path):
+    """application.version from the install backing this launcher
+    (<home>/Ghidra/application.properties, where <home> is the
+    parent of the support/ dir). Bounded plain read; None on any
+    failure so callers fail closed."""
+    try:
+        home = os.path.dirname(os.path.dirname(
+            os.path.abspath(headless_path)))
+        props = os.path.join(home, "Ghidra", "application.properties")
+        if not os.path.isfile(props) or os.path.islink(props):
+            return None
+        if os.path.getsize(props) > 65536:
+            return None
+        with open(props, "r", encoding="utf-8", errors="replace") as fh:
+            for raw in fh:
+                key, sep, value = raw.partition("=")
+                if sep and key.strip() == "application.version":
+                    value = value.strip()[:64]
+                    return value or None
+    except OSError:
+        return None
+    return None
 
 
 def _objdump_argv(mode, params, input_path):
@@ -363,20 +411,31 @@ class Runner:
             answer["fixture"] = self.probe_fixture(claimdir)
         if self.tool == "objdump":
             answer["architectures"] = self.objdump_architectures()
-        self._write_answer(claimdir, answer)
+        answered = self._write_answer(claimdir, answer)
+        extra = ""
+        if "fixture" in answer:
+            extra = " fixture_ok=%s" % (answer["fixture"].get("ok"),)
+        _log("probe tool=%s answered=%s%s"
+             % (self.tool, answered, extra))
 
     def _write_answer(self, claimdir, answer):
-        """Persist a probe answer; never raise. A coordinator that
-        timed out may have cleaned its submission side while this
-        runner was still working — a lost late answer must not kill
-        the runner loop."""
+        """Persist a probe answer atomically; never raise. A
+        coordinator that timed out may have cleaned its submission
+        side while this runner was still working — a lost late
+        answer must not kill the runner loop. Tmp-file + rename
+        (like _write_status) so readers never see a torn answer."""
+        tmp = os.path.join(claimdir, "status.json.tmp")
         try:
-            with open(os.path.join(claimdir, "status.json"), "w",
-                      encoding="utf-8") as fh:
+            with open(tmp, "w", encoding="utf-8") as fh:
                 json.dump(answer, fh)
-            os.chmod(os.path.join(claimdir, "status.json"), 0o644)
+            os.chmod(tmp, 0o644)
+            os.replace(tmp, os.path.join(claimdir, "status.json"))
             return True
         except OSError:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
             return False
 
     def probe_fixture(self, claimdir):
@@ -429,10 +488,10 @@ class Runner:
         return result
 
     def tool_version(self):
-        flag = {"ghidra": ["-version"]}.get(self.tool, ["--version"])
+        if self.tool == "ghidra":
+            return self._ghidra_version()
+        flag = ["--version"]
         path = {"objdump": os.environ.get("OBJDUMP_BIN", "/usr/bin/objdump"),
-                "ghidra": os.environ.get("GHIDRA_HEADLESS",
-                                         "/opt/ghidra/support/analyzeHeadless"),
                 "jadx": os.environ.get("JADX_BIN", "/opt/jadx/bin/jadx"),
                 "ilspy": os.environ.get("ILSPY_BIN", "/opt/ilspy/ilspycmd"),
                 "extract": os.environ.get("SEVENZZ_BIN",
@@ -447,6 +506,29 @@ class Runner:
         if proc.returncode != 0:
             return None
         return proc.stdout[:512].decode("utf-8", "replace").strip()
+
+    def _ghidra_version(self):
+        """Ghidra version via usage-run execution proof plus install
+        metadata. analyzeHeadless has NO --version flag (verified
+        against 12.2: every no-work argv prints usage and exits 1),
+        so the usage run itself is the liveness proof: the launcher
+        started a JVM on the Ghidra classpath and the headless main
+        ran far enough to validate arguments. The version string
+        comes from the install's application.properties. Either half
+        failing yields None (fail closed); the coordinator stores
+        that as terminally unavailable, never as pending."""
+        path = os.environ.get("GHIDRA_HEADLESS",
+                              "/opt/ghidra/support/analyzeHeadless")
+        try:
+            proc = subprocess.run(
+                [path], stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                timeout=VERSION_TIMEOUT_SECONDS)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if b"Headless Analyzer Usage:" not in proc.stdout[:8192]:
+            return None
+        return _ghidra_properties_version(path)
 
     def objdump_architectures(self):
         """Parse `objdump -i` architecture rows (mirrors the PHP parser:
@@ -538,6 +620,7 @@ class Runner:
 
             if self._cancelled(claimdir):
                 self._write_status(status_path, "cancelled", {})
+                _log("job %s cancelled before start" % _safe_id(name))
                 return
 
             argv = build_argv(self.tool, profile, params, workdir, staged)
@@ -554,11 +637,14 @@ class Runner:
             if result == "cancelled":
                 self._write_status(status_path, "cancelled",
                                    {"elapsed_ms": self._elapsed(started)})
+                _log("job %s cancelled elapsed_ms=%d"
+                     % (_safe_id(name), self._elapsed(started)))
                 return
             if result == "timeout":
                 self._write_status(status_path, "timeout",
                                    {"elapsed_ms": self._elapsed(started),
                                     "wall_seconds": wall})
+                _log("job %s timeout wall=%d" % (_safe_id(name), wall))
                 return
             exit_code = result
 
@@ -571,14 +657,20 @@ class Runner:
                 "files": extra["files"],
                 "truncated": extra["truncated"],
             } | ({"warning": extra["warning"]} if extra.get("warning") else {}))
+            _log("job %s done exit=%d elapsed_ms=%d"
+                 % (_safe_id(name), exit_code, self._elapsed(started)))
         except ValueError as exc:
             self._write_status(status_path, "failed",
                                {"elapsed_ms": self._elapsed(started),
                                 "error": str(exc)[:500]})
+            _log("job %s failed error=%s"
+                 % (_safe_id(name), _one_line(exc)))
         except OSError as exc:
             self._write_status(status_path, "failed",
                                {"elapsed_ms": self._elapsed(started),
                                 "error": "io: %s" % str(exc)[:400]})
+            _log("job %s failed error=io: %s"
+                 % (_safe_id(name), _one_line(exc)))
         finally:
             shutil.rmtree(workdir, ignore_errors=True)
 
@@ -874,6 +966,7 @@ def main(argv):
     if not args.tool:
         parser.error("--tool is required")
     runner = Runner(args.tool, args.spool, args.results)
+    _log("start tool=%s once=%s" % (args.tool, args.once))
     if args.once:
         runner.run_once()
         return 0

@@ -4,6 +4,7 @@ namespace Tests\Unit\Binary\Sandbox;
 
 use App\Jobs\RefreshWorkerCapabilities;
 use App\Models\WorkerCapability;
+use App\Services\Binary\Adapters\GhidraAdapter;
 use App\Services\Binary\Adapters\ObjdumpAdapter;
 use App\Services\Binary\Adapters\ToolVersion;
 use App\Services\Binary\Sandbox\SpoolClient;
@@ -165,6 +166,25 @@ class WorkerCapabilityVersionTest extends TestCase
             'Capability capture failed; previous snapshot kept.',
             \Mockery::on(fn ($context) => ($context['adapter'] ?? null) === 'objdump')
         );
+    }
+
+    public function test_null_version_probe_is_terminal_unavailable(): void
+    {
+        // An answered-but-unversioned probe (runner alive, version
+        // check failed) is terminally unavailable: stored, never
+        // pending, never ready — and stable across refreshes.
+        $spool = new SpoolFake;
+        $spool->probes['ghidra'] = SpoolFake::answer('ghidra', 'placeholder', ['tool_version' => null]);
+        app()->instance(SpoolClient::class, $spool);
+
+        $probe = (new GhidraAdapter)->probe();
+        $this->assertFalse($probe['available']);
+        $this->assertFalse($probe['pending'] ?? false);
+        $this->assertStringContainsString('no readable version', $probe['reason']);
+
+        $this->assertNotNull(WorkerCapability::capture(new GhidraAdapter, 'test'));
+        $this->assertDatabaseHas('worker_capabilities', ['adapter' => 'ghidra', 'available' => false]);
+        $this->assertNotNull(WorkerCapability::capture(new GhidraAdapter, 'test'));
     }
 
     public function test_mysql_strict_mode_rejects_raw_banner(): void

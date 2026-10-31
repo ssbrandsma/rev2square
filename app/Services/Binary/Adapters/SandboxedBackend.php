@@ -110,10 +110,20 @@ abstract class SandboxedBackend implements BinaryAdapter
         }
 
         $version = $this->version();
+        if (! is_string($version) || $version === '') {
+            // The runner answered but proved no version: its version
+            // check failed (see the runner logs). Terminally
+            // unavailable — stored, never pending, never ready.
+            return [
+                'available' => false,
+                'reason' => 'The '.$this->tool().' runner answered but its version check produced no readable version (see the runner logs for the failing check). '.DeployHints::rebuildRunnerHint($this->tool().'-runner'),
+                'setup_doc' => 'docs/analysis-spool-deployment.md',
+            ];
+        }
 
         return [
             'available' => true,
-            'reason' => 'Isolated '.$this->tool().' runner ('.($version ?? 'unversioned').', '.$runnerArch.', image '.($answer['image_digest'] ?? 'unknown').').',
+            'reason' => 'Isolated '.$this->tool().' runner ('.$version.', '.$runnerArch.', image '.($answer['image_digest'] ?? 'unknown').').',
             'setup_doc' => null,
         ];
     }

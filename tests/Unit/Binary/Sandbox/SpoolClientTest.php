@@ -98,6 +98,24 @@ class SpoolClientTest extends TestCase
         $this->assertSame(['.', '..'], scandir($this->results));
     }
 
+    public function test_probe_accepts_unversioned_answer_as_terminal(): void
+    {
+        // A runner that answered with tool_version:null proved
+        // liveness but failed its version check (the Ghidra
+        // analyzeHeadless -version incident). That finished verdict
+        // must be accepted — never polled past into a phantom
+        // timeout that strands the claim and hides behind pending.
+        $this->startStub('probe', ['STUB_VERSION_NULL' => '1']);
+        $answer = $this->client()->probe('ghidra', 10);
+
+        $this->assertIsArray($answer);
+        $this->assertNull($answer['tool_version']);
+        $this->assertSame(php_uname('m'), $answer['runner_arch']);
+        // Answered => both sides cleaned, no orphan claim left.
+        $this->assertSame(['.', '..'], scandir($this->spool));
+        $this->assertSame(['.', '..'], scandir($this->results));
+    }
+
     public function test_probe_timeout_removes_submission_only_and_late_answer_lands_intact(): void
     {
         // Slow first-probe qualification analog: the runner answers

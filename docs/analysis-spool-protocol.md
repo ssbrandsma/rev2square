@@ -48,6 +48,19 @@ identifier before persistence, display, dedupe, and
 worker_mismatch comparison, and keeps the bounded full banner in
 the snapshot details for diagnostics.
 
+Ghidra reports its version differently: analyzeHeadless has no
+`--version` flag (verified against 12.2 — every no-work argv prints
+usage and exits 1), so the runner proves execution with the usage
+run (matching `Headless Analyzer Usage:`) and reads
+`application.version` from the install's
+`Ghidra/application.properties`. Either half failing yields a null
+version, which the coordinator treats as a TERMINAL unavailable
+verdict: an answered probe (schema + tool + arch present) is
+accepted even with a null version and stored as unavailable —
+never polled past into a phantom timeout, never pending, and its
+claim is cleaned up. Pending strictly means claimed-but-unanswered
+(no status file yet).
+
 Deadline separation: the fixture check is bounded (30s wall × 3
 attempts) and cached per runner boot — install health cannot change
 without a restart — so steady-state probes stay on the fast

@@ -83,7 +83,15 @@ class SpoolClient
             $deadline = microtime(true) + max(1, $timeoutSeconds);
             while (microtime(true) < $deadline) {
                 $status = $this->readJson($this->resultsDir.'/'.$jobId.'/status.json', 8192);
-                if (is_array($status) && ($status['schema'] ?? null) === self::SCHEMA && isset($status['tool_version'], $status['runner_arch'])) {
+                // Answered means a finished probe verdict (schema +
+                // tool + arch, which the runner always writes). The
+                // version itself may legitimately be null — the
+                // runner proved liveness but its version check
+                // failed. That is a TERMINAL verdict for the caller
+                // to store as unavailable, never a reason to keep
+                // polling into a phantom timeout (which strands the
+                // claim and hides the failure behind pending).
+                if (is_array($status) && ($status['schema'] ?? null) === self::SCHEMA && isset($status['tool'], $status['runner_arch'])) {
                     $answer = $status;
                     break;
                 }

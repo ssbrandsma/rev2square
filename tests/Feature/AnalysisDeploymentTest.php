@@ -341,7 +341,7 @@ class AnalysisDeploymentTest extends TestCase
         $this->assertStringNotContainsString('g++', $final, 'final stage has no C++ compiler');
         $this->assertDoesNotMatchRegularExpression('/\bgcc\b/', $final, 'final stage has no C compiler');
 
-        foreach (['ldd /opt/ghidra', "'not found'", 'm==183', "'analysis','-import'", 'build_argv(', 'tool_env(', 'arm32-smoke.bin', 'FIXTURE EVIDENCE OK'] as $token) {
+        foreach (['ldd /opt/ghidra', "'not found'", 'm==183', "'analysis','-import'", 'build_argv(', 'tool_env(', 'tool_version()', 'arm32-smoke.bin', 'FIXTURE EVIDENCE OK'] as $token) {
             $this->assertStringContainsString($token, $ghidra, "final stage checks {$token}");
         }
         // Home/JDK launcher configuration: passwd-derived user.home
@@ -367,7 +367,7 @@ class AnalysisDeploymentTest extends TestCase
             $this->assertStringContainsString($token, $ghidra, "fixture gate asserts {$token}");
         }
         $this->assertSame(5, substr_count($ghidra, '--- natives:'), 'five labeled native-build steps');
-        $this->assertSame(10, substr_count($ghidra, '--- smoke:'), 'ten labeled runtime gates');
+        $this->assertSame(11, substr_count($ghidra, '--- smoke:'), 'eleven labeled runtime gates');
     }
 
     public function test_copied_runner_has_deterministic_permissions(): void

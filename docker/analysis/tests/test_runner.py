@@ -17,10 +17,17 @@ Two tiers, kept distinct:
   rejects. Native ARM64 qualification of the REAL tools happens
   on the owner server (see delivery doc); on x86 run with a
   matching-arch JRE on PATH.
+* RealGhidraCase: REAL-EXECUTABLE tests for the pinned Ghidra
+  12.2 probe path (usage-run execution proof + properties
+  version) when REAL_GHIDRA_HEADLESS points at it; skipped
+  otherwise. Guards the analyzeHeadless -version incident: the
+  usage-only launcher behavior the stubs cannot reveal.
 
 Run:  cd docker/analysis && python3 -m unittest discover -s tests -v
 Real: cd docker/analysis && REAL_JADX_BIN=/path/to/jadx \
         python3 -m unittest tests.test_runner.RealJadxCase -v
+      cd docker/analysis && REAL_GHIDRA_HEADLESS=/path/to/analyzeHeadless \
+        python3 -m unittest tests.test_runner.RealGhidraCase -v
 """
 
 import hashlib
@@ -581,6 +588,76 @@ class RunnerCase(unittest.TestCase):
         self.assertEqual(status["state"], "failed")
         self.assertIn("no evidence.json", status["error"])
 
+    def test_ghidra_version_from_usage_proof_and_properties(self):
+        # analyzeHeadless has NO --version flag (verified against
+        # 12.2): the runner proves execution via the usage run and
+        # reads the version from application.properties. Exit code
+        # is ignored (usage exits 1); the marker is required.
+        home = os.path.join(self.tmp, "fakehome")
+        os.makedirs(os.path.join(home, "support"))
+        os.makedirs(os.path.join(home, "Ghidra"))
+        launcher = os.path.join(home, "support", "analyzeHeadless")
+        with open(launcher, "w") as fh:
+            fh.write('#!/bin/sh\necho "Headless Analyzer Usage: analyzeHeadless"\nexit 1\n')
+        os.chmod(launcher, 0o755)
+        with open(os.path.join(home, "Ghidra",
+                               "application.properties"), "w") as fh:
+            fh.write("# comment\napplication.layout.version=3\n"
+                     "application.version=12.2-test\n"
+                     "application.version.extra=nope\n")
+        os.environ["GHIDRA_HEADLESS"] = launcher
+        r = runner.Runner("ghidra", self.spool, self.results)
+        self.assertEqual(r.tool_version(), "12.2-test")
+
+        # Usage marker absent (wrong tool output): fail closed.
+        with open(launcher, "w") as fh:
+            fh.write('#!/bin/sh\necho "hi"\nexit 0\n')
+        self.assertIsNone(r.tool_version())
+
+        # Properties missing: fail closed even with the marker.
+        with open(launcher, "w") as fh:
+            fh.write('#!/bin/sh\necho "Headless Analyzer Usage: x"\nexit 1\n')
+        os.unlink(os.path.join(home, "Ghidra", "application.properties"))
+        self.assertIsNone(r.tool_version())
+
+        # Launcher unrunnable: fail closed.
+        os.environ["GHIDRA_HEADLESS"] = os.path.join(self.tmp, "nope")
+        self.assertIsNone(r.tool_version())
+
+    def test_ghidra_properties_value_bounded(self):
+        home = os.path.join(self.tmp, "fakehome2")
+        os.makedirs(os.path.join(home, "Ghidra"))
+        with open(os.path.join(home, "Ghidra",
+                               "application.properties"), "w") as fh:
+            fh.write("application.version=" + "v" * 200 + "\n")
+        got = runner._ghidra_properties_version(
+            os.path.join(home, "support", "analyzeHeadless"))
+        self.assertEqual(len(got), 64)
+        # Symlinked properties never read.
+        os.unlink(os.path.join(home, "Ghidra", "application.properties"))
+        os.symlink("/etc/hostname",
+                   os.path.join(home, "Ghidra", "application.properties"))
+        self.assertIsNone(runner._ghidra_properties_version(
+            os.path.join(home, "support", "analyzeHeadless")))
+
+    def test_log_helpers_sanitize(self):
+        self.assertEqual(runner._safe_id("job1"), "job1")
+        self.assertEqual(runner._safe_id("a/b\\c d"), "a?b?c?d")
+        self.assertEqual(len(runner._safe_id("x" * 200)), 64)
+        self.assertEqual(runner._one_line("a\nb\t c"), "a b c")
+        self.assertEqual(len(runner._one_line("y" * 500)), 120)
+
+    def test_probe_answer_atomic_no_tmp_residue(self):
+        os.environ["OBJDUMP_BIN"] = self.stub(
+            "objdump", 'echo "GNU objdump 2.40"\n')
+        self.submit("objdump", kind="probe")
+        self.run_once("objdump")
+        claimdir = os.path.join(self.results, "job1")
+        self.assertFalse(os.path.exists(
+            os.path.join(claimdir, "status.json.tmp")))
+        with open(os.path.join(claimdir, "status.json")) as fh:
+            self.assertEqual(json.load(fh)["tool"], "objdump")
+
     def test_ghidra_wrong_envelope_rejected(self):
         script = ("python3 -c 'import json;json.dump("
                   '{"schema":99,"tool":"other"},'
@@ -733,6 +810,59 @@ class RealJadxCase(unittest.TestCase):
             proc.returncode, 0,
             "scoped jadx failed under read-only home: %r"
             % proc.stdout[:2000].decode("utf-8", "replace"))
+
+
+class RealGhidraCase(unittest.TestCase):
+    """REAL-EXECUTABLE ghidra probe tests (not stubs).
+
+    Runs the actual pinned Ghidra 12.2 analyzeHeadless through the
+    REAL runner version path (usage-run execution proof plus
+    application.properties version). Skipped unless
+    REAL_GHIDRA_HEADLESS points at an executable launcher with a
+    working JVM (a skip here is an honest "not run", never a
+    green). analyzeHeadless has no --version flag: the usage run
+    exits 1 by design, so the execution proof is the usage marker,
+    not the exit code.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.headless = os.environ.get("REAL_GHIDRA_HEADLESS", "")
+        if not (cls.headless and os.path.isfile(cls.headless)
+                and os.access(cls.headless, os.X_OK)):
+            raise unittest.SkipTest(
+                "REAL_GHIDRA_HEADLESS not set to an executable launcher")
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="real-ghidra-")
+        self.old_env = dict(os.environ)
+        os.environ["GHIDRA_HEADLESS"] = self.headless
+
+    def tearDown(self):
+        os.environ.clear()
+        os.environ.update(self.old_env)
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_real_ghidra_version_via_runner(self):
+        r = runner.Runner("ghidra", self.tmp, self.tmp)
+        self.assertEqual(r.tool_version(), "12.2")
+
+    def test_real_ghidra_usage_run_proves_execution(self):
+        # The usage run exits 1 (no --version flag exists); what
+        # proves execution is the headless main's usage marker on
+        # combined output — the exact signal the runner matches.
+        proc = subprocess.run(
+            [self.headless], stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            timeout=120)
+        self.assertIn(b"Headless Analyzer Usage:",
+                      proc.stdout[:8192])
+        home = os.path.dirname(os.path.dirname(
+            os.path.abspath(self.headless)))
+        with open(os.path.join(home, "Ghidra",
+                               "application.properties")) as fh:
+            text = fh.read()
+        self.assertIn("application.version=12.2", text)
 
 
 if __name__ == "__main__":

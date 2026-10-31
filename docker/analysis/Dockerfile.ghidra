@@ -309,6 +309,9 @@ RUN echo "--- smoke: job files stayed scoped (www-data) ---" \
     && test ! -e /home/www-data/.ghidra || { echo "LEAK: job files in shared home" >&2; exit 1; } \
     && test ! -e /var/tmp/www-data-ghidra || { echo "LEAK: cache escaped to /var/tmp" >&2; exit 1; }
 
+RUN echo "--- smoke: probe version via usage run (www-data) ---" \
+    && python3 -c "import sys; sys.path.insert(0,'/opt/runner'); import runner; v=runner.Runner('ghidra','/spool','/results').tool_version(); print(v); assert v=='12.2', v"
+
 RUN echo "--- smoke: runner dry-run argv (www-data) ---" \
     && mkdir -p /tmp/dry \
     && python3 /opt/runner/runner.py --dry-run --tool ghidra \

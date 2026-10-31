@@ -62,18 +62,28 @@ class RefreshWorkerCapabilities implements ShouldQueue
         $pending = [];
         $failed = [];
         foreach (AdapterRegistry::all() as $adapter) {
+            $started = microtime(true);
             try {
                 if (WorkerCapability::capture($adapter, $worker) === null) {
                     $pending[] = $adapter->id();
+                    $outcome = 'pending';
+                } else {
+                    $outcome = 'stored';
                 }
             } catch (\Throwable $e) {
                 $failed[] = $adapter->id();
+                $outcome = 'failed';
                 Log::error('Capability capture failed; previous snapshot kept.', [
                     'adapter' => $adapter->id(), 'worker' => $worker,
                     'exception' => get_class($e),
                     'message' => mb_substr($e->getMessage(), 0, 500),
                 ]);
             }
+            Log::info('Capability capture finished.', [
+                'adapter' => $adapter->id(), 'worker' => $worker,
+                'outcome' => $outcome,
+                'elapsed_ms' => (int) ((microtime(true) - $started) * 1000),
+            ]);
         }
         if ($pending !== []) {
             Log::info('Capability refresh left backends still qualifying; previous snapshots kept.', ['adapters' => $pending, 'worker' => $worker]);

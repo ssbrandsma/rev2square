@@ -14,6 +14,9 @@
 #                 (slow first-probe qualification analog), then exit
 #
 # Canned payloads arrive via env: STUB_EVIDENCE (json), STUB_TOOLOUT (text).
+# STUB_VERSION_NULL=1 makes probe mode answer tool_version:null (a runner
+# that proved liveness but whose version check failed): the coordinator
+# must accept that as a terminal verdict, never poll past it as pending.
 set -u
 
 SPOOL=$1
@@ -42,8 +45,12 @@ mkdir -p "$RESULTS/$JOBID"
 
 case "$MODE" in
     probe)
-        printf '{"schema":1,"tool":"%s","tool_version":"stub-1.0","runner_arch":"%s","image_digest":"stub","tool_image":"stub"}' \
-            "$TOOL" "$(uname -m)" > "$RESULTS/$JOBID/status.json"
+        VERSION_JSON='"stub-1.0"'
+        if [ "${STUB_VERSION_NULL:-0}" = "1" ]; then
+            VERSION_JSON='null'
+        fi
+        printf '{"schema":1,"tool":"%s","tool_version":%s,"runner_arch":"%s","image_digest":"stub","tool_image":"stub"}' \
+            "$TOOL" "$VERSION_JSON" "$(uname -m)" > "$RESULTS/$JOBID/status.json"
         ;;
     ok)
         printf '{"schema":1,"state":"running"}' > "$RESULTS/$JOBID/status.json"
