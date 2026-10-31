@@ -445,6 +445,31 @@ class AnalysisDeploymentTest extends TestCase
         $this->assertStringContainsString('`jadx -j T -d <out> <in>`', $protocol);
     }
 
+    public function test_jadx_fixture_path_survives_restrictive_context(): void
+    {
+        // Regression net for the ARM64 www-data failure ("File not
+        // found" while root passed): COPY preserves host mode bits
+        // and implicitly creates /opt/runner/fixtures, so a
+        // umask-077 checkout bakes a 700 dir that www-data cannot
+        // traverse. The image must normalize modes deterministically
+        // AFTER the COPYs (narrow scope, no 777) and gate fixture
+        // readability as www-data before launching JADX.
+        $jadx = (string) file_get_contents(base_path('docker/analysis/Dockerfile.jadx'));
+        $copyPos = strpos($jadx, 'COPY --chmod=644 fixtures/dex-smoke.dex');
+        $this->assertNotFalse($copyPos, 'jadx COPYs the DEX fixture');
+        $normPos = strpos($jadx, 'find /opt/runner -type d -exec chmod 755');
+        $this->assertNotFalse($normPos, 'jadx normalizes the runner tree');
+        $this->assertGreaterThan($copyPos, $normPos, 'normalization runs after the COPYs');
+        $this->assertStringContainsString('find /opt/runner -type f -exec chmod 644', $jadx);
+        $this->assertDoesNotMatchRegularExpression('/chmod\s+(-R\s+)?0?777\b/', $jadx);
+        $userPos = strpos($jadx, 'USER www-data');
+        $gatePos = strpos($jadx, 'test -r /opt/runner/fixtures/dex-smoke.dex');
+        $this->assertNotFalse($gatePos, 'www-data fixture readability gate');
+        $this->assertGreaterThan($userPos, $gatePos, 'readability gate runs as www-data');
+        $this->assertStringContainsString('test -x /opt/runner/fixtures', $jadx);
+        $this->assertStringContainsString('test -x /opt/runner', $jadx);
+    }
+
     public function test_setup_docs_gate_startup_on_successful_build(): void
     {
         $setup = (string) file_get_contents(base_path('docs/binary-analysis-setup.md'));

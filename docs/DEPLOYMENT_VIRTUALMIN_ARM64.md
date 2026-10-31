@@ -407,12 +407,17 @@ cannot fill the disk.
 [root]# docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin build && \
   docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin up -d
 [root]# docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin exec -T app php artisan migrate --force
+[root]# ./docker/ops/wait-for-healthy.sh --variant virtualmin
 [root]# ./docker/ops/status.sh --variant virtualmin
 ```
 
 Volumes survive rebuilds (database + nothing else to persist in this
 variant — TLS lives in Apache/Virtualmin). Brief 502s while `app` is
-recreated self-heal within ~10s (nginx re-resolves via Docker DNS).
+recreated self-heal within ~10s (nginx re-resolves via Docker DNS):
+that is why verification starts with `wait-for-healthy.sh`, which
+polls container health boundedly instead of curling into startup;
+a 502 after every service reports healthy is a real failure, not a
+race.
 
 ## 13. Backup and restore
 

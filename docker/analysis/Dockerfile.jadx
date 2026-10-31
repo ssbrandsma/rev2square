@@ -83,10 +83,24 @@ COPY runner.py /opt/runner/runner.py
 # DEX smoke fixture for probe qualification (see fixtures/gen_dex_smoke.py).
 COPY --chmod=644 fixtures/dex-smoke.dex /opt/runner/fixtures/dex-smoke.dex
 
+# COPY preserves host mode bits, and the fixture COPY implicitly
+# creates /opt/runner/fixtures: under a umask-077 checkout that dir
+# lands in the image root-owned 700, so www-data fails traversal
+# (jadx reports "File not found") while root passes. Normalize
+# deterministically AFTER the COPYs so any cache-enabled build is
+# usable regardless of host permissions. Narrow scope: the runner
+# tree only (/opt/runner itself included); / and /opt come from the
+# base image and need no change. No 777, no new writability: dirs
+# 755, files 644, the runner entry point 755. Plain find (no
+# -L/-follow): symlinks are neither followed nor altered.
+RUN find /opt/runner -type d -exec chmod 755 {} + \
+    && find /opt/runner -type f -exec chmod 644 {} + \
+    && chmod 755 /opt/runner/runner.py
+
 RUN /opt/jadx/bin/jadx --version > /provenance/jadx-version.txt 2>&1 \
     && /opt/jre/bin/java -version > /provenance/java-version.txt 2>&1 \
     && chmod 644 /provenance/* \
-    && chmod 755 /opt/runner/runner.py /opt/jadx/bin/jadx
+    && chmod 755 /opt/jadx/bin/jadx
 
 # Fixture qualification at build time: the DEX smoke input MUST
 # decompile with the known class marker, or this image is broken.
@@ -110,6 +124,16 @@ RUN echo "597807fe5c8d9d999ba7ca4292a8707618281463638b7449384d9907e95f8b80  /opt
 RUN mkdir -p /spool /results && chown www-data:www-data /spool /results
 
 USER www-data
+
+# Fixture readability gate (www-data, before any JADX launch): an
+# unreadable fixture path must fail HERE with a clear label, not
+# inside jadx as "File not found". Traversal of every ancestor plus
+# readability of the file itself.
+RUN echo "--- fixture: readable as www-data ---" \
+    && test -x /opt \
+    && test -x /opt/runner \
+    && test -x /opt/runner/fixtures \
+    && test -r /opt/runner/fixtures/dex-smoke.dex
 
 # Runtime self-checks execute as the non-root runtime user: stdlib
 # coverage for every runner.py import, JADX executability, the

@@ -143,8 +143,10 @@ docker compose -f compose.prod.yaml --env-file .env.production up -d
 docker compose -f compose.prod.yaml --env-file .env.production exec -T app php artisan migrate --force
 
 # 8. Seed the public demo content (safe: PRD-derived showcase only, no
-#    private data — see section 6), then verify.
+#    private data — see section 6), then verify. Readiness first:
+#    the HTTP checks below race startup (502 while still starting).
 docker compose -f compose.prod.yaml --env-file .env.production exec -T app php artisan db:seed --force
+./docker/ops/wait-for-healthy.sh
 ./docker/ops/status.sh
 curl -fsS https://<real domain>/up
 ```
@@ -313,8 +315,11 @@ before retry), `storage/logs/laravel.log` errors (also surfaced by
   login loops or http asset URLs.
 - Brief 502s right after `up -d` recreates `app`: nginx re-resolves the
   php-fpm upstream through Docker DNS within ~10s by design
-  (`resolver 127.0.0.11` in `default.prod.conf`). If 502s persist past a
-  minute, force it:
+  (`resolver 127.0.0.11` in `default.prod.conf`). Deploy verification
+  must wait for readiness first (`./docker/ops/wait-for-healthy.sh`
+  before any HTTP check) instead of treating a startup 502 as a
+  failure. If 502s persist past a minute with every service healthy,
+  force it:
   `docker compose -f compose.prod.yaml --env-file .env.production exec -T nginx nginx -s reload`.
 - Out of disk during build: `docker system prune -a --volumes` is
   DESTRUCTIVE (deletes volumes). Prefer `docker image prune -a` (keeps

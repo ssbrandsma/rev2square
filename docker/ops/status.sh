@@ -4,7 +4,9 @@
 # Read-only operational overview: container states, /up health, queue
 # depth, failed jobs, recent application errors, disk usage, database
 # size. Every check prints PASS/WARN/FAIL; the script exits 1 if any
-# check FAILs. Prints no credentials.
+# check FAILs. Prints no credentials. Point-in-time only: after a
+# deploy, run wait-for-healthy.sh first so this check does not race
+# container startup (HTTP 502 while still starting).
 #
 # Usage:
 #   docker/ops/status.sh [--variant prod|virtualmin] [--env-file FILE] [--project NAME] [--url URL] [--insecure]
