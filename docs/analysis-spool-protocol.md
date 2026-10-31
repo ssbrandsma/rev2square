@@ -183,6 +183,21 @@ inside the script.
 bounds: 2000 files, depth 12, 32 KiB per inline file / 256 KiB
 total, 5 × 8 MiB stored. Symlinks are skipped, never followed.
 
+Tree evidence is bounded by construction against the 512 KiB
+evidence cap: manifest entries and content compete for one
+serialized-size pool (raw sizes undercount JSON escaping, so the
+runner measures encoded bytes, never file sizes), files past the
+per-file inline bound get head excerpts with explicit markers, and
+a fit-loop re-checks the finished document — dropping trailing
+excerpts, then inline files, then manifest entries — so the cap
+holds even if the accounting drifts. Every omission is counted
+exactly in a `budget` block (retained/omitted counts, excerpt
+paths, skip reasons) with deterministic walk-order retention, and
+`truncated` is set whenever anything was omitted. The coordinator
+envelope adds a byte-bounded class index and stores with
+unescaped slashes, keeping the same serialized-size basis, so the
+512 KiB storage fit cap holds end to end.
+
 ### Coordinator envelope (`binary-analysis/1`)
 
 Adapters normalize runner evidence into the established envelope

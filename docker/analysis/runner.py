@@ -94,6 +94,23 @@ MAX_INLINE_FILE_BYTES = 32 * 1024
 MAX_INLINE_TOTAL_BYTES = 256 * 1024
 MAX_MANIFEST_FILES = 2000
 MAX_WALK_DEPTH = 12
+# Serialized-size accounting for tree evidence (manifest + inline +
+# excerpts share one pool): the 512 KiB cap applies to the JSON
+# bytes, but raw file sizes undercount JSON escaping (up to 6x per
+# non-ASCII char) plus keys, delimiters, and the envelope. The pool
+# leaves headroom for the envelope skeleton, the truncation metadata,
+# and the coordinator's own envelope growth (class index); the
+# per-category ceilings keep a huge manifest from starving content
+# and vice versa. Raw per-file/total bounds stay in force as well —
+# they match the coordinator's inline rules byte for byte.
+EVIDENCE_POOL_BYTES = MAX_EVIDENCE_BYTES - 65536
+MANIFEST_POOL_BYTES = 352 * 1024
+CONTENT_POOL_BYTES = 352 * 1024
+EXCERPT_CHARS = 2000
+EXCERPT_HEAD_BYTES = 12288
+MAX_EXCERPT_PATHS = 200
+EXCERPT_PATHS_BUDGET = 8192
+MAX_COUNTED_FILES = 100000
 MAX_OUTPUT_BYTES = 8 * 1024 * 1024
 MAX_STORED_FILES = 5
 MAX_STORED_FILE_BYTES = 8 * 1024 * 1024
@@ -104,6 +121,14 @@ POLL_INTERVAL = 1.0
 
 def fail(message):
     raise ValueError(message)
+
+
+def _dumps(obj):
+    """Canonical JSON encoding shared by the size accounting and the
+    final evidence write: identical settings, so measured costs
+    match emitted bytes exactly (modulo the conservative +1 comma
+    per entry)."""
+    return json.dumps(obj)
 
 
 def _log(message):
@@ -477,7 +502,7 @@ class Runner:
                     continue
                 if proc.returncode != 0:
                     continue
-                _, inline, _ = self._collect_tree(
+                _, inline, _, _ = self._collect_tree(
                     os.path.join(workdir, "jadx-out"))
                 if any(key.endswith(".java") and FIXTURE_MARKER in value
                        for key, value in inline.items()):
@@ -831,11 +856,11 @@ class Runner:
         outdir = {"jadx": os.path.join(workdir, "jadx-out"),
                   "ilspy": os.path.join(workdir, "ilspy-out"),
                   "extract": os.path.join(workdir, "extract-out")}[self.tool]
-        manifest, inline, truncated = self._collect_tree(outdir)
+        manifest, inline, truncated, budget = self._collect_tree(outdir)
         evidence = {"schema": SCHEMA, "tool": self.tool,
                     "exit_code": exit_code, "profile": profile,
                     "files": manifest, "inline": inline,
-                    "truncated": truncated}
+                    "truncated": truncated, "budget": budget}
         if self.tool == "extract":
             evidence["stored_files"] = self._store_candidates(
                 outdir, manifest, claimdir)
@@ -847,47 +872,172 @@ class Runner:
         return None, info
 
     def _collect_tree(self, outdir):
+        """Bounded tree evidence with exact truncation metadata.
+
+        Single deterministic walk (sorted, no symlinks): manifest
+        entries and content compete for one serialized-size pool so
+        the emitted evidence.json can never breach MAX_EVIDENCE_BYTES
+        (a fit-loop in _write_evidence re-checks regardless). Files
+        too big for full inline get a head excerpt when budget
+        remains; everything past every budget is counted exactly so
+        retained/omitted counts reconcile. Returns
+        (manifest, inline, truncated, budget)."""
         manifest = []
         inline = {}
-        inline_total = 0
+        excerpt_paths = []
+        budget = {"files_seen": 0, "manifest_retained": 0,
+                  "manifest_omitted": 0, "inline_full": 0,
+                  "excerpt_count": 0, "content_omitted": 0,
+                  "binary_skipped": 0, "symlink_skipped": 0,
+                  "error_skipped": 0, "excerpt_paths": excerpt_paths,
+                  "depth_pruned": False, "walk_capped": False,
+                  "byte_cap": MAX_EVIDENCE_BYTES}
+        pool = EVIDENCE_POOL_BYTES
+        manifest_bytes = 0
+        content_bytes = 0
+        excerpt_paths_bytes = 0
+        inline_raw = 0
         truncated = False
         if not os.path.isdir(outdir):
-            return manifest, inline, True
+            return manifest, inline, True, budget
+        walk_done = False
         for root, dirs, files in os.walk(outdir):
+            if walk_done:
+                break
             depth = root[len(outdir):].count(os.sep)
             if depth > MAX_WALK_DEPTH:
                 dirs[:] = []
+                budget["depth_pruned"] = True
                 truncated = True
                 continue
             # Never follow or record symlinks: escapes hide in links.
-            dirs[:] = [d for d in sorted(dirs)
-                       if not os.path.islink(os.path.join(root, d))]
+            # Pruned symlink dirs count like skipped symlink files.
+            kept = []
+            for d in sorted(dirs):
+                if os.path.islink(os.path.join(root, d)):
+                    budget["symlink_skipped"] += 1
+                    truncated = True
+                else:
+                    kept.append(d)
+            dirs[:] = kept
             for name in sorted(files):
-                if len(manifest) >= MAX_MANIFEST_FILES:
-                    return manifest, inline, True
                 full = os.path.join(root, name)
                 if os.path.islink(full) or not os.path.isfile(full):
+                    budget["symlink_skipped"] += 1
                     truncated = True
                     continue
                 rel = os.path.relpath(full, outdir)
                 try:
                     size = os.path.getsize(full)
                 except OSError:
+                    budget["error_skipped"] += 1
+                    truncated = True
+                    continue
+                budget["files_seen"] += 1
+                if budget["files_seen"] > MAX_COUNTED_FILES:
+                    # Unprocessed: keep seen == retained + omitted.
+                    budget["files_seen"] -= 1
+                    budget["walk_capped"] = True
+                    truncated = True
+                    walk_done = True
+                    break
+                # Manifest entry: sha is always 64 hex chars, so the
+                # serialized cost is known before hashing (omitted
+                # files are counted, never read).
+                entry_cost = len(_dumps({"path": rel, "size": size,
+                                         "sha256": "0" * 64})) + 1
+                retained = (
+                    len(manifest) < MAX_MANIFEST_FILES
+                    and manifest_bytes + entry_cost <= MANIFEST_POOL_BYTES
+                    and pool >= entry_cost)
+                if not retained:
+                    budget["manifest_omitted"] += 1
                     truncated = True
                     continue
                 manifest.append({"path": rel, "size": size,
                                  "sha256": sha256_file(full)})
-                if (size <= MAX_INLINE_FILE_BYTES
-                        and inline_total + size <= MAX_INLINE_TOTAL_BYTES):
-                    try:
-                        with open(full, "rb") as fh:
-                            data = fh.read()
-                        inline[rel] = data.decode("utf-8")
-                        inline_total += size
-                    except (OSError, UnicodeDecodeError):
-                        # Binary members stay manifest-only.
-                        pass
-        return manifest, inline, truncated
+                manifest_bytes += entry_cost
+                pool -= entry_cost
+                budget["manifest_retained"] += 1
+                text, is_excerpt, skipped = self._inline_text(full, size)
+                if text is None:
+                    # Binary members were never promised inline
+                    # (manifest keeps the reference); read errors are
+                    # genuine omissions.
+                    if skipped == "binary":
+                        budget["binary_skipped"] += 1
+                    else:
+                        budget["error_skipped"] += 1
+                        truncated = True
+                    continue
+                content_cost = (len(_dumps(rel)) + 2
+                                + len(_dumps(text)) + 1)
+                if (inline_raw + len(text.encode("utf-8"))
+                        > MAX_INLINE_TOTAL_BYTES
+                        or content_bytes + content_cost
+                        > CONTENT_POOL_BYTES
+                        or pool < content_cost):
+                    budget["content_omitted"] += 1
+                    truncated = True
+                    continue
+                if is_excerpt and (
+                        len(excerpt_paths) >= MAX_EXCERPT_PATHS
+                        or excerpt_paths_bytes + len(_dumps(rel)) + 1
+                        > EXCERPT_PATHS_BUDGET):
+                    budget["content_omitted"] += 1
+                    truncated = True
+                    continue
+                inline[rel] = text
+                inline_raw += len(text.encode("utf-8"))
+                content_bytes += content_cost
+                pool -= content_cost
+                if is_excerpt:
+                    excerpt_paths.append(rel)
+                    excerpt_paths_bytes += len(_dumps(rel)) + 1
+                    budget["excerpt_count"] += 1
+                else:
+                    budget["inline_full"] += 1
+        if budget["manifest_omitted"] or budget["content_omitted"]:
+            truncated = True
+        return manifest, inline, truncated, budget
+
+    @staticmethod
+    def _inline_text(full, size):
+        """(text, is_excerpt, skipped) for one file. Full content up
+        to the raw per-file bound (strict UTF-8); larger files get a
+        head excerpt with an explicit marker. skipped is None on
+        success, else "binary" (not valid UTF-8: manifest-only by
+        design, never a truncation) or "io_error". Char-boundary
+        cuts keep every string valid UTF-8."""
+        if size <= MAX_INLINE_FILE_BYTES:
+            try:
+                with open(full, "rb") as fh:
+                    return fh.read().decode("utf-8"), False, None
+            except UnicodeDecodeError:
+                return None, False, "binary"
+            except OSError:
+                return None, False, "io_error"
+        try:
+            with open(full, "rb") as fh:
+                head = fh.read(EXCERPT_HEAD_BYTES)
+        except OSError:
+            return None, False, "io_error"
+        text = None
+        for cut in (0, 1, 2, 3):
+            end = len(head) - cut
+            if end <= 0:
+                break
+            try:
+                text = head[:end].decode("utf-8")
+                break
+            except UnicodeDecodeError:
+                continue
+        if text is None:
+            return None, False, "binary"
+        excerpt = text[:EXCERPT_CHARS]
+        marker = ("\n...[excerpt: first %d characters of %d bytes; "
+                  "see manifest]..." % (len(excerpt), size))
+        return excerpt + marker, True, None
 
     def _store_candidates(self, outdir, manifest, claimdir):
         """Copy the largest extracted files (bounded count/size) into
@@ -929,15 +1079,83 @@ class Runner:
         return stored
 
     def _write_evidence(self, claimdir, evidence):
+        """Serialize evidence.json, bounded by construction. The tree
+        collector accounts serialized sizes against its pool, but this
+        fit-loop re-checks regardless: while over the cap, drop the
+        last excerpt, then the last full-inline file, then the last
+        manifest entry (deterministic reverse walk order), recompute
+        the truncation metadata from the surviving structures, and
+        re-serialize — whole JSON documents only, never a truncated
+        serialization. The final guard fails closed if the invariant
+        ever breaks (it cannot: an empty manifest plus metadata is
+        far under the cap)."""
+        budget = evidence.get("budget")
+        if isinstance(budget, dict):
+            while len(_dumps(evidence)) > MAX_EVIDENCE_BYTES:
+                if not self._shrink_evidence(evidence, budget):
+                    break
+            self._recount_budget(evidence, budget)
         path = os.path.join(claimdir, "evidence.json")
         tmp = path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump(evidence, fh)
+            fh.write(_dumps(evidence))
         if os.path.getsize(tmp) > MAX_EVIDENCE_BYTES:
             os.unlink(tmp)
             fail("evidence exceeds the byte cap")
         os.replace(tmp, path)
         os.chmod(path, 0o644)
+
+    @staticmethod
+    def _shrink_evidence(evidence, budget):
+        """Drop one trailing item (excerpt, then inline, then
+        manifest with its content); True when something dropped."""
+        inline = evidence.get("inline")
+        manifest = evidence.get("files")
+        if not isinstance(inline, dict):
+            inline = {}
+        if not isinstance(manifest, list):
+            manifest = []
+        excerpts = budget.get("excerpt_paths") or []
+        while excerpts and excerpts[-1] not in inline:
+            excerpts.pop()
+        if excerpts:
+            inline.pop(excerpts.pop(), None)
+            evidence["truncated"] = True
+            return True
+        if inline:
+            inline.pop(next(reversed(inline)))
+            evidence["truncated"] = True
+            return True
+        if manifest:
+            dropped = manifest.pop()
+            if isinstance(dropped, dict):
+                inline.pop(dropped.get("path"), None)
+            evidence["truncated"] = True
+            return True
+        return False
+
+    @staticmethod
+    def _recount_budget(evidence, budget):
+        """Recompute retained/omitted counts from the surviving
+        structures so metadata always reconciles after shrinking."""
+        manifest = evidence.get("files")
+        inline = evidence.get("inline")
+        if not isinstance(manifest, list):
+            manifest = []
+        if not isinstance(inline, dict):
+            inline = {}
+        excerpts = [p for p in (budget.get("excerpt_paths") or [])
+                    if p in inline]
+        budget["excerpt_paths"] = excerpts
+        budget["manifest_retained"] = len(manifest)
+        budget["manifest_omitted"] = max(
+            0, budget.get("files_seen", 0) - len(manifest))
+        budget["excerpt_count"] = len(excerpts)
+        budget["inline_full"] = len(inline) - len(excerpts)
+        budget["content_omitted"] = max(
+            0,
+            len(manifest) - len(inline)
+            - budget.get("binary_skipped", 0))
 
 
 def main(argv):

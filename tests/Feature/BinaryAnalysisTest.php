@@ -634,6 +634,120 @@ class BinaryAnalysisTest extends TestCase
         $this->assertContains('evidence_trimmed', $decoded['warnings']);
     }
 
+    public function test_fit_evidence_keeps_slashes_unescaped(): void
+    {
+        // The runner budgets serialized bytes assuming plain '/'
+        // (its json.dump default); re-serialization must not grow
+        // the payload with \/ escapes.
+        $evidence = [
+            'functions' => [], 'xrefs' => [], 'warnings' => [],
+            'disassembly' => ['windows' => [], 'truncated' => false],
+            'reconstruction' => [
+                'files' => [['path' => 'sources/com/twin/Widget0.java', 'size' => 9, 'sha256' => hash('sha256', 'x')]],
+                'inline' => ['sources/com/twin/Widget0.java' => 'a/b'],
+                'classes' => [], 'truncated' => false,
+            ],
+        ];
+
+        $encoded = AnalyzeBinaryJob::fitEvidence($evidence);
+
+        $this->assertNotNull($encoded);
+        $this->assertStringContainsString('sources/com/twin/Widget0.java', $encoded);
+        $this->assertStringNotContainsString('sources\\/com', $encoded);
+    }
+
+    /** @return array<string, mixed> */
+    private function partialReconstructionEvidence(): array
+    {
+        return [
+            'schema' => 'binary-analysis/1',
+            'adapter' => 'jadx',
+            'adapter_version' => '1.5.6',
+            'tool' => ['name' => 'JADX', 'version' => '1.5.6', 'profile' => 'apk'],
+            'artifact' => ['id' => 1, 'sha256' => hash('sha256', 'x'), 'format' => 'apk', 'member' => null],
+            'target' => 'dalvik',
+            'config' => ['target' => 'dalvik'],
+            'analyzed_at' => '2026-10-31T00:00:00+00:00',
+            'elapsed_ms' => 5,
+            'method_note' => 'test',
+            'segments' => [],
+            'functions' => [],
+            'xrefs' => [],
+            'calls' => [],
+            'disassembly' => ['windows' => [], 'total_instructions' => 0, 'total_data_bytes' => 0, 'truncated' => false],
+            'vectors' => [],
+            'io_notes' => [],
+            'warnings' => ['reconstruction_capped'],
+            'limits' => ['max_instructions' => 1],
+            'reconstruction' => [
+                'files' => [['path' => 'sources/com/Foo.java', 'size' => 9, 'sha256' => hash('sha256', 'x')]],
+                'inline' => ['sources/com/Foo.java' => 'class Foo{}'],
+                'classes' => [['name' => 'com.Foo', 'file' => 'sources/com/Foo.java']],
+                'truncated' => true,
+                'budget' => [
+                    'files_seen' => 4327, 'manifest_retained' => 2000, 'manifest_omitted' => 2327,
+                    'inline_full' => 1100, 'excerpt_count' => 1, 'content_omitted' => 899,
+                    'binary_skipped' => 0, 'symlink_skipped' => 0, 'error_skipped' => 0,
+                    'excerpt_paths' => ['sources/com/Big.java'],
+                    'depth_pruned' => false, 'walk_capped' => false, 'byte_cap' => 524288,
+                ],
+            ],
+        ];
+    }
+
+    public function test_analysis_show_explains_partial_reconstruction(): void
+    {
+        Storage::fake('artifacts');
+        [$project, $owner] = $this->seedProject();
+        $apk = $this->storeBytes($project, $owner, BinaryFixtures::prgBasic(), 'game.prg');
+        $analysis = BinaryAnalysis::create([
+            'project_artifact_id' => $apk->id,
+            'requested_by' => $owner->id,
+            'adapter' => 'jadx',
+            'adapter_version' => '1.5.6',
+            'target' => 'dalvik',
+            'config' => ['target' => 'dalvik'],
+            'status' => BinaryAnalysis::STATUS_PARTIAL,
+            'dedupe_key' => str()->random(64),
+            'evidence_key' => str()->random(40),
+        ]);
+        Storage::disk('artifacts')->put($analysis->evidencePath(), json_encode($this->partialReconstructionEvidence()));
+
+        $page = $this->actingAs($owner)->get(route('projects.artifacts.analyses.show', [$project, $apk, $analysis]));
+
+        $page->assertOk();
+        $page->assertSee('Partial output:');
+        $page->assertSee('4,327');
+        $page->assertSee('uploading it again will not show more');
+    }
+
+    public function test_recon_tool_reports_partial_coverage(): void
+    {
+        Storage::fake('artifacts');
+        [$project, $owner] = $this->seedProject();
+        $apk = $this->storeBytes($project, $owner, BinaryFixtures::prgBasic(), 'game.prg');
+        $analysis = BinaryAnalysis::create([
+            'project_artifact_id' => $apk->id,
+            'requested_by' => $owner->id,
+            'adapter' => 'jadx',
+            'adapter_version' => '1.5.6',
+            'target' => 'dalvik',
+            'config' => ['target' => 'dalvik'],
+            'status' => BinaryAnalysis::STATUS_PARTIAL,
+            'dedupe_key' => str()->random(64),
+            'evidence_key' => str()->random(40),
+        ]);
+        Storage::disk('artifacts')->put($analysis->evidencePath(), json_encode($this->partialReconstructionEvidence()));
+
+        $context = $this->consentedContext($owner, $project, [$apk->id]);
+        $result = BinaryTools::execute('list_reconstruction_files', ['artifact_id' => $apk->id], $context);
+
+        $this->assertTrue($result->ok);
+        $this->assertSame(4327, $result->data['files_seen']);
+        $this->assertSame(2327, $result->data['files_omitted']);
+        $this->assertStringContainsString('Partial evidence', $result->data['coverage_note']);
+    }
+
     public function test_suspended_uploader_blocks_analysis_job(): void
     {
         Storage::fake('artifacts');

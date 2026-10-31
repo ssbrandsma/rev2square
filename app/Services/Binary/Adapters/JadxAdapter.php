@@ -144,6 +144,7 @@ final class JadxAdapter extends SandboxedBackend
                 'inline' => $tree['inline'],
                 'classes' => self::classes($tree['files'], '.java'),
                 'truncated' => $tree['truncated'],
+                'budget' => $tree['budget'],
             ],
             'warnings' => $warnings,
         ]);
@@ -179,7 +180,11 @@ final class JadxAdapter extends SandboxedBackend
     /** @param list<array{path: string, size: int, sha256: string}> $files @return list<array{name: string, file: string}> */
     public static function classes(array $files, string $suffix): array
     {
+        // Count-bounded (validator parity) AND byte-bounded: paths
+        // duplicate manifest strings into the envelope, so the index
+        // must not blow the storage budget on hostile path lengths.
         $out = [];
+        $bytes = 0;
         foreach ($files as $file) {
             if (! str_ends_with($file['path'], $suffix)) {
                 continue;
@@ -187,7 +192,12 @@ final class JadxAdapter extends SandboxedBackend
             $base = substr($file['path'], 0, -strlen($suffix));
             // Strip jadx's sources/ root so names read as packages.
             $base = preg_replace('#^(sources|resources)/#', '', $base) ?? $base;
-            $out[] = ['name' => str_replace('/', '.', $base), 'file' => $file['path']];
+            $entry = ['name' => str_replace('/', '.', $base), 'file' => $file['path']];
+            $bytes += strlen($entry['name']) + strlen($entry['file']);
+            if ($bytes > 32768) {
+                break;
+            }
+            $out[] = $entry;
             if (count($out) >= 500) {
                 break;
             }

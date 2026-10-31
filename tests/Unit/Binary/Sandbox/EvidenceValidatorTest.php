@@ -124,6 +124,125 @@ class EvidenceValidatorTest extends TestCase
         $this->assertSame('com.Foo', $ok['reconstruction']['classes'][0]['name']);
     }
 
+    /** @return array<string, mixed> */
+    private function treeBudget(array $overrides = []): array
+    {
+        return array_merge([
+            'files_seen' => 4327, 'manifest_retained' => 2000, 'manifest_omitted' => 2327,
+            'inline_full' => 1100, 'excerpt_count' => 1, 'content_omitted' => 899,
+            'binary_skipped' => 0, 'symlink_skipped' => 0, 'error_skipped' => 0,
+            'excerpt_paths' => ['sources/com/Big.java'],
+            'depth_pruned' => false, 'walk_capped' => false, 'byte_cap' => 524288,
+        ], $overrides);
+    }
+
+    public function test_reconstruction_accepts_truncation_budget(): void
+    {
+        $out = EvidenceValidator::validate('jadx', $this->envelope([
+            'adapter' => 'jadx',
+            'reconstruction' => [
+                'files' => [['path' => 'sources/com/Foo.java', 'size' => 9, 'sha256' => hash('sha256', 'x')]],
+                'inline' => ['sources/com/Foo.java' => 'class Foo{}'],
+                'classes' => [['name' => 'com.Foo', 'file' => 'sources/com/Foo.java']],
+                'truncated' => true,
+                'budget' => $this->treeBudget(),
+            ],
+        ]));
+
+        $this->assertSame(4327, $out['reconstruction']['budget']['files_seen']);
+        $this->assertSame(2327, $out['reconstruction']['budget']['manifest_omitted']);
+        $this->assertSame(['sources/com/Big.java'], $out['reconstruction']['budget']['excerpt_paths']);
+    }
+
+    public function test_reconstruction_rejects_invalid_budget(): void
+    {
+        foreach ([
+            'negative count' => ['files_seen' => -1],
+            'non-int count' => ['manifest_omitted' => 'many'],
+            'non-bool flag' => ['walk_capped' => 1],
+            'bad byte cap' => ['byte_cap' => 0],
+            'too many excerpts' => ['excerpt_paths' => array_fill(0, 201, 'sources/com/Foo.java')],
+            'unsafe excerpt path' => ['excerpt_paths' => ['../escape.java']],
+        ] as $label => $override) {
+            try {
+                EvidenceValidator::validate('jadx', $this->envelope([
+                    'adapter' => 'jadx',
+                    'reconstruction' => [
+                        'files' => [], 'inline' => [], 'classes' => [],
+                        'truncated' => true,
+                        'budget' => $this->treeBudget($override),
+                    ],
+                ]));
+                $this->fail($label.' accepted');
+            } catch (AnalysisFailedException $e) {
+                $this->assertSame('evidence_rejected', $e->errorCode, $label);
+            }
+        }
+    }
+
+    public function test_reconstruction_enforces_manifest_and_inline_bounds(): void
+    {
+        // Boundary: exactly 2000 manifest entries pass, 2001 rejected.
+        $files = [];
+        for ($i = 0; $i < 2000; $i++) {
+            $files[] = ['path' => 'sources/com/F'.$i.'.java', 'size' => 9, 'sha256' => hash('sha256', (string) $i)];
+        }
+        $ok = EvidenceValidator::validate('jadx', $this->envelope([
+            'adapter' => 'jadx',
+            'reconstruction' => ['files' => $files, 'inline' => [], 'classes' => [], 'truncated' => true],
+        ]));
+        $this->assertCount(2000, $ok['reconstruction']['files']);
+        $files[] = ['path' => 'sources/com/Extra.java', 'size' => 9, 'sha256' => hash('sha256', 'extra')];
+        try {
+            EvidenceValidator::validate('jadx', $this->envelope([
+                'adapter' => 'jadx',
+                'reconstruction' => ['files' => $files, 'inline' => [], 'classes' => [], 'truncated' => true],
+            ]));
+            $this->fail('2001-entry manifest accepted');
+        } catch (AnalysisFailedException $e) {
+            $this->assertSame('evidence_rejected', $e->errorCode);
+        }
+
+        // Boundary: 256 KiB inline total passes, one byte more rejected.
+        $inline = [];
+        for ($i = 0; $i < 8; $i++) {
+            $inline['sources/com/G'.$i.'.java'] = str_repeat('b', 32768);
+        }
+        $ok = EvidenceValidator::validate('jadx', $this->envelope([
+            'adapter' => 'jadx',
+            'reconstruction' => ['files' => [], 'inline' => $inline, 'classes' => [], 'truncated' => true],
+        ]));
+        $this->assertCount(8, $ok['reconstruction']['inline']);
+        $inline['sources/com/G8.java'] = 'x';
+        try {
+            EvidenceValidator::validate('jadx', $this->envelope([
+                'adapter' => 'jadx',
+                'reconstruction' => ['files' => [], 'inline' => $inline, 'classes' => [], 'truncated' => true],
+            ]));
+            $this->fail('over-total inline accepted');
+        } catch (AnalysisFailedException $e) {
+            $this->assertSame('evidence_rejected', $e->errorCode);
+        }
+    }
+
+    public function test_reconstruction_preserves_unicode_and_escapes(): void
+    {
+        $text = "package com.twin;\n// \u{6D4B}\u{8BD5} \u{1F600} \"quotes\" \\ backslash / slash";
+        $out = EvidenceValidator::validate('jadx', $this->envelope([
+            'adapter' => 'jadx',
+            'reconstruction' => [
+                'files' => [['path' => 'sources/com/twin/Uni.java', 'size' => strlen($text), 'sha256' => hash('sha256', $text)]],
+                'inline' => ['sources/com/twin/Uni.java' => $text],
+                'classes' => [],
+                'truncated' => false,
+            ],
+        ]));
+
+        $this->assertSame($text, $out['reconstruction']['inline']['sources/com/twin/Uni.java']);
+        $roundTrip = json_decode(json_encode($out['reconstruction']['inline']), true);
+        $this->assertSame($text, $roundTrip['sources/com/twin/Uni.java']);
+    }
+
     public function test_enforces_count_bounds(): void
     {
         $many = [];

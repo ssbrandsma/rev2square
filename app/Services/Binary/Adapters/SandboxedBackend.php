@@ -287,9 +287,11 @@ abstract class SandboxedBackend implements BinaryAdapter
      * Normalize runner tree evidence (jadx/ilspy/extract manifests)
      * into validated reconstruction/extraction sections. Paths are
      * re-checked here; the evidence validator checks them again.
+     * The truncation budget is optional (pre-budget runners omit
+     * it) and strictly validated when present.
      *
      * @param  array<string, mixed>  $raw
-     * @return array{files: list<array{path: string, size: int, sha256: string}>, inline: array<string, string>, truncated: bool}
+     * @return array{files: list<array{path: string, size: int, sha256: string}>, inline: array<string, string>, truncated: bool, budget: array<string, mixed>|null}
      *
      * @throws AnalysisFailedException
      */
@@ -300,6 +302,7 @@ abstract class SandboxedBackend implements BinaryAdapter
         if (! is_array($files) || ! is_array($inline)) {
             throw new AnalysisFailedException('evidence_rejected', 'The isolated backend returned an invalid file manifest. Its output was discarded.');
         }
+        $budget = self::normalizeBudget($raw['budget'] ?? null);
         $cleanFiles = [];
         foreach ($files as $row) {
             if (! is_array($row)) {
@@ -323,7 +326,53 @@ abstract class SandboxedBackend implements BinaryAdapter
             $cleanInline[$path] = $content;
         }
 
-        return ['files' => $cleanFiles, 'inline' => $cleanInline, 'truncated' => (bool) ($raw['truncated'] ?? false)];
+        return ['files' => $cleanFiles, 'inline' => $cleanInline, 'truncated' => (bool) ($raw['truncated'] ?? false), 'budget' => $budget];
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     *
+     * @throws AnalysisFailedException
+     */
+    private static function normalizeBudget(mixed $value): ?array
+    {
+        if ($value === null) {
+            return null;
+        }
+        if (! is_array($value)) {
+            throw new AnalysisFailedException('evidence_rejected', 'The isolated backend returned an invalid truncation budget. Its output was discarded.');
+        }
+        $out = [];
+        foreach (['files_seen', 'manifest_retained', 'manifest_omitted', 'inline_full', 'excerpt_count', 'content_omitted', 'binary_skipped', 'symlink_skipped', 'error_skipped'] as $key) {
+            if (! isset($value[$key]) || ! is_int($value[$key]) || $value[$key] < 0) {
+                throw new AnalysisFailedException('evidence_rejected', 'The isolated backend returned an invalid truncation budget. Its output was discarded.');
+            }
+            $out[$key] = $value[$key];
+        }
+        foreach (['depth_pruned', 'walk_capped'] as $key) {
+            if (! array_key_exists($key, $value) || ! is_bool($value[$key])) {
+                throw new AnalysisFailedException('evidence_rejected', 'The isolated backend returned an invalid truncation budget. Its output was discarded.');
+            }
+            $out[$key] = $value[$key];
+        }
+        if (! isset($value['byte_cap']) || ! is_int($value['byte_cap']) || $value['byte_cap'] <= 0) {
+            throw new AnalysisFailedException('evidence_rejected', 'The isolated backend returned an invalid truncation budget. Its output was discarded.');
+        }
+        $out['byte_cap'] = $value['byte_cap'];
+        $paths = $value['excerpt_paths'] ?? null;
+        if (! is_array($paths) || count($paths) > 200) {
+            throw new AnalysisFailedException('evidence_rejected', 'The isolated backend returned an invalid truncation budget. Its output was discarded.');
+        }
+        $clean = [];
+        foreach ($paths as $path) {
+            if (! is_string($path) || ! self::safeRelativePath($path)) {
+                throw new AnalysisFailedException('evidence_rejected', 'The isolated backend returned an unsafe file path. Its output was discarded.');
+            }
+            $clean[] = $path;
+        }
+        $out['excerpt_paths'] = $clean;
+
+        return $out;
     }
 
     public static function safeRelativePath(mixed $value): bool

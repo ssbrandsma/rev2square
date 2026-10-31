@@ -94,6 +94,7 @@ final class IlspyAdapter extends SandboxedBackend
                 'inline' => $tree['inline'],
                 'classes' => JadxAdapter::classes($tree['files'], '.cs'),
                 'truncated' => $tree['truncated'],
+                'budget' => $tree['budget'],
             ],
             'warnings' => $warnings,
         ]);

@@ -647,6 +647,184 @@ class RunnerCase(unittest.TestCase):
         self.assertEqual(runner._one_line("a\nb\t c"), "a b c")
         self.assertEqual(len(runner._one_line("y" * 500)), 120)
 
+    def _adversarial_tree(self, root, nfiles=3000):
+        """Many-class-shaped tree: varied sizes, unicode names and
+        content (JSON escaping growth), one huge file, one binary,
+        one symlink, one deep path."""
+        os.makedirs(root, exist_ok=True)
+        for i in range(nfiles):
+            sub = os.path.join(root, "sources", "com", "twin%02d" % (i % 64))
+            os.makedirs(sub, exist_ok=True)
+            name = "Widget%d.java" % i
+            if i % 7 == 3:
+                name = "Ünïcöde%d.java" % i
+            body = ("package com.twin%02d;\npublic class W%d {\n"
+                    "    // \u6d4b\u8bd5 \U0001f600 commentary\n"
+                    "    public static void ping() {}\n}\n"
+                    % (i % 64, i))
+            # Every 50th file exceeds the full-inline bound (excerpt).
+            if i % 50 == 0:
+                body += "// padding\n" * 4000
+            with open(os.path.join(sub, name), "w",
+                      encoding="utf-8") as fh:
+                fh.write(body)
+        with open(os.path.join(root, "huge.bin"), "wb") as fh:
+            fh.write(b"\x00\xff" * 600000)
+        with open(os.path.join(root, "binary.dat"), "wb") as fh:
+            # Deterministic invalid UTF-8 (urandom would break the
+            # determinism assertion via the manifest sha).
+            fh.write(b"\xff" + bytes((i * 37 + 11) % 256 for i in range(999)))
+        os.symlink("sources",
+                   os.path.join(root, "escape"))
+        deep = os.path.join(root, *["d%d" % i for i in range(15)])
+        os.makedirs(deep, exist_ok=True)
+        with open(os.path.join(deep, "x.txt"), "w") as fh:
+            fh.write("deep\n")
+        return root
+
+    def _reconciles(self, budget, manifest, inline):
+        self.assertEqual(
+            budget["files_seen"],
+            budget["manifest_retained"] + budget["manifest_omitted"])
+        self.assertEqual(
+            budget["manifest_retained"],
+            budget["inline_full"] + budget["excerpt_count"]
+            + budget["content_omitted"] + budget["binary_skipped"])
+        self.assertEqual(budget["manifest_retained"], len(manifest))
+        self.assertEqual(
+            budget["inline_full"] + budget["excerpt_count"], len(inline))
+        self.assertEqual(budget["excerpt_count"],
+                         len(budget["excerpt_paths"]))
+        for path in budget["excerpt_paths"]:
+            self.assertIn(path, inline)
+            self.assertIn("[excerpt: first ", inline[path])
+
+    def test_tree_evidence_bounded_and_reconciled(self):
+        outdir = self._adversarial_tree(os.path.join(self.tmp, "out"))
+        r = runner.Runner("jadx", self.spool, self.results)
+        manifest, inline, truncated, budget = r._collect_tree(outdir)
+        evidence = {"schema": runner.SCHEMA, "tool": "jadx",
+                    "exit_code": 0, "profile": "apk",
+                    "files": manifest, "inline": inline,
+                    "truncated": truncated, "budget": budget}
+        blob = runner._dumps(evidence)
+        self.assertLessEqual(len(blob), runner.MAX_EVIDENCE_BYTES)
+        self.assertTrue(truncated)
+        self.assertTrue(budget["manifest_omitted"] > 0)
+        self.assertTrue(budget["excerpt_count"] > 0)
+        self.assertTrue(budget["binary_skipped"] >= 1)
+        self.assertTrue(budget["depth_pruned"])
+        self.assertEqual(budget["symlink_skipped"], 1)
+        self._reconciles(budget, manifest, inline)
+        # Every retained string is valid UTF-8 (char-boundary cuts).
+        for text in inline.values():
+            text.encode("utf-8")
+        # Deterministic: identical bytes across collections.
+        again = r._collect_tree(outdir)
+        self.assertEqual(
+            blob,
+            runner._dumps({"schema": runner.SCHEMA, "tool": "jadx",
+                            "exit_code": 0, "profile": "apk",
+                            "files": again[0], "inline": again[1],
+                            "truncated": again[2], "budget": again[3]}))
+
+    def test_tree_evidence_fits_any_pool(self):
+        # Pool accounting degrades gracefully at any pool size
+        # (monkeypatched tiny here): valid partial evidence, counts
+        # reconcile, truncation explicit. The fit-loop backstop is
+        # covered separately below.
+        outdir = self._adversarial_tree(os.path.join(self.tmp, "out2"),
+                                        nfiles=300)
+        r = runner.Runner("jadx", self.spool, self.results)
+        old_pool = runner.EVIDENCE_POOL_BYTES
+        runner.EVIDENCE_POOL_BYTES = 4000
+        try:
+            manifest, inline, truncated, budget = r._collect_tree(outdir)
+        finally:
+            runner.EVIDENCE_POOL_BYTES = old_pool
+        evidence = {"schema": runner.SCHEMA, "tool": "jadx",
+                    "exit_code": 0, "profile": "apk",
+                    "files": manifest, "inline": inline,
+                    "truncated": truncated, "budget": budget}
+        claimdir = os.path.join(self.results, "tiny")
+        os.makedirs(claimdir)
+        r._write_evidence(claimdir, evidence)
+        with open(os.path.join(claimdir, "evidence.json")) as fh:
+            stored = json.load(fh)
+        self.assertLessEqual(len(runner._dumps(stored)),
+                             runner.MAX_EVIDENCE_BYTES)
+        self.assertTrue(stored["truncated"])
+        self._reconciles(stored["budget"], stored["files"],
+                         stored["inline"])
+
+    def test_write_evidence_fit_loop_drops_deterministically(self):
+        # Hand-built oversized evidence: the loop drops trailing
+        # excerpts, then trailing inline files, then trailing
+        # manifest entries, and recomputes every count.
+        manifest = [{"path": "f%04d.java" % i, "size": 10,
+                     "sha256": "0" * 64} for i in range(2000)]
+        inline = {"f%04d.java" % i: "x" * 1000 for i in range(600)}
+        budget = {"files_seen": 2000, "manifest_retained": 2000,
+                  "manifest_omitted": 0, "inline_full": 600,
+                  "excerpt_count": 0, "content_omitted": 1400,
+                  "binary_skipped": 0, "symlink_skipped": 0,
+                  "error_skipped": 0, "excerpt_paths": [],
+                  "depth_pruned": False, "walk_capped": False,
+                  "byte_cap": runner.MAX_EVIDENCE_BYTES}
+        evidence = {"schema": runner.SCHEMA, "tool": "jadx",
+                    "exit_code": 0, "profile": "apk",
+                    "files": manifest, "inline": inline,
+                    "truncated": False, "budget": budget}
+        self.assertGreater(len(runner._dumps(evidence)),
+                           runner.MAX_EVIDENCE_BYTES)
+        r = runner.Runner("jadx", self.spool, self.results)
+        claimdir = os.path.join(self.results, "fit")
+        os.makedirs(claimdir)
+        r._write_evidence(claimdir, evidence)
+        with open(os.path.join(claimdir, "evidence.json")) as fh:
+            stored = json.load(fh)
+        self.assertLessEqual(len(runner._dumps(stored)),
+                             runner.MAX_EVIDENCE_BYTES)
+        self.assertTrue(stored["truncated"])
+        # Deterministic: earliest files survive.
+        self.assertEqual(stored["files"][0]["path"], "f0000.java")
+        self._reconciles(stored["budget"], stored["files"],
+                         stored["inline"])
+
+    def test_tree_evidence_excerpt_paths_byte_bounded(self):
+        # Long paths cannot blow the metadata: the excerpt path list
+        # is byte-bounded (deterministic earliest-wins) on top of the
+        # count bound.
+        outdir = os.path.join(self.tmp, "longpaths")
+        os.makedirs(outdir)
+        for i in range(60):
+            name = "d%02d-" % i + "p" * 190 + ".java"
+            with open(os.path.join(outdir, name), "w") as fh:
+                fh.write("// pad\n" * 6000)
+        r = runner.Runner("jadx", self.spool, self.results)
+        manifest, inline, truncated, budget = r._collect_tree(outdir)
+        paths_blob = runner._dumps(budget["excerpt_paths"])
+        self.assertLessEqual(len(paths_blob),
+                             runner.EXCERPT_PATHS_BUDGET + 2)
+        self.assertLess(len(budget["excerpt_paths"]), 60)
+        self._reconciles(budget, manifest, inline)
+
+    def test_tree_evidence_small_tree_complete(self):
+        # Small outputs keep the old complete behavior: everything
+        # retained, truncated false, counts exact.
+        outdir = os.path.join(self.tmp, "small")
+        os.makedirs(os.path.join(outdir, "sources"))
+        with open(os.path.join(outdir, "sources", "A.java"), "w") as fh:
+            fh.write("class A{}\n")
+        r = runner.Runner("jadx", self.spool, self.results)
+        manifest, inline, truncated, budget = r._collect_tree(outdir)
+        self.assertFalse(truncated)
+        self.assertEqual(budget["files_seen"], 1)
+        self.assertEqual(budget["manifest_retained"], 1)
+        self.assertEqual(budget["inline_full"], 1)
+        self.assertEqual(inline["sources/A.java"], "class A{}\n")
+        self._reconciles(budget, manifest, inline)
+
     def test_probe_answer_atomic_no_tmp_residue(self):
         os.environ["OBJDUMP_BIN"] = self.stub(
             "objdump", 'echo "GNU objdump 2.40"\n')
@@ -786,6 +964,59 @@ class RealJadxCase(unittest.TestCase):
             found,
             "no .java under %s contains %r" % (
                 outdir, runner.FIXTURE_MARKER))
+
+    def test_real_many_class_evidence_bounded(self):
+        # Production-APK failure shape (many-class decompile
+        # overflowing the evidence cap) through the REAL jadx +
+        # REAL runner collection path. The twin DEX is generated on
+        # demand (not a committed binary); N=1500 overflows the
+        # pre-fix collector, so this test is meaningful.
+        fixtures = os.path.join(self.here, "..", "fixtures")
+        sys.path.insert(0, os.path.abspath(fixtures))
+        try:
+            import gen_dex_many
+        finally:
+            sys.path.pop(0)
+        twin = os.path.join(self.tmp, "twin.dex")
+        with open(twin, "wb") as fh:
+            fh.write(gen_dex_many.build(1500))
+        workdir = os.path.join(self.tmp, "work")
+        os.makedirs(workdir)
+        argv = runner.build_argv("jadx", "apk", {"threads": 2},
+                                workdir, twin)
+        proc = subprocess.run(
+            argv, stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            cwd=workdir, timeout=600,
+            env=runner.tool_env("jadx", workdir))
+        self.assertEqual(proc.returncode, 0, "real jadx failed")
+        outdir = os.path.join(workdir, "jadx-out")
+        javas = [os.path.join(r, f)
+                 for r, _, fs in os.walk(outdir) for f in fs
+                 if f.endswith(".java")]
+        self.assertGreaterEqual(len(javas), 1500)
+        r = runner.Runner("jadx", self.tmp, self.tmp)
+        manifest, inline, truncated, budget = r._collect_tree(outdir)
+        evidence = {"schema": runner.SCHEMA, "tool": "jadx",
+                    "exit_code": 0, "profile": "apk",
+                    "files": manifest, "inline": inline,
+                    "truncated": truncated, "budget": budget}
+        self.assertLessEqual(len(runner._dumps(evidence)),
+                             runner.MAX_EVIDENCE_BYTES)
+        self.assertTrue(truncated)
+        self.assertGreaterEqual(budget["files_seen"], 1500)
+        self.assertTrue(any("Widget0.java" in m["path"]
+                            for m in manifest))
+        self.assertTrue(len(inline) > 0)
+        self.assertEqual(
+            budget["files_seen"],
+            budget["manifest_retained"] + budget["manifest_omitted"])
+        claimdir = os.path.join(self.tmp, "claim")
+        os.makedirs(claimdir)
+        r._write_evidence(claimdir, evidence)  # must not raise
+        self.assertLessEqual(
+            os.path.getsize(os.path.join(claimdir, "evidence.json")),
+            runner.MAX_EVIDENCE_BYTES)
 
     def test_real_scoping_survives_readonly_home(self):
         # Production runs on a read-only root where the

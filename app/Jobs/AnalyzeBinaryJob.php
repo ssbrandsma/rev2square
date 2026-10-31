@@ -251,7 +251,10 @@ class AnalyzeBinaryJob implements ShouldQueue
     public static function fitEvidence(array &$evidence): ?string
     {
         $cap = (int) config('artifacts.binary_max_evidence_bytes');
-        $encoded = json_encode($evidence);
+        // Unescaped slashes: the runner budgets serialized bytes
+        // assuming plain '/' (its json.dump default), so the stored
+        // encoding must not add a byte per slash on re-serialization.
+        $encoded = json_encode($evidence, JSON_UNESCAPED_SLASHES);
         if ($encoded !== false && strlen($encoded) <= $cap) {
             return $encoded;
         }
@@ -262,12 +265,12 @@ class AnalyzeBinaryJob implements ShouldQueue
         }
 
         while (true) {
-            $encoded = json_encode($evidence);
+            $encoded = json_encode($evidence, JSON_UNESCAPED_SLASHES);
             if ($encoded !== false && strlen($encoded) <= $cap) {
                 $evidence['warnings'][] = 'evidence_trimmed';
                 $evidence['disassembly']['truncated'] = true;
 
-                return json_encode($evidence) ?: null;
+                return json_encode($evidence, JSON_UNESCAPED_SLASHES) ?: null;
             }
 
             // Drop the second half of the largest window's lines.

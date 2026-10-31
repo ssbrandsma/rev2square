@@ -155,6 +155,7 @@ final class ExtractAdapter extends SandboxedBackend
                 'inline' => $tree['inline'],
                 'truncated' => $tree['truncated'],
                 'promoted' => $promoted,
+                'budget' => $tree['budget'],
             ],
             'warnings' => $warnings,
         ]);

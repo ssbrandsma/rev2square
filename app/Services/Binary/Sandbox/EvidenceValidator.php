@@ -303,12 +303,18 @@ final class EvidenceValidator
             ];
         }
 
-        return [
+        $out = [
             'files' => self::manifest($value['files'] ?? null, 'reconstruction'),
             'inline' => self::inline($value['inline'] ?? null, 'reconstruction'),
             'classes' => $clean,
             'truncated' => (bool) ($value['truncated'] ?? false),
         ];
+        $budget = self::treeBudget($value['budget'] ?? null, 'reconstruction');
+        if ($budget !== null) {
+            $out['budget'] = $budget;
+        }
+
+        return $out;
     }
 
     /** @return array{profile: string, files: list<array{path: string, size: int, sha256: string}>, inline: array<string, string>, truncated: bool, promoted: list<array{path: string, artifact_id: int}>} */
@@ -329,13 +335,58 @@ final class EvidenceValidator
             $clean[] = ['path' => self::safePath($row['path'] ?? null), 'artifact_id' => $row['artifact_id']];
         }
 
-        return [
+        $out = [
             'profile' => self::cleanText((string) ($value['profile'] ?? ''), 100),
             'files' => self::manifest($value['files'] ?? null, 'extraction'),
             'inline' => self::inline($value['inline'] ?? null, 'extraction'),
             'truncated' => (bool) ($value['truncated'] ?? false),
             'promoted' => $clean,
         ];
+        $budget = self::treeBudget($value['budget'] ?? null, 'extraction');
+        if ($budget !== null) {
+            $out['budget'] = $budget;
+        }
+
+        return $out;
+    }
+
+    /** @return array<string, mixed>|null */
+    private static function treeBudget(mixed $value, string $section): ?array
+    {
+        if ($value === null) {
+            return null;
+        }
+        if (! is_array($value)) {
+            throw self::reject($section);
+        }
+        $out = [];
+        foreach (['files_seen', 'manifest_retained', 'manifest_omitted', 'inline_full', 'excerpt_count', 'content_omitted', 'binary_skipped', 'symlink_skipped', 'error_skipped'] as $key) {
+            if (! isset($value[$key]) || ! is_int($value[$key]) || $value[$key] < 0) {
+                throw self::reject($section);
+            }
+            $out[$key] = $value[$key];
+        }
+        foreach (['depth_pruned', 'walk_capped'] as $key) {
+            if (! array_key_exists($key, $value) || ! is_bool($value[$key])) {
+                throw self::reject($section);
+            }
+            $out[$key] = $value[$key];
+        }
+        if (! isset($value['byte_cap']) || ! is_int($value['byte_cap']) || $value['byte_cap'] <= 0) {
+            throw self::reject($section);
+        }
+        $out['byte_cap'] = $value['byte_cap'];
+        $paths = $value['excerpt_paths'] ?? null;
+        if (! is_array($paths) || count($paths) > 200) {
+            throw self::reject($section);
+        }
+        $clean = [];
+        foreach ($paths as $path) {
+            $clean[] = self::safePath($path);
+        }
+        $out['excerpt_paths'] = $clean;
+
+        return $out;
     }
 
     /** @return list<array{path: string, size: int, sha256: string}> */

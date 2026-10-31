@@ -16,6 +16,32 @@ use Tests\TestCase;
 /** Adapter registry, capability honesty, and subprocess argv safety. */
 class AdaptersTest extends TestCase
 {
+    public function test_class_index_is_count_and_byte_bounded(): void
+    {
+        // 500 short entries keep the count behavior.
+        $files = [];
+        for ($i = 0; $i < 600; $i++) {
+            $files[] = ['path' => 'sources/com/F'.$i.'.java', 'size' => 9, 'sha256' => hash('sha256', (string) $i)];
+        }
+        $this->assertCount(500, JadxAdapter::classes($files, '.java'));
+
+        // Hostile long paths bind on bytes instead of count: the
+        // index duplicates manifest strings into the envelope, so it
+        // must not blow the storage budget.
+        $long = [];
+        for ($i = 0; $i < 600; $i++) {
+            $long[] = ['path' => 'sources/'.str_repeat('d', 200).'/F'.$i.'.java', 'size' => 9, 'sha256' => hash('sha256', (string) $i)];
+        }
+        $capped = JadxAdapter::classes($long, '.java');
+        $this->assertLessThan(500, count($capped));
+        $this->assertNotEmpty($capped);
+        $bytes = 0;
+        foreach ($capped as $entry) {
+            $bytes += strlen($entry['name']) + strlen($entry['file']);
+        }
+        $this->assertLessThanOrEqual(32768, $bytes);
+    }
+
     public function test_registry_lists_all_backends(): void
     {
         $ids = array_map(fn ($a) => $a->id(), AdapterRegistry::all());

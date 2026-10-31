@@ -122,6 +122,10 @@
                 <section class="mt-6 rounded-xl border border-zinc-200 bg-white p-6">
                     <h2 class="font-semibold">Reconstruction ({{ count($evidence['reconstruction']['files']) }} files)@if($evidence['reconstruction']['truncated'] ?? false) · <span class="font-semibold text-amber-700">truncated by output budget</span>@endif</h2>
                     <p class="mt-1 text-xs text-zinc-500">Java/C#-like reconstruction — never original source. Inline content only for small files.</p>
+                    @if(($evidence['reconstruction']['truncated'] ?? false) && isset($evidence['reconstruction']['budget']) && is_array($evidence['reconstruction']['budget']))
+                        @php($reconBudget = $evidence['reconstruction']['budget'])
+                        <p class="mt-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">Partial output: {{ number_format((int) ($reconBudget['manifest_retained'] ?? 0)) }} of {{ number_format((int) ($reconBudget['files_seen'] ?? 0)) }} files indexed, inline content for {{ number_format((int) ($reconBudget['inline_full'] ?? 0) + (int) ($reconBudget['excerpt_count'] ?? 0)) }} ({{ number_format((int) ($reconBudget['excerpt_count'] ?? 0)) }} excerpts). The analysis itself succeeded — the output budget caps how much is stored, not what was examined. The file is valid; uploading it again will not show more.</p>
+                    @endif
                     <ul class="mt-2 max-h-96 space-y-1 overflow-y-auto font-mono text-xs">
                         @foreach(array_slice($evidence['reconstruction']['files'], 0, 200) as $file)
                             <li>{{ $file['path'] }} <span class="text-zinc-500">· {{ number_format($file['size']) }} bytes</span></li>
@@ -133,6 +137,10 @@
             @if(! empty($evidence['extraction']['files'] ?? []))
                 <section class="mt-6 rounded-xl border border-zinc-200 bg-white p-6">
                     <h2 class="font-semibold">Extracted filesystem ({{ count($evidence['extraction']['files']) }} files, profile {{ $evidence['extraction']['profile'] ?? '?' }})@if($evidence['extraction']['truncated'] ?? false) · <span class="font-semibold text-amber-700">truncated by output budget</span>@endif</h2>
+                    @if(($evidence['extraction']['truncated'] ?? false) && isset($evidence['extraction']['budget']) && is_array($evidence['extraction']['budget']))
+                        @php($extractBudget = $evidence['extraction']['budget'])
+                        <p class="mt-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">Partial output: {{ number_format((int) ($extractBudget['manifest_retained'] ?? 0)) }} of {{ number_format((int) ($extractBudget['files_seen'] ?? 0)) }} files indexed, inline content for {{ number_format((int) ($extractBudget['inline_full'] ?? 0) + (int) ($extractBudget['excerpt_count'] ?? 0)) }}. The analysis itself succeeded — the output budget caps how much is stored, not what was examined. The file is valid; uploading it again will not show more.</p>
+                    @endif
                     @if(! empty($evidence['extraction']['promoted'] ?? []))
                         <p class="mt-1 text-xs text-zinc-500">Promoted to child artifacts for CPU analysis:</p>
                         <ul class="mt-1 space-y-1 font-mono text-xs">
