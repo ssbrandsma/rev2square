@@ -728,8 +728,14 @@ inventory/backup above and BEFORE any recreation:
 [root]# docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin exec -T analysis-coordinator php artisan analysis:diagnostics
 # 5. Refresh snapshots from the coordinator and confirm runners ready.
 [root]# docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin exec -T analysis-coordinator php artisan binary:worker-capabilities --refresh
-# wait a minute, then re-run analysis:diagnostics: every installed
-# backend ready (jadx ready requires its DEX fixture pass). Poisoned
+# wait up to ~7 minutes (worst case: dead runners burn full probe
+# budgets totalling ~6 minutes; live runners answer in seconds
+# except first-start JADX qualification, which runs the full
+# bounded fixture check), then re-run analysis:diagnostics: every
+# installed backend ready (jadx ready requires its DEX fixture
+# pass). One refresh completes cold start;
+# repeated manual refreshes are not part of the protocol (hourly
+# scheduled refreshes keep snapshots fresh afterwards). Poisoned
 # snapshots captured pre-fix from spool-less containers heal on this
 # refresh automatically; no manual row cleanup.
 ```

@@ -253,7 +253,7 @@ class ArtifactUploadLimitsTest extends TestCase
         // HTTP uploads on the 2M/8M defaults.
         $dockerfile = file_get_contents($repo.'/docker/php/Dockerfile.prod');
         $this->assertStringContainsString(
-            'COPY docker/php/conf.d-uploads.ini /usr/local/etc/php/conf.d/uploads.ini',
+            'COPY --chmod=0644 docker/php/conf.d-uploads.ini /usr/local/etc/php/conf.d/uploads.ini',
             $dockerfile
         );
         $this->assertStringNotContainsString('cli/conf.d', $dockerfile);

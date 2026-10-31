@@ -17,6 +17,9 @@ class SpoolFake extends SpoolClient
     /** @var array<string, array<string, mixed>|null> tool => probe answer (null = silent) */
     public array $probes = [];
 
+    /** @var array<string, bool> tool => claimed override (silent-but-accepted probes) */
+    public array $claimed = [];
+
     /** @var array<string, array{evidence: array<string, mixed), tool_output?: ?string, stored_files?: array<string, array{path: string, size: int, tmp: string}}, fail?: string}> */
     public array $runs = [];
 
@@ -41,13 +44,18 @@ class SpoolFake extends SpoolClient
         @rmdir($this->resultsDir());
     }
 
-    public function probe(string $tool, int $timeoutSeconds = 30): ?array
+    public function probe(string $tool, int $timeoutSeconds = 30, ?bool &$claimed = null): ?array
     {
         if (! array_key_exists($tool, $this->probes)) {
+            $claimed = false;
+
             return null;
         }
 
-        return $this->probes[$tool];
+        $answer = $this->probes[$tool];
+        $claimed = $this->claimed[$tool] ?? ($answer !== null);
+
+        return $answer;
     }
 
     public function run(

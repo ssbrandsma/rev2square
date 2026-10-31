@@ -19,7 +19,13 @@ interface BinaryAdapter
     /** Null when the backend cannot report a version (usually absent). */
     public function version(): ?string;
 
-    /** @return array{available: bool, reason: string, setup_doc: ?string} */
+    /**
+     * Live probe (coordinator) or coordinator snapshot (everywhere
+     * else). An optional 'pending' => true marks a claimed-but-
+     * unanswered probe: still qualifying, never stored as broken.
+     *
+     * @return array{available: bool, reason: string, setup_doc: ?string, pending?: bool}
+     */
     public function probe(): array;
 
     /** Formats this adapter can open. @return list<string> */

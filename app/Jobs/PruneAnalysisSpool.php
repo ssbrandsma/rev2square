@@ -18,6 +18,8 @@ class PruneAnalysisSpool implements ShouldQueue
 
     public int $tries = 1;
 
+    public int $timeout = 120;
+
     public function __construct()
     {
         $this->connection = (string) config('artifacts.binary_analysis_connection', 'analysis-database');

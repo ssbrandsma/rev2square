@@ -59,10 +59,17 @@ class SpoolClient
      * Probe one runner: tool version, architecture, image identity.
      * Never throws — a failed probe is simply an unavailable backend.
      *
+     * $claimed reports whether the runner accepted this probe's job:
+     * true when an answer arrived or the runner claimed the job but
+     * is still working past the budget (caller maps that to a
+     * pending qualification, never to a broken backend), false when
+     * no runner picked the job up. Set on every return.
+     *
      * @return array{tool: string, tool_version: ?string, runner_arch: string, image_digest: string, ...}|null
      */
-    public function probe(string $tool, int $timeoutSeconds = 30): ?array
+    public function probe(string $tool, int $timeoutSeconds = 30, ?bool &$claimed = null): ?array
     {
+        $claimed = false;
         if (! is_dir($this->spoolDir) || ! is_dir($this->resultsDir)) {
             return null;
         }
@@ -83,6 +90,11 @@ class SpoolClient
                 usleep(250000);
             }
         } finally {
+            // Read BEFORE any cleanup: the claim dir exists exactly
+            // when the runner accepted this job (fresh UUID per probe,
+            // so no other probe's claim can collide).
+            $claimDir = $this->resultsDir.'/'.$jobId;
+            $claimed = $answer !== null || (is_dir($claimDir) && ! is_link($claimDir));
             if ($answer === null) {
                 // Timeout: the runner may still be working (slow
                 // first-probe qualification, loaded host). Remove only

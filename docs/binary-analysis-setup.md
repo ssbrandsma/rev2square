@@ -187,9 +187,9 @@ Analysis tuning (coordinator + job behavior):
 |---|---|---|
 | `BINARY_SPOOL_WALL_SECONDS` | 480 | Runner wall clock per run (s) |
 | `BINARY_SPOOL_GRACE_SECONDS` | 30 | Coordinator grace after the wall clock |
-| `BINARY_SPOOL_PROBE_SECONDS` | 10 | Capability-probe round-trip budget |
+| `BINARY_SPOOL_PROBE_SECONDS` | 45 | Capability-probe round-trip budget (shared version-ping default; objdump 75, jadx 150) |
 | `BINARY_ANALYSIS_TIMEOUT` | 120 | Job budget for in-process adapters (s) |
-| `ANALYSIS_QUEUE_RETRY_AFTER` | 900 | Queue visibility timeout (must exceed wall+grace) |
+| `ANALYSIS_QUEUE_RETRY_AFTER` | 900 | Queue visibility timeout (must exceed longest job: wall+grace+max probe+margin) |
 | `BINARY_WORKER_SNAPSHOT_TTL_HOURS` | 24 | Snapshot freshness for dispatch |
 | `BINARY_MAX_INSTRUCTIONS` | 20000 | Disassembly cap per run |
 | `BINARY_MAX_FUNCTIONS` | 2000 | Function cap per run |

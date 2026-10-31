@@ -3,6 +3,9 @@
 namespace Tests\Unit\Binary\Sandbox;
 
 use App\Services\Binary\Adapters\AnalysisFailedException;
+use App\Services\Binary\Adapters\GhidraAdapter;
+use App\Services\Binary\Adapters\JadxAdapter;
+use App\Services\Binary\Adapters\ObjdumpAdapter;
 use App\Services\Binary\Sandbox\SpoolClient;
 use Tests\TestCase;
 
@@ -127,6 +130,71 @@ class SpoolClientTest extends TestCase
 
         // The scheduled prune reaps the orphaned late answer by age.
         $this->assertSame(['spool' => 0, 'results' => 1], $this->client()->prune(-1));
+        $this->assertSame(['.', '..'], scandir($this->results));
+    }
+
+    public function test_probe_cold_start_qualifies_within_jadx_budget(): void
+    {
+        // Slow first-start qualification: the runner answers AFTER
+        // the old 30s budget. The coordinator budget must cover the
+        // complete bounded runner operation, so cold start completes
+        // in ONE probe — no repeated-manual-refresh protocol.
+        $this->startStub('delayed', ['STUB_DELAY' => '45', 'STUB_FIXTURE_OK' => '1']);
+        app()->instance(SpoolClient::class, $this->client());
+
+        $probe = (new JadxAdapter)->probe();
+
+        $this->assertTrue($probe['available']);
+        $this->assertStringContainsString('stub-1.0', $probe['reason']);
+    }
+
+    public function test_probe_ghidra_slow_version_qualifies_within_budget(): void
+    {
+        // Slow version ping (cold JVM, loaded host): the runner answers
+        // AFTER the old 10s budget. The coordinator deadline must cover
+        // the complete runner probe, not just the fast path.
+        $this->startStub('delayed', ['STUB_DELAY' => '20']);
+        app()->instance(SpoolClient::class, $this->client());
+
+        $probe = (new GhidraAdapter)->probe();
+
+        $this->assertTrue($probe['available']);
+        $this->assertStringContainsString('stub-1.0', $probe['reason']);
+    }
+
+    public function test_probe_objdump_slow_answer_qualifies_within_budget(): void
+    {
+        // Slow version + architecture discovery: answered after the old
+        // 10s budget, within the aligned deadline.
+        $this->startStub('delayed', ['STUB_DELAY' => '20']);
+        app()->instance(SpoolClient::class, $this->client());
+
+        $probe = (new ObjdumpAdapter)->probe();
+
+        $this->assertTrue($probe['available']);
+        $this->assertStringContainsString('stub-1.0', $probe['reason']);
+    }
+
+    public function test_probe_reports_claimed_when_runner_accepts_but_slow(): void
+    {
+        $this->startStub('delayed', ['STUB_DELAY' => '5']);
+
+        $claimed = null;
+        $this->assertNull($this->client()->probe('objdump', 1, $claimed));
+        $this->assertTrue($claimed);
+
+        // Submission removed, runner-owned claim untouched.
+        $this->assertSame(['.', '..'], scandir($this->spool));
+        $this->assertCount(1, array_diff(scandir($this->results), ['.', '..']));
+    }
+
+    public function test_probe_reports_unclaimed_when_runner_silent(): void
+    {
+        $claimed = null;
+        $this->assertNull($this->client()->probe('objdump', 1, $claimed));
+        $this->assertFalse($claimed);
+
+        $this->assertSame(['.', '..'], scandir($this->spool));
         $this->assertSame(['.', '..'], scandir($this->results));
     }
 

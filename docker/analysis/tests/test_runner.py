@@ -317,6 +317,66 @@ class RunnerCase(unittest.TestCase):
         self.assertEqual(self.claim("job2")["fixture"],
                          {"name": "dex-smoke.dex", "ok": True})
 
+    def counting_jadx_stub(self, fail_until):
+        """Jadx stub that counts decompile invocations in a counter file
+        beside the claims (derived from the -d outdir: results live
+        three levels up) and fails until the nth invocation."""
+        return self.stub(
+            "jadx",
+            'if [ "$1" = "--version" ]; then echo "jadx 1.5.1"; exit 0; fi\n'
+            'out=""; prev=""; for a in "$@"; do'
+            ' if [ "$prev" = "-d" ]; then out="$a"; fi; prev="$a"; done\n'
+            'resdir="$(dirname "$(dirname "$(dirname "$out")")")"\n'
+            'n=$(cat "$resdir/attempt-count" 2>/dev/null || echo 0)\n'
+            'n=$((n + 1)); echo "$n" > "$resdir/attempt-count"\n'
+            'if [ "$n" -lt %d ]; then exit 1; fi\n'
+            'mkdir -p "$out/com/rev2square"\n'
+            'echo "public class FixtureSmoketest {}"'
+            ' > "$out/com/rev2square/FixtureSmoketest.java"\n' % fail_until)
+
+    def attempt_count(self):
+        with open(os.path.join(self.results, "attempt-count")) as fh:
+            return fh.read().strip()
+
+    def test_jadx_probe_retries_then_qualifies(self):
+        fixdir = os.path.join(self.tmp, "fixtures")
+        os.makedirs(fixdir)
+        with open(os.path.join(fixdir, "dex-smoke.dex"), "wb") as fh:
+            fh.write(b"dex-fixture-bytes")
+        os.environ["RUNNER_FIXTURES"] = fixdir
+        os.environ["JADX_BIN"] = self.counting_jadx_stub(3)
+        self.submit("jadx", kind="probe")
+        self.run_once("jadx")
+        # Two transient failures, then success: bounded retries.
+        self.assertEqual(self.claim("job1")["fixture"],
+                         {"name": "dex-smoke.dex", "ok": True})
+        self.assertEqual(self.attempt_count(), "3")
+
+    def test_jadx_probe_permanent_failure_is_bounded(self):
+        fixdir = os.path.join(self.tmp, "fixtures")
+        os.makedirs(fixdir)
+        with open(os.path.join(fixdir, "dex-smoke.dex"), "wb") as fh:
+            fh.write(b"dex-fixture-bytes")
+        os.environ["RUNNER_FIXTURES"] = fixdir
+        os.environ["JADX_BIN"] = self.counting_jadx_stub(99)
+        self.submit("jadx", kind="probe")
+        self.run_once("jadx")
+        # A broken install fails closed after exactly FIXTURE_ATTEMPTS
+        # (no infinite retry), while the probe still answers version.
+        answer = self.claim("job1")
+        self.assertIn("1.5.1", answer["tool_version"])
+        self.assertEqual(answer["fixture"],
+                         {"name": "dex-smoke.dex", "ok": False})
+        self.assertEqual(self.attempt_count(), "3")
+
+    def test_probe_bounds_pinned(self):
+        # Coordinator budgets derive from these (protocol doc section
+        # 1; the PHP suite pins the arithmetic): changing any bound
+        # requires deliberately re-deriving the coordinator deadline.
+        self.assertEqual(runner.VERSION_TIMEOUT_SECONDS, 30)
+        self.assertEqual(runner.FIXTURE_WALL_SECONDS, 30)
+        self.assertEqual(runner.FIXTURE_ATTEMPTS, 3)
+
     def test_write_answer_never_raises(self):
         # A coordinator that timed out may clean its submission side
         # while the runner still works; losing that race must not

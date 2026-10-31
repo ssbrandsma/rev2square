@@ -6,6 +6,7 @@ use App\Services\Binary\Adapters\BinaryAdapter;
 use App\Services\Binary\Adapters\SandboxedBackend;
 use App\Services\Ops\DeployHints;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\Log;
 
 /**
  * Versioned capability snapshot captured ON the analysis worker.
@@ -59,9 +60,18 @@ class WorkerCapability extends Model
         return ['verified' => true, 'version' => $row->version, 'note' => 'Worker-verified '.($row->version ?? 'unversioned').' (captured '.$row->captured_at->toIso8601String().').'];
     }
 
-    public static function capture(BinaryAdapter $adapter, ?string $worker): self
+    public static function capture(BinaryAdapter $adapter, ?string $worker): ?self
     {
         $probe = $adapter->probe();
+        if (($probe['pending'] ?? false) === true) {
+            // Still qualifying: never store a pending backend as
+            // broken/unavailable. Keep the previous snapshot (if any);
+            // the runner caches its verdict, so the next refresh
+            // answers from cache.
+            Log::info('Worker capability still qualifying; previous snapshot kept.', ['adapter' => $adapter->id(), 'worker' => $worker]);
+
+            return null;
+        }
         $details = ['reason' => $probe['reason'] ?? null];
         if ($adapter instanceof SandboxedBackend) {
             // Sandboxed captures identify the isolated execution

@@ -27,6 +27,8 @@ abstract class SandboxedBackend implements BinaryAdapter
 
     private bool $probeDone = false;
 
+    private bool $probeClaimed = false;
+
     public function version(): ?string
     {
         if (! app()->runningInConsole() || ! $this->hasSpoolMounts()) {
@@ -56,8 +58,21 @@ abstract class SandboxedBackend implements BinaryAdapter
             return $this->snapshotProbe();
         }
 
-        $answer = $this->spoolProbe();
+        $answer = $this->spoolProbe($claimed);
         if ($answer === null) {
+            if ($claimed) {
+                // The runner accepted the probe but is still working
+                // past the budget (first-start qualification on a
+                // loaded host). Pending is NOT broken: callers must not
+                // store this as an unavailable backend.
+                return [
+                    'available' => false,
+                    'pending' => true,
+                    'reason' => 'The '.$this->tool().' runner accepted its capability probe but is still running its first-start qualification check ('.$this->probeBudgetSeconds().'s budget elapsed). This is not recorded as a broken backend. '.DeployHints::refreshSnapshotsHint(),
+                    'setup_doc' => 'docs/analysis-spool-deployment.md',
+                ];
+            }
+
             return [
                 'available' => false,
                 'reason' => 'The '.$this->tool().' runner did not answer its capability probe ('.$this->probeBudgetSeconds().'s budget). '.DeployHints::startRunnersHint(),
@@ -132,27 +147,35 @@ abstract class SandboxedBackend implements BinaryAdapter
     }
 
     /** @return array<string, mixed>|null */
-    protected function spoolProbe(): ?array
+    protected function spoolProbe(?bool &$claimed = null): ?array
     {
         if (! $this->probeDone) {
             $this->probeDone = true;
+            $wasClaimed = null;
             $this->probeMemo = $this->spool()->probe(
                 $this->tool(),
                 $this->probeBudgetSeconds(),
+                $wasClaimed,
             );
+            $this->probeClaimed = (bool) $wasClaimed;
         }
+        $claimed = $this->probeClaimed;
 
         return $this->probeMemo;
     }
 
     /**
-     * Coordinator-side probe budget in seconds. Steady-state probes
-     * are version pings (~seconds); adapters whose first probe pays a
-     * bounded qualification cost override with margin.
+     * Coordinator-side probe budget in seconds. The shared default is
+     * the version-ping deadline, exceeding the runner's version
+     * subprocess bound plus claim/collection margin; adapters whose
+     * probe runs more (objdump architecture discovery, jadx fixture)
+     * override with a budget exceeding their complete bounded runner
+     * operation. Public: queue jobs derive their timeouts from these
+     * budgets, so keep them honest.
      */
-    protected function probeBudgetSeconds(): int
+    public function probeBudgetSeconds(): int
     {
-        return (int) config('artifacts.binary_spool_probe_seconds', 10);
+        return (int) config('artifacts.binary_spool_probe_seconds', 45);
     }
 
     /** Coordinator identity check: the spool mounts, not the SAPI. */

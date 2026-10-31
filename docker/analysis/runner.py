@@ -81,6 +81,12 @@ PROBE_FIXTURES = {"jadx": "dex-smoke.dex"}
 FIXTURE_MARKER = "FixtureSmoketest"
 FIXTURE_WALL_SECONDS = 30
 FIXTURE_ATTEMPTS = 3
+# Bound for version/architecture ping subprocesses during a probe.
+# Coordinator budgets derive from these three constants (protocol
+# doc section 1); test_runner.py pins them and the PHP suite pins
+# the arithmetic, so changing any bound forces a deliberate
+# re-derivation of the coordinator deadline.
+VERSION_TIMEOUT_SECONDS = 30
 
 # Collection bounds (runner-side; PHP re-validates everything read).
 MAX_EVIDENCE_BYTES = 512 * 1024
@@ -415,7 +421,8 @@ class Runner:
         try:
             proc = subprocess.run(
                 [path] + flag, stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=30)
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                timeout=VERSION_TIMEOUT_SECONDS)
         except (OSError, subprocess.SubprocessError):
             return None
         if proc.returncode != 0:
@@ -431,7 +438,7 @@ class Runner:
             proc = subprocess.run(
                 [path, "-i"], stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                timeout=30)
+                timeout=VERSION_TIMEOUT_SECONDS)
         except (OSError, subprocess.SubprocessError):
             return []
         if proc.returncode != 0:

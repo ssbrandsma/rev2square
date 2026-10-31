@@ -94,12 +94,14 @@ services:
   # explicit allowlist (DB + framework basics) — no APP_KEY, no mail,
   # no AI credentials — and the bind-mounted repo .env is masked by a
   # minimal non-secret env file so secrets cannot leak in via file.
+  # --timeout=800 is the backstop for jobs without their own $timeout
+  # (same derivation as compose.virtualmin.yaml).
   analysis-coordinator:
     build:
       context: .
       dockerfile: docker/php/Dockerfile
     restart: unless-stopped
-    command: ["php", "artisan", "queue:work", "analysis-database", "--queue=analysis", "--sleep=3", "--tries=1", "--max-time=3600"]
+    command: ["php", "artisan", "queue:work", "analysis-database", "--queue=analysis", "--sleep=3", "--tries=1", "--timeout=800", "--max-time=3600"]
     volumes:
       - .:/var/www
       - ./docker/php/conf.d-uploads.ini:/usr/local/etc/php/conf.d/uploads.ini:ro

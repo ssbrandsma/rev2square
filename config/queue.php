@@ -47,9 +47,11 @@ return [
         // Dedicated connection for deterministic binary analysis. Only
         // the restricted analysis coordinator serves it (queue name
         // 'analysis'). retry_after must exceed the longest job timeout
-        // (spool wall budget + grace, default 480 + 60) so long
-        // isolated runs are never double-executed after a visibility
-        // timeout. See docs/analysis-spool-deployment.md.
+        // (spool wall + grace + max probe budget + margin: 480 + 30 +
+        // 150 + 60 = 720 by default) so long isolated runs are never
+        // double-executed after a visibility timeout. Re-derive this
+        // if BINARY_SPOOL_WALL_SECONDS is raised. See
+        // docs/analysis-spool-deployment.md.
         'analysis-database' => [
             'driver' => 'database',
             'connection' => env('DB_QUEUE_CONNECTION'),

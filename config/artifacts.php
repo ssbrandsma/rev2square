@@ -97,12 +97,15 @@ return [
     // job timeout (see config/queue.php analysis-database).
     'binary_spool_wall_seconds' => (int) env('BINARY_SPOOL_WALL_SECONDS', 480),
 
-    // Capability-probe round-trip budget per runner (seconds).
-    // Steady-state probes are version pings; JadxAdapter overrides to
-    // 30s to cover the runner's one-time fixture decompile (cached per
-    // boot afterwards). Runner fixture wall/attempts live in
+    // Capability-probe round-trip budget per runner (seconds). This
+    // shared default is the version-ping deadline: it exceeds the
+    // runner's version subprocess bound (VERSION_TIMEOUT_SECONDS)
+    // plus claim/collection margin. Adapters whose probe runs more
+    // override: ObjdumpAdapter (75s: version + architecture discovery),
+    // JadxAdapter (150s: version + fixture). Those bounds live in
     // docker/analysis/runner.py; keep them aligned (protocol §1).
-    'binary_spool_probe_seconds' => (int) env('BINARY_SPOOL_PROBE_SECONDS', 10),
+    // Queue-job timeouts derive from these budgets.
+    'binary_spool_probe_seconds' => (int) env('BINARY_SPOOL_PROBE_SECONDS', 45),
 
     // Grace after the runner wall clock during which the coordinator
     // keeps waiting for a terminal runner status before giving up.

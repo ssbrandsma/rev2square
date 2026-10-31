@@ -14,7 +14,7 @@ class DexSmokeFixtureTest extends TestCase
 {
     private function fixture(): string
     {
-        $path = __DIR__.'/../../../../docker/analysis/fixtures/dex-smoke.dex';
+        $path = __DIR__.'/../../../docker/analysis/fixtures/dex-smoke.dex';
         $this->assertFileExists($path);
 
         return (string) file_get_contents($path);

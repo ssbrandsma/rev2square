@@ -10,6 +10,8 @@ use App\Models\ProjectArtifact;
 use App\Models\User;
 use App\Services\Agent\BinaryTools;
 use App\Services\Agent\ToolContext;
+use App\Services\Binary\Adapters\AdapterRegistry;
+use App\Services\Binary\Adapters\SandboxedBackend;
 use App\Enums\GlobalRole;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
@@ -422,7 +424,9 @@ class AnalysisDeploymentTest extends TestCase
         );
 
         $deploy = (string) file_get_contents(base_path('docs/DEPLOYMENT_VIRTUALMIN_ARM64.md'));
-        $this->assertSame(2, substr_count($deploy, 'build &&'), 'upgrade + rollback gate up on build');
+        // Count command chains (line-continued `build && \`), not prose
+        // mentions of the same words.
+        $this->assertSame(2, substr_count($deploy, "build && \\\n"), 'upgrade + rollback gate up on build');
     }
 
     public function test_analysis_jobs_route_to_the_coordinator_queue(): void
@@ -448,9 +452,10 @@ class AnalysisDeploymentTest extends TestCase
         Queue::assertPushedOn('analysis', AnalyzeBinaryJob::class);
         Queue::assertPushed(AnalyzeBinaryJob::class, fn ($job) => $job->connection === 'analysis-database');
 
-        // Sandboxed runs get wall + grace; anything else keeps the
+        // Sandboxed runs get re-probe budget + wall + grace + margin
+        // (ghidra here: 45 + 480 + 30 + 60); anything else keeps the
         // short budget; unknown rows never crash dispatch.
-        $this->assertSame(540, AnalyzeBinaryJob::timeoutFor($analysis->id));
+        $this->assertSame(615, AnalyzeBinaryJob::timeoutFor($analysis->id));
         $this->assertSame((int) config('artifacts.binary_timeout_seconds', 120), AnalyzeBinaryJob::timeoutFor(999999));
     }
 
@@ -465,6 +470,33 @@ class AnalysisDeploymentTest extends TestCase
         // must ride the analysis connection/queue — never default.
         Queue::assertPushedOn('analysis', RefreshWorkerCapabilities::class);
         Queue::assertPushed(RefreshWorkerCapabilities::class, fn ($job) => $job->connection === 'analysis-database');
+    }
+
+    #[DataProvider('composeFiles')]
+    public function test_coordinator_worker_timeout_covers_job_timeouts(string $file): void
+    {
+        $block = $this->serviceBlock($this->compose($file), 'analysis-coordinator');
+        $this->assertSame(1, preg_match('/--timeout=(\d+)/', $block, $m), "coordinator sets --timeout ({$file})");
+        $workerTimeout = (int) $m[1];
+
+        // Every analysis-queue job sets its own $timeout; the worker
+        // flag is the backstop and must cover the largest of them.
+        $maxProbe = 0;
+        foreach (AdapterRegistry::all() as $adapter) {
+            if ($adapter instanceof SandboxedBackend) {
+                $maxProbe = max($maxProbe, $adapter->probeBudgetSeconds());
+            }
+        }
+        $analysisCeiling = (int) config('artifacts.binary_spool_wall_seconds', 480)
+            + (int) config('artifacts.binary_spool_grace_seconds', 30)
+            + $maxProbe + 60;
+        $this->assertGreaterThanOrEqual(RefreshWorkerCapabilities::timeoutFor(), $workerTimeout, "worker covers refresh ({$file})");
+        $this->assertGreaterThanOrEqual($analysisCeiling, $workerTimeout, "worker covers analysis ceiling ({$file})");
+
+        // ...and queue visibility must cover the worker, or long jobs
+        // double-execute after a visibility timeout.
+        $retryAfter = (int) config('queue.connections.analysis-database.retry_after', 0);
+        $this->assertGreaterThan($workerTimeout, $retryAfter);
     }
 
     public function test_images_precreate_spool_dirs_for_non_root(): void

@@ -98,8 +98,16 @@ Coordinator (compose, asserted by
 `AnalysisDeploymentTest::test_coordinator_environment_is_an_allowlist`):
 
 - Serves only queue `analysis` on connection `analysis-database`
-  (`retry_after` 900 > wall 480 + grace 30 — long runs never
-  double-execute after a visibility timeout).
+  with `--timeout=800`. Timeout chain (asserted by
+  `AnalysisDeploymentTest::test_coordinator_worker_timeout_covers_job_timeouts`):
+  `retry_after` 900 > worker 800 > analysis jobs (wall 480 + grace
+  30 + max probe 150 + margin 60 = 720) > refresh job (probe-budget
+  sum 75 + 45 + 150 + 45 + 45 + margin 60 = 420) — long runs never
+  double-execute after a
+  visibility timeout, and cold-start qualification completes in one
+  refresh with no repeated-manual-refresh protocol. Pending
+  qualifications are never stored as broken backends; the previous
+  snapshot is kept.
 - 16-key environment allowlist (DB + framework + spool paths +
   `DEPLOY_VARIANT` for deployment-specific owner hints); in
   dev the bind-mounted repo `.env` is additionally masked by

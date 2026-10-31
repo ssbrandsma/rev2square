@@ -316,9 +316,12 @@ class ArtifactStorageSharingTest extends TestCase
 
         // Private permissions: nothing world-writable in production
         // wiring (the dev entrypoint's bind-mount chmod is out of scope).
+        // Comments are stripped first: prose like "Never 777" must not
+        // trip the matcher.
         foreach (['docker/php/Dockerfile.prod', 'compose.prod.yaml', 'compose.virtualmin.yaml'] as $file) {
-            $this->assertStringNotContainsString('777', file_get_contents($repo.'/'.$file), $file);
-            $this->assertStringNotContainsString('a+rwx', file_get_contents($repo.'/'.$file), $file);
+            $code = (string) preg_replace('/#[^\n]*/', '', (string) file_get_contents($repo.'/'.$file));
+            $this->assertStringNotContainsString('777', $code, $file);
+            $this->assertStringNotContainsString('a+rwx', $code, $file);
         }
 
         // Uploads stay private: the public disk is never linked into the

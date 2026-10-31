@@ -44,13 +44,20 @@ from "runner up, decompile broken".
 Deadline separation: the fixture check is bounded (30s wall × 3
 attempts) and cached per runner boot — install health cannot change
 without a restart — so steady-state probes stay on the fast
-version-ping path for every tool. Coordinator budgets: 10s default,
-30s for jadx (covers the version ping plus the one-time fixture
-run with margin). A coordinator that times out removes only its
-spool submission, never the results claim: the runner owns the
-claim until answered, and late answers land harmlessly for the
-hourly age-based prune. Runners never let a lost answer kill the
-poll loop.
+version-ping path for every tool. Coordinator budgets: 45s shared
+default (covers the 30s runner version bound plus claim latency
+and collection margin), 75s for objdump (version + architecture
+discovery, one bound each), 150s for jadx (version + 30s × 3
+fixture attempts) — each exceeding its complete bounded runner
+probe operation, so cold start completes in ONE refresh with no
+repeated-manual-refresh protocol. A coordinator
+that times out removes only its spool submission, never the results
+claim: the runner owns the claim until answered, and late answers
+land harmlessly for the hourly age-based prune. Runners never let
+a lost answer kill the poll loop. A claimed-but-unanswered probe
+is a pending qualification, never stored as a broken backend; the
+previous snapshot is kept and the next refresh answers from the
+runner's cache.
 
 ## 2. Analysis job
 

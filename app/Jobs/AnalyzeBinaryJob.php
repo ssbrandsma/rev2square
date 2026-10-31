@@ -33,9 +33,10 @@ class AnalyzeBinaryJob implements ShouldQueue
     }
 
     /**
-     * Sandboxed runs get the spool wall budget plus grace; in-process
-     * adapters keep the short budget. Resolved at dispatch so the
-     * worker never has to guess.
+     * Sandboxed runs get the execution-time re-probe budget plus the
+     * spool wall budget plus coordinator grace, with margin;
+     * in-process adapters keep the short budget. Resolved at dispatch
+     * so the worker never has to guess.
      */
     public static function timeoutFor(int $analysisId): int
     {
@@ -47,7 +48,10 @@ class AnalyzeBinaryJob implements ShouldQueue
             }
             $adapter = AdapterRegistry::get((string) $analysis->adapter);
             if ($adapter instanceof SandboxedBackend) {
-                return (int) config('artifacts.binary_spool_wall_seconds', 480) + 60;
+                return (int) config('artifacts.binary_spool_wall_seconds', 480)
+                    + (int) config('artifacts.binary_spool_grace_seconds', 30)
+                    + $adapter->probeBudgetSeconds()
+                    + 60;
             }
         } catch (\Throwable) {
             // Dispatch-time lookup failed; the job itself re-validates.

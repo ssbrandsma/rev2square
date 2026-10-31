@@ -56,6 +56,18 @@ final class ObjdumpAdapter extends SandboxedBackend
         return 'objdump';
     }
 
+    public function probeBudgetSeconds(): int
+    {
+        // Covers the COMPLETE bounded runner probe with margin: claim
+        // latency (~1s runner poll) + version ping + architecture
+        // discovery (`objdump -i`, same runner.py
+        // VERSION_TIMEOUT_SECONDS bound each) + collection. A healthy
+        // runner answers in seconds; the bound exists for the worst
+        // case. Keep aligned with docker/analysis/runner.py
+        // (protocol doc section 1); ProbeRoutingTest pins the math.
+        return 75;
+    }
+
     public function formats(): array
     {
         return [

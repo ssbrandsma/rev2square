@@ -6,6 +6,7 @@ use App\Models\BinaryAnalysis;
 use App\Models\Project;
 use App\Models\ProjectArtifact;
 use App\Models\User;
+use App\Jobs\AnalyzeBinaryJob;
 use App\Services\Artifacts\ArtifactExtractor;
 use App\Services\Binary\Adapters\AnalysisFailedException;
 use App\Services\Binary\Adapters\ExtractAdapter;
@@ -371,5 +372,16 @@ class SpooledAdaptersTest extends TestCase
         $this->assertSame('unsquashfs-extract', $evidence['extraction']['profile']);
         $this->assertContains('extraction_fallback_used', $evidence['warnings']);
         $this->assertContains('no_files_extracted', $evidence['warnings']);
+    }
+
+    public function test_analysis_job_timeout_covers_reprobe_wall_grace_and_margin(): void
+    {
+        // Execution-time re-probe (full adapter budget on a dead
+        // runner) plus the analysis wall plus coordinator grace, with
+        // scheduling margin. JADX: 150 + 480 + 30 + 60.
+        [$artifact, $owner] = $this->seedArtifact(BinaryFixtures::codeX86(), 'code.bin', ProjectArtifact::FORMAT_RAW);
+        $analysis = $this->analysis($artifact, $owner, 'jadx', 'dalvik', []);
+
+        $this->assertSame(720, AnalyzeBinaryJob::timeoutFor($analysis->id));
     }
 }

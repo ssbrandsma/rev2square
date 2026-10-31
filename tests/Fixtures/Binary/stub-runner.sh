@@ -59,8 +59,12 @@ case "$MODE" in
         ;;
     delayed)
         sleep "${STUB_DELAY:-3}"
-        printf '{"schema":1,"tool":"%s","tool_version":"stub-1.0","runner_arch":"%s","image_digest":"stub","tool_image":"stub"}' \
-            "$TOOL" "$(uname -m)" > "$RESULTS/$JOBID/status.json"
+        FIXTURE_JSON=""
+        if [ "${STUB_FIXTURE_OK:-0}" = "1" ]; then
+            FIXTURE_JSON=',"fixture":{"name":"dex-smoke.dex","ok":true}'
+        fi
+        printf '{"schema":1,"tool":"%s","tool_version":"stub-1.0","runner_arch":"%s","image_digest":"stub","tool_image":"stub"%s}' \
+            "$TOOL" "$(uname -m)" "$FIXTURE_JSON" > "$RESULTS/$JOBID/status.json"
         ;;
     slow)
         printf '{"schema":1,"state":"running"}' > "$RESULTS/$JOBID/status.json"

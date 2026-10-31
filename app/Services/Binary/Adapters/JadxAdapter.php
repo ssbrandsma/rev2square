@@ -29,12 +29,19 @@ final class JadxAdapter extends SandboxedBackend
         return 'jadx';
     }
 
-    protected function probeBudgetSeconds(): int
+    public function probeBudgetSeconds(): int
     {
-        // Covers the version ping plus the runner's one-time fixture
-        // decompile (cached per boot afterwards) with margin; the 10s
-        // shared default would flap the first probe on slow hosts.
-        return 30;
+        // Covers the COMPLETE bounded runner probe operation with
+        // margin: claim latency (~1s runner poll) + version ping
+        // (runner.py VERSION_TIMEOUT_SECONDS) + fixture
+        // (FIXTURE_WALL_SECONDS x FIXTURE_ATTEMPTS, cached per boot
+        // afterwards) + tree collection and status write. Attempts
+        // repeat only on failure, so a healthy runner answers in
+        // seconds; the bound exists for the worst case. Cold start
+        // completes in ONE refresh — no repeated-manual-refresh
+        // protocol. Keep aligned with docker/analysis/runner.py
+        // (protocol doc section 1); ProbeRoutingTest pins the math.
+        return 150;
     }
 
     protected function qualifyProbeAnswer(array $answer): ?array
