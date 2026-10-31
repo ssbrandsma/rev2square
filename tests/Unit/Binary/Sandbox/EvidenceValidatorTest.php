@@ -69,6 +69,83 @@ class EvidenceValidatorTest extends TestCase
         }
     }
 
+    public function test_reconstruction_accepts_html_in_inline_source(): void
+    {
+        // Real-world Java legitimately contains active-markup
+        // strings (WebView bridges, SVG parsers, HTML assets):
+        // bulk source content must stay inspectable, never fail
+        // the run. Mirrors the production APK run that died on
+        // "invalid html evidence".
+        $java = 'class Bridge { String a = "<svg onload=alert(1)>";'
+            .' String b = "javascript:Android.postMessage(\"hi\")";'
+            .' String c = "<script src=\"x.js\"></script><iframe></iframe>";'
+            .' String d = "<object data=\"x\"></object><embed src=\"y\">"; }';
+        $out = EvidenceValidator::validate('jadx', $this->envelope([
+            'adapter' => 'jadx',
+            'reconstruction' => [
+                'files' => [['path' => 'sources/com/Bridge.java', 'size' => strlen($java), 'sha256' => hash('sha256', $java)]],
+                'inline' => [
+                    'sources/com/Bridge.java' => $java,
+                    'resources/assets/page.html' => '<html><head><script src="a.js"></script></head><body><svg onload=x()></svg></body></html>',
+                ],
+                'classes' => [['name' => 'com.Bridge', 'file' => 'sources/com/Bridge.java']],
+                'truncated' => false,
+            ],
+        ]));
+
+        $this->assertSame($java, $out['reconstruction']['inline']['sources/com/Bridge.java']);
+        $this->assertStringContainsString('<svg onload=x()>', $out['reconstruction']['inline']['resources/assets/page.html']);
+    }
+
+    public function test_decompilation_c_and_extraction_inline_accept_html(): void
+    {
+        // C pseudocode string literals and extracted text get the
+        // same content exemption as decompiled sources.
+        $out = EvidenceValidator::validate('ghidra', $this->envelope([
+            'adapter' => 'ghidra',
+            'decompilation' => ['functions' => [
+                ['name' => 'render', 'address' => 0x1000, 'c' => 'char *h = "<svg></svg>"; // javascript:void(0)'],
+            ], 'truncated' => false],
+            'extraction' => [
+                'profile' => '7zz-extract',
+                'files' => [['path' => 'doc.html', 'size' => 40, 'sha256' => hash('sha256', 'x')]],
+                'inline' => ['doc.html' => '<html><object data="x"></object></html>'],
+                'truncated' => false,
+                'promoted' => [],
+            ],
+        ]));
+
+        $this->assertStringContainsString('<svg>', $out['decompilation']['functions'][0]['c']);
+        $this->assertStringContainsString('<object', $out['extraction']['inline']['doc.html']);
+    }
+
+    public function test_html_error_document_in_metadata_rejected(): void
+    {
+        // The narrowed scan still guards every structural/metadata
+        // field: a full HTML error document there fails the run.
+        $doc = '<html><head><script>alert(1)</script></head><body>Gateway Error</body></html>';
+        foreach ([
+            'method note' => ['method_note' => $doc],
+            'function name' => ['functions' => [[
+                'id' => 'f1', 'address' => 0x1000, 'file_offset' => null,
+                'name' => $doc, 'source' => 'symbol', 'size' => null, 'size_tentative' => false,
+            ]]],
+            'warning' => ['warnings' => [$doc]],
+            'segment name' => ['segments' => [[
+                'name' => $doc, 'kind' => 'code', 'base_address' => 0,
+                'length' => 1, 'file_offset' => null,
+            ]]],
+        ] as $label => $override) {
+            try {
+                EvidenceValidator::validate('php-native', $this->envelope($override));
+                $this->fail($label.' accepted');
+            } catch (AnalysisFailedException $e) {
+                $this->assertSame('evidence_rejected', $e->errorCode, $label);
+                $this->assertSame('The backend returned invalid html evidence. Its output was discarded.', $e->getMessage(), $label);
+            }
+        }
+    }
+
     public function test_rejects_bad_addresses_and_html(): void
     {
         try {

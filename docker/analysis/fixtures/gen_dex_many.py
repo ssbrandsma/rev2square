@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """Build a many-class STRUCTURALLY VALID Dalvik file for evidence testing.
 
-Unlike dex-smoke.dex (one empty class), this emits N classes each with
-one tiny static method, so real jadx runs produce megabytes of
-multi-file output: the shape that overflowed the runner evidence cap
-on the production APK (4327 classes). A subset of class names uses
-non-ASCII identifiers to exercise UTF-8 + JSON escaping growth.
+Unlike dex-smoke.dex (one empty class), this emits N classes each
+with one tiny method returning a string constant, so real jadx runs
+produce megabytes of multi-file output: the shape that overflowed
+the runner evidence cap on the production APK (4327 classes). A
+subset of class names uses non-ASCII identifiers to exercise UTF-8
++ JSON escaping growth, and the string constants rotate HTML /
+active-content markers so validator content rules see realistic
+real-tool output.
 
 Layout (all little-endian): header, string_ids, type_ids, one shared
 ()V proto, N method_ids, N class_defs, N class_data items, N code
@@ -22,8 +25,22 @@ import sys
 import zlib
 
 OBJECT_DESC = "Ljava/lang/Object;"
-VOID_DESC = "V"
-METHOD_NAME = "ping"
+STRING_DESC = "Ljava/lang/String;"
+SHORTY_L = "L"
+METHOD_NAME = "getPayload"
+
+# Payloads rotate HTML/active-content markers through string
+# constants so real jadx output exercises validator content rules
+# (markers must survive as inspectable source, never as markup).
+PAYLOADS = [
+    '<svg onload=alert(1)>',
+    'javascript:Android.postMessage("hi")',
+    '<script src="https://evil.example/x.js"></script>',
+    '<iframe src="https://evil.example/"></iframe>',
+    '<object data="x.swf"></object>',
+    '<embed src="x.mp3">',
+    'plain text control 12345',
+]
 
 T_HEADER, T_STRING_ID, T_TYPE_ID = 0x0000, 0x0001, 0x0002
 T_PROTO_ID, T_METHOD_ID, T_CLASS_DEF = 0x0003, 0x0005, 0x0006
@@ -60,14 +77,25 @@ def class_desc(i):
 
 def build(nclasses):
     descs = [class_desc(i) for i in range(nclasses)]
-    strings = [OBJECT_DESC, VOID_DESC, METHOD_NAME] + descs
-    # type_ids: 0=Object, 1=void, 2..=classes.
+    payloads = ["%s // twin %d" % (PAYLOADS[i % len(PAYLOADS)], i)
+                for i in range(nclasses)]
+    # String table: 0=Object, 1=String, 2=shorty, 3=method name,
+    # then class descriptors, then payloads.
+    strings = [OBJECT_DESC, STRING_DESC, SHORTY_L, METHOD_NAME]
+    strings += descs + payloads
+    # type_ids: 0=Object, 1=String, 2+i=class i.
     sitems = [string_data_item(s) for s in strings]
-    # One shared ()V proto; N method_ids (class_idx varies).
+    # One shared ()String proto; N method_ids (class_idx varies);
     # class_data per class: 0 static, 0 instance, 1 direct, 0 virtual.
-    code_item = struct.pack("<4HI", 0, 0, 0, 0, 0) + struct.pack("<I", 1)
-    code_item += struct.pack("<H", 0x000E)  # return-void (op in low byte)
-    assert len(code_item) == 18
+    # Code per class: const-string v0, payload; return-object v0.
+
+    def code_item_for(payload_idx):
+        item = struct.pack("<4HI", 1, 0, 0, 0, 0) + struct.pack("<I", 3)
+        item += struct.pack("<H", 0x001A)  # const-string v0 (21c)
+        item += struct.pack("<H", payload_idx)
+        item += struct.pack("<H", 0x0011)  # return-object v0 (11x)
+        assert len(item) == 22
+        return item
 
     off_string_ids = 0x70
     off_type_ids = off_string_ids + len(strings) * 4
@@ -92,8 +120,8 @@ def build(nclasses):
                            + uleb128(0) + uleb128(method_idx_diffs[i])
                            + uleb128(0x9) + uleb128(guesses[i]),
                            "class_data"))
-        for _ in range(nclasses):
-            chunks.append((4, code_item, "code"))
+        for i in range(nclasses):
+            chunks.append((4, code_item_for(4 + nclasses + i), "code"))
         for item in sitems:
             chunks.append((1, item, "string_data"))
         off = off_data
@@ -128,15 +156,15 @@ def build(nclasses):
     assert len(string_offs) == len(strings)
     for o in string_offs:
         blob += struct.pack("<I", o)
-    # type_ids -> string_idx: 0=Object, 1=void, 2+i=class i.
+    # type_ids -> string_idx: 0=Object, 1=String, 2+i=class i.
     blob += struct.pack("<2I", 0, 1)
     for i in range(nclasses):
-        blob += struct.pack("<I", 3 + i)
-    # proto: shorty_idx(V=1), return(V=1), params_off=0.
-    blob += struct.pack("<III", 1, 1, 0)
-    # method_ids: (class_idx, proto_idx, name_idx=2).
+        blob += struct.pack("<I", 4 + i)
+    # proto: shorty_idx(L=2), return(String=1), params_off=0.
+    blob += struct.pack("<III", 2, 1, 0)
+    # method_ids: (class_idx, proto_idx, name_idx=3).
     for i in range(nclasses):
-        blob += struct.pack("<HHI", i + 2, 0, 2)
+        blob += struct.pack("<HHI", i + 2, 0, 3)
     # class_defs: interfaces_off=0, source=NO_INDEX.
     for i in range(nclasses):
         blob += struct.pack("<8I", i + 2, 0x1, 0, 0, 0xFFFFFFFF, 0,

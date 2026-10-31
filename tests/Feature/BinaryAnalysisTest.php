@@ -721,6 +721,39 @@ class BinaryAnalysisTest extends TestCase
         $page->assertSee('uploading it again will not show more');
     }
 
+    public function test_analysis_show_escapes_evidence_markup(): void
+    {
+        // Markup that passes validation (no active-marker match)
+        // must still render inertly: the view escapes everything.
+        Storage::fake('artifacts');
+        [$project, $owner] = $this->seedProject();
+        $prg = $this->storeBytes($project, $owner, BinaryFixtures::prgBasic(), 'game.prg');
+        $analysis = BinaryAnalysis::create([
+            'project_artifact_id' => $prg->id,
+            'requested_by' => $owner->id,
+            'adapter' => 'jadx',
+            'adapter_version' => '1.5.6',
+            'target' => 'dalvik',
+            'config' => ['target' => 'dalvik'],
+            'status' => BinaryAnalysis::STATUS_PARTIAL,
+            'dedupe_key' => str()->random(64),
+            'evidence_key' => str()->random(40),
+        ]);
+        $evidence = $this->partialReconstructionEvidence();
+        $evidence['functions'] = [[
+            'id' => 'f1', 'address' => 0x1000, 'file_offset' => null,
+            'name' => '"><img src=x onerror=alert(1)>', 'source' => 'symbol',
+            'size' => null, 'size_tentative' => false,
+        ]];
+        Storage::disk('artifacts')->put($analysis->evidencePath(), json_encode($evidence));
+
+        $page = $this->actingAs($owner)->get(route('projects.artifacts.analyses.show', [$project, $prg, $analysis]));
+
+        $page->assertOk();
+        $page->assertSee('&lt;img', false);
+        $page->assertDontSee('<img src=x', false);
+    }
+
     public function test_recon_tool_reports_partial_coverage(): void
     {
         Storage::fake('artifacts');

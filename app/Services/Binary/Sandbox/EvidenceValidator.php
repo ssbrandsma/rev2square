@@ -11,9 +11,14 @@ use App\Services\Binary\Adapters\AnalysisFailedException;
  * 'binary-analysis/1' envelope; this validator re-checks it before
  * anything is stored or rendered: versioned schema, strict types,
  * count/byte bounds from configuration, address sanity, safe paths,
- * no raw HTML, bounded redacted diagnostics. Unknown top-level keys
- * are stripped (forward-compatible runners stay ingestible) while
- * oversized or hostile content fails the whole run closed.
+ * no active markup outside bulk source content, bounded redacted
+ * diagnostics. Bulk source text (inline decompiled sources,
+ * extracted text, C pseudocode) may legitimately contain HTML-like
+ * strings and stays inspectable; it is exempt from the markup scan
+ * and safe because every render site escapes it. Unknown
+ * top-level keys are stripped (forward-compatible runners stay
+ * ingestible) while oversized or hostile content fails the whole
+ * run closed.
  */
 final class EvidenceValidator
 {
@@ -84,7 +89,24 @@ final class EvidenceValidator
         $out['artifact'] = self::artifact($out['artifact'] ?? []);
         $out['method_note'] = self::cleanText((string) ($out['method_note'] ?? ''), 500);
 
-        self::rejectHtml($out);
+        // Active-markup scan over structure and metadata only. Bulk
+        // source content (decompiled sources, extracted text, C
+        // pseudocode) legitimately contains HTML-like strings
+        // (WebView bridges, SVG parsers, HTML assets, string
+        // literals) and must stay inspectable; it is exempt here
+        // and safe because every render site escapes it (Blade
+        // {{ }} only, no unescaped sinks; tools return JSON).
+        $scan = $out;
+        unset($scan['reconstruction']['inline'], $scan['extraction']['inline']);
+        if (isset($scan['decompilation']['functions']) && is_array($scan['decompilation']['functions'])) {
+            foreach ($scan['decompilation']['functions'] as &$fn) {
+                if (is_array($fn)) {
+                    unset($fn['c']);
+                }
+            }
+            unset($fn);
+        }
+        self::rejectHtml($scan);
 
         return $out;
     }

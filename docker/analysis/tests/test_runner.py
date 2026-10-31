@@ -809,6 +809,31 @@ class RunnerCase(unittest.TestCase):
         self.assertLess(len(budget["excerpt_paths"]), 60)
         self._reconciles(budget, manifest, inline)
 
+    def test_tree_evidence_preserves_markup_in_content(self):
+        # The runner never strips or mangles content: HTML-like
+        # strings in Java sources and HTML assets pass through
+        # byte-exact (content rules live in the coordinator, which
+        # exempts bulk source text while escaping every render).
+        outdir = os.path.join(self.tmp, "markup")
+        os.makedirs(os.path.join(outdir, "sources", "com"))
+        os.makedirs(os.path.join(outdir, "resources", "assets"))
+        java = ('class B { String a = "<svg onload=alert(1)>";\n'
+                ' String b = "javascript:x"; }\n')
+        html = ("<html><head><script></script></head>"
+                "<body><iframe></iframe></body></html>")
+        with open(os.path.join(outdir, "sources", "com", "B.java"),
+                  "w") as fh:
+            fh.write(java)
+        with open(os.path.join(outdir, "resources", "assets",
+                               "page.html"), "w") as fh:
+            fh.write(html)
+        r = runner.Runner("jadx", self.spool, self.results)
+        manifest, inline, truncated, budget = r._collect_tree(outdir)
+        self.assertFalse(truncated)
+        self.assertEqual(inline["sources/com/B.java"], java)
+        self.assertEqual(inline["resources/assets/page.html"], html)
+        self._reconciles(budget, manifest, inline)
+
     def test_tree_evidence_small_tree_complete(self):
         # Small outputs keep the old complete behavior: everything
         # retained, truncated false, counts exact.
@@ -1008,6 +1033,13 @@ class RealJadxCase(unittest.TestCase):
         self.assertTrue(any("Widget0.java" in m["path"]
                             for m in manifest))
         self.assertTrue(len(inline) > 0)
+        # Real-tool HTML markers survive collection byte-exact (the
+        # coordinator exempts bulk source content from markup
+        # rejection while escaping every render).
+        marked = [t for t in inline.values()
+                  if "<svg" in t or "javascript:" in t
+                  or "<script" in t]
+        self.assertTrue(len(marked) > 100)
         self.assertEqual(
             budget["files_seen"],
             budget["manifest_retained"] + budget["manifest_omitted"])
