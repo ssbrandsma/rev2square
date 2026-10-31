@@ -87,6 +87,10 @@ and `tests/Unit/Binary/Sandbox/SpoolClientTest.php`):
   `machines.txt`, ints range-checked, names confined to basenames).
 - Tool runs in its own session; wall-clock timeout and cancel kill
   the whole process group (SIGTERM, then SIGKILL) and reap.
+- JVM-writable trees stay per job: Ghidra home/tmp/cache via
+  `GHIDRA_HEADLESS_JAVA_OPTIONS`, JADX cache/tmp/config via
+  `JADX_CACHE_DIR` / `JADX_TMP_DIR` / `JADX_CONFIG_DIR` — all under
+  the job workdir, removed with it, nothing in a shared home.
 - Output caps: 8 MiB tool text, 512 KiB evidence, 2000 manifest
   files, depth 12, 256 KiB inline total, 5 × 8 MiB stored files.
 - Symlinks never followed or recorded; manifest paths re-checked

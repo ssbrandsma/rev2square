@@ -92,10 +92,15 @@ RUN /opt/jadx/bin/jadx --version > /provenance/jadx-version.txt 2>&1 \
 # decompile with the known class marker, or this image is broken.
 # Fixture sha256: 597807fe5c8d9d999ba7ca4292a8707618281463638b7449384d9907e95f8b80
 # (regenerate deterministically via fixtures/gen_dex_smoke.py).
+# Runs the REAL runner argv + per-job env (runner.build_argv /
+# runner.tool_env), never a hand-written jadx copy: jadx 1.5.6 has
+# no --no-src-save-cache flag (verified via --help; passing it
+# aborts with "Unknown option"), and its cache/config/tmp trees
+# are scoped per job through JADX_*_DIR.
 RUN echo "597807fe5c8d9d999ba7ca4292a8707618281463638b7449384d9907e95f8b80  /opt/runner/fixtures/dex-smoke.dex" | sha256sum -c - \
     && mkdir -p /tmp/fxqual \
-    && /opt/jadx/bin/jadx --no-src-save-cache -d /tmp/fxqual/out /opt/runner/fixtures/dex-smoke.dex \
-    && grep -rq FixtureSmoketest /tmp/fxqual/out \
+    && python3 -c "import subprocess,sys; sys.path.insert(0,'/opt/runner'); import runner; argv=runner.build_argv('jadx','apk',{'threads':1},'/tmp/fxqual','/opt/runner/fixtures/dex-smoke.dex'); print(argv); subprocess.run(argv,check=True,timeout=300,env=runner.tool_env('jadx','/tmp/fxqual'))" \
+    && grep -rq FixtureSmoketest /tmp/fxqual/jadx-out \
     && rm -rf /tmp/fxqual
 
 # Spool/results mount points (named volumes shared with the coordinator).
@@ -107,19 +112,24 @@ RUN mkdir -p /spool /results && chown www-data:www-data /spool /results
 USER www-data
 
 # Runtime self-checks execute as the non-root runtime user: stdlib
-# coverage for every runner.py import, JADX executability, and the
-# dry-run argv path. HOME points at tmpfs (as in production).
-RUN export HOME=/tmp \
-    && python3 -c "import argparse, fcntl, hashlib, json, os, platform, re, select, shutil, signal, subprocess, sys, time" \
+# coverage for every runner.py import, JADX executability, the
+# dry-run argv path, and the fixture decompile through the REAL
+# runner argv + per-job env. No HOME masking: jadx ignores $HOME
+# (it resolves the passwd-derived user.home), so the check runs
+# with the image's real home configuration exactly like the
+# Ghidra image does; JADX_*_DIR scoping carries the isolation.
+RUN python3 -c "import argparse, fcntl, hashlib, json, os, platform, re, select, shutil, signal, subprocess, sys, time" \
     && /opt/jadx/bin/jadx --version \
     && mkdir -p /tmp/dry \
     && python3 /opt/runner/runner.py --dry-run --tool jadx \
         --profile apk --params-json '{"threads":2}' --workdir /tmp/dry \
-        | grep -q -- '--no-src-save-cache' \
+        > /tmp/dry/argv.json \
+    && grep -q -- '-j' /tmp/dry/argv.json \
+    && ! grep -q 'no-src-save-cache' /tmp/dry/argv.json \
     && mkdir -p /tmp/fxdry \
-    && /opt/jadx/bin/jadx --no-src-save-cache -d /tmp/fxdry/out /opt/runner/fixtures/dex-smoke.dex \
-    && grep -rq FixtureSmoketest /tmp/fxdry/out \
-    && rm -rf /tmp/fxdry
+    && python3 -c "import subprocess,sys; sys.path.insert(0,'/opt/runner'); import runner; argv=runner.build_argv('jadx','apk',{'threads':1},'/tmp/fxdry','/opt/runner/fixtures/dex-smoke.dex'); print(argv); subprocess.run(argv,check=True,timeout=300,env=runner.tool_env('jadx','/tmp/fxdry'))" \
+    && grep -rq FixtureSmoketest /tmp/fxdry/jadx-out \
+    && rm -rf /tmp/fxdry /tmp/dry
 
 CMD ["python3", "/opt/runner/runner.py", "--tool", "jadx", \
      "--spool", "/spool", "--results", "/results"]

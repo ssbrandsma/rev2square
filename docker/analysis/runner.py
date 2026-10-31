@@ -222,7 +222,14 @@ def tool_env(tool, workdir):
     temp dir, and the application cache dir); all three live under
     the job workdir so cleanup removes them. The JDK probe itself
     (LaunchSupport -save) runs without these flags and uses the
-    image's shared home, which stays writable tmpfs."""
+    image's shared home, which stays writable tmpfs.
+    Jadx likewise scopes its three writable trees per job through
+    the documented JADX_CACHE_DIR / JADX_TMP_DIR / JADX_CONFIG_DIR
+    variables (verified against jadx 1.5.6 --help and --print-files):
+    without them jadx resolves to the passwd-derived user.home and
+    dies during startup on the read-only production root, and with
+    them no job file can leak into a shared home. The --version
+    probe needs no scoping: it answers before config init."""
     env = {"PATH": "/usr/bin:/bin:/opt/jadx/bin:/opt/ilspy",
            "LC_ALL": "C",
            "JAVA_HOME": os.environ.get("JAVA_HOME", ""),
@@ -238,6 +245,14 @@ def tool_env(tool, workdir):
         env["GHIDRA_HEADLESS_JAVA_OPTIONS"] = (
             "-Duser.home=%s -Djava.io.tmpdir=%s -Dapplication.cachedir=%s"
             % (sub["ghidra-home"], sub["ghidra-tmp"], sub["ghidra-cache"]))
+    if tool == "jadx":
+        sub = {name: os.path.join(workdir, name)
+               for name in ("jadx-cache", "jadx-tmp", "jadx-config")}
+        for d in sub.values():
+            os.makedirs(d, exist_ok=True)
+        env["JADX_CACHE_DIR"] = sub["jadx-cache"]
+        env["JADX_TMP_DIR"] = sub["jadx-tmp"]
+        env["JADX_CONFIG_DIR"] = sub["jadx-config"]
     return env
 
 
@@ -248,8 +263,12 @@ def _jadx_argv(profile, params, workdir, input_path):
     threads = bounded_int(params.get("threads", 2),
                           JADX_THREADS_MIN, JADX_THREADS_MAX, "threads")
     outdir = os.path.join(workdir, "jadx-out")
-    return [binary, "--no-src-save-cache", "-j", str(threads),
-            "-d", outdir, input_path]
+    # Verified against jadx 1.5.6 --help: -j/--threads-count and
+    # -d/--output-dir exist; there is NO --no-src-save-cache option
+    # (passing it aborts the run with "Unknown option"). Cache /
+    # config / tmp isolation is via JADX_*_DIR in tool_env, not a
+    # CLI flag.
+    return [binary, "-j", str(threads), "-d", outdir, input_path]
 
 
 def _ilspy_argv(profile, params, workdir, input_path):

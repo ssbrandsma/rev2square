@@ -85,7 +85,7 @@ honors `<job>/cancel` (written by the coordinator) between polls.
 | objdump | `binary` | `machine` (baked allowlist), `vma` (u64) | `objdump -D -M intel -w -b binary -m M --adjust-vma=V <in>` |
 | objdump | `ihex` / `srec` | `machine` (baked allowlist) | `objdump -D -M intel -w -b FMT -m M <in>` |
 | ghidra | `headless` | `language` (verified set), `base` (u64), `entry` (u64?) | `analyzeHeadless <proj> -import <in> -overwrite -processor L -cspec default -postScript ExportEvidence.java <out> <base> <entry\|none> -deleteProject` |
-| jadx | `apk` | `threads` (1–4) | `jadx --no-src-save-cache -j T -d <out> <in>` |
+| jadx | `apk` | `threads` (1–4) | `jadx -j T -d <out> <in>` (+ per-job `JADX_CACHE_DIR` / `JADX_TMP_DIR` / `JADX_CONFIG_DIR` under the workdir) |
 | ilspy | `assembly` | — | `ilspycmd -p -o <out> <in>` |
 | extract | `7zz-list` | — | `7zz l -slt -ba <in>` |
 | extract | `7zz-extract` | — | `7zz x -y -o<out> <in>` |
@@ -98,6 +98,13 @@ Verified Ghidra languages (runner allowlist = adapter table):
 `ARM:LE:32:v8T` (Thumb-default), `AARCH64:LE:64:v8A`.
 Documented-but-unverified ids are refused here even though the UI
 may list them as candidates.
+
+Jadx 1.5.6 has no cache-disabling CLI flag (verified via `--help`):
+config/cache/tmp isolation is via the three documented
+`JADX_CACHE_DIR` / `JADX_TMP_DIR` / `JADX_CONFIG_DIR` variables,
+which the runner scopes to per-job directories under the workdir
+(removed with it). Without them jadx resolves the passwd-derived
+user home and fails to start on the read-only production root.
 
 ### Terminal statuses (`results/<job>/status.json`)
 

@@ -1,14 +1,26 @@
 #!/usr/bin/env python3
 """Isolated-runner protocol tests (stdlib unittest, no pytest needed).
 
-Verifies docker/analysis/runner.py against stub TOOL binaries: exact
-argv shapes per profile, claim/lock semantics, timeout + cancel with
-complete process-tree termination, input verification, output caps,
-and symlink-escape rejection. Arch-independent: safe to run on any
-machine with python3 (CIs, x86 laptops); native ARM64 qualification
-of the REAL tools happens on the owner server (see delivery doc).
+Two tiers, kept distinct:
+
+* RunnerCase: STUB/static tests. Verifies docker/analysis/runner.py
+  against stub TOOL binaries: exact argv shapes per profile,
+  claim/lock semantics, timeout + cancel with complete
+  process-tree termination, input verification, output caps, and
+  symlink-escape rejection. Arch-independent: safe to run on any
+  machine with python3 (CIs, x86 laptops). A stub green never
+  proves a real tool accepts the argv it was fed.
+* RealJadxCase: REAL-EXECUTABLE tests. Runs the actual pinned
+  jadx 1.5.6 binary (plus a JVM) when REAL_JADX_BIN points at it;
+  skipped otherwise. This tier guards the --no-src-save-cache
+  incident class: flags the stubs accept but the real tool
+  rejects. Native ARM64 qualification of the REAL tools happens
+  on the owner server (see delivery doc); on x86 run with a
+  matching-arch JRE on PATH.
 
 Run:  cd docker/analysis && python3 -m unittest discover -s tests -v
+Real: cd docker/analysis && REAL_JADX_BIN=/path/to/jadx \
+        python3 -m unittest tests.test_runner.RealJadxCase -v
 """
 
 import hashlib
@@ -186,8 +198,7 @@ class RunnerCase(unittest.TestCase):
         os.environ["UBIREADER_BIN"] = ubireader
         self.assertEqual(
             self.dry("jadx", "apk", {"threads": 2}),
-            [jadx, "--no-src-save-cache", "-j", "2",
-             "-d", "/w/jadx-out", "/w/input.bin"])
+            [jadx, "-j", "2", "-d", "/w/jadx-out", "/w/input.bin"])
         with self.assertRaises(ValueError):
             self.dry("jadx", "apk", {"threads": 99})
         self.assertEqual(
@@ -209,6 +220,40 @@ class RunnerCase(unittest.TestCase):
         os.environ["OBJDUMP_BIN"] = os.path.join(self.tmp, "no-such-bin")
         with self.assertRaises(ValueError):
             self.dry("objdump", "auto", {})
+
+    def test_jadx_argv_has_no_removed_flags(self):
+        # Regression net for the ARM64 build failure: jadx 1.5.6 has
+        # no --no-src-save-cache flag (verified via --help) and
+        # aborts with "Unknown option" when it is passed. The runner
+        # argv must stay exactly [bin -j N -d OUT IN].
+        jadx = self.stub("jadx", "exit 0\n")
+        os.environ["JADX_BIN"] = jadx
+        argv = self.dry("jadx", "apk", {"threads": 2})
+        self.assertEqual(argv, [jadx, "-j", "2",
+                                "-d", "/w/jadx-out", "/w/input.bin"])
+        self.assertNotIn("--no-src-save-cache", argv)
+
+    def test_jadx_tool_env_scopes_jadx_dirs_per_job(self):
+        # jadx 1.5.6 honors JADX_CACHE_DIR / JADX_TMP_DIR /
+        # JADX_CONFIG_DIR (verified via --print-files); without them
+        # it resolves the passwd-derived user home and fails to
+        # start on the read-only production root. All three live
+        # under the job workdir so cleanup removes them.
+        env = runner.tool_env("jadx", self.work)
+        self.assertEqual(env["JADX_CACHE_DIR"],
+                         os.path.join(self.work, "jadx-cache"))
+        self.assertEqual(env["JADX_TMP_DIR"],
+                         os.path.join(self.work, "jadx-tmp"))
+        self.assertEqual(env["JADX_CONFIG_DIR"],
+                         os.path.join(self.work, "jadx-config"))
+        for name in ("jadx-cache", "jadx-tmp", "jadx-config"):
+            self.assertTrue(os.path.isdir(os.path.join(self.work, name)))
+        # Other tools keep the minimal env without JADX scoping.
+        for tool in ("objdump", "ghidra", "ilspy", "extract"):
+            other = runner.tool_env(tool, self.work)
+            self.assertNotIn("JADX_CACHE_DIR", other)
+            self.assertNotIn("JADX_TMP_DIR", other)
+            self.assertNotIn("JADX_CONFIG_DIR", other)
 
     # -- probe ---------------------------------------------------------
 
@@ -494,12 +539,12 @@ class RunnerCase(unittest.TestCase):
 
     def test_jadx_tree_collection_skips_symlinks(self):
         script = (
-            "mkdir -p \"$5\"/sources/com\n"
-            "echo 'class Foo{}' > \"$5\"/sources/com/Foo.java\n"
-            "ln -s /etc/passwd \"$5\"/sources/escape\n"
-            "mkdir -p \"$5\"/deep/a/b/c/d/e/f/g/h/i/j/k/l\n"
-            "echo deep > \"$5\"/deep/a/b/c/d/e/f/g/h/i/j/k/l/x.txt\n")
-        # jadx argv: [bin --no-src-save-cache -j N -d OUT IN] → OUT is $5
+            "mkdir -p \"$4\"/sources/com\n"
+            "echo 'class Foo{}' > \"$4\"/sources/com/Foo.java\n"
+            "ln -s /etc/passwd \"$4\"/sources/escape\n"
+            "mkdir -p \"$4\"/deep/a/b/c/d/e/f/g/h/i/j/k/l\n"
+            "echo deep > \"$4\"/deep/a/b/c/d/e/f/g/h/i/j/k/l/x.txt\n")
+        # jadx argv: [bin -j N -d OUT IN] → OUT is $4
         os.environ["JADX_BIN"] = self.stub("jadx", script)
         self.submit("jadx", profile="apk", params={"threads": 2})
         self.run_once("jadx")
@@ -566,6 +611,128 @@ class RunnerCase(unittest.TestCase):
         with open(blob, "rb") as fh:
             self.assertEqual(
                 hashlib.sha256(fh.read()).hexdigest(), stored["sha256"])
+
+
+class RealJadxCase(unittest.TestCase):
+    """REAL-EXECUTABLE jadx tests (not stubs).
+
+    Runs the actual pinned jadx 1.5.6 binary against the real
+    dex-smoke.dex fixture using the REAL runner argv builder and
+    per-job env — the same qualification the Dockerfile performs
+    at image build time. Skipped unless REAL_JADX_BIN points at an
+    executable jadx with a working JVM (a skip here is an honest
+    "not run", never a green).
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.jadx = os.environ.get("REAL_JADX_BIN", "")
+        if not (cls.jadx and os.path.isfile(cls.jadx)
+                and os.access(cls.jadx, os.X_OK)):
+            raise unittest.SkipTest(
+                "REAL_JADX_BIN not set to an executable jadx")
+        try:
+            proc = subprocess.run(
+                [cls.jadx, "--version"], stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                timeout=120)
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise unittest.SkipTest("real jadx not runnable: %s" % exc)
+        if proc.returncode != 0:
+            raise unittest.SkipTest(
+                "real jadx --version failed: %r"
+                % proc.stdout[:200].decode("utf-8", "replace"))
+        cls.version = proc.stdout.decode("utf-8", "replace").strip()
+        cls.here = os.path.dirname(os.path.abspath(__file__))
+        cls.fixture = os.path.join(cls.here, "..", "fixtures",
+                                   "dex-smoke.dex")
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="real-jadx-")
+        self.old_env = dict(os.environ)
+        os.environ["JADX_BIN"] = self.jadx
+
+    def tearDown(self):
+        os.environ.clear()
+        os.environ.update(self.old_env)
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def test_real_help_rejects_removed_option(self):
+        # The incident regression: the runner/Dockerfile MUST NOT
+        # pass flags the pinned binary does not know. Every flag in
+        # the runner argv must appear in the real --help, and the
+        # removed flag must be absent from --help entirely.
+        proc = subprocess.run(
+            [self.jadx, "--help"], stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            timeout=120)
+        self.assertEqual(proc.returncode, 0)
+        help_text = proc.stdout.decode("utf-8", "replace")
+        self.assertNotIn("--no-src-save-cache", help_text)
+        workdir = os.path.join(self.tmp, "dry")
+        os.makedirs(workdir)
+        argv = runner.build_argv("jadx", "apk", {"threads": 2},
+                                workdir,
+                                os.path.join(workdir, "input.dex"))
+        for flag in ("-j", "-d"):
+            self.assertIn(flag, argv)
+            self.assertIn(flag, help_text)
+
+    def test_real_decompile_fixture_via_runner_argv(self):
+        # Same qualification as Dockerfile.jadx: the REAL builder
+        # argv + the REAL per-job env must decompile dex-smoke.dex
+        # and emit Java containing the FixtureSmoketest class.
+        workdir = os.path.join(self.tmp, "work")
+        os.makedirs(workdir)
+        argv = runner.build_argv("jadx", "apk", {"threads": 1},
+                                workdir, self.fixture)
+        proc = subprocess.run(
+            argv, stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            cwd=workdir, timeout=300,
+            env=runner.tool_env("jadx", workdir))
+        self.assertEqual(
+            proc.returncode, 0,
+            "real jadx failed: %r"
+            % proc.stdout[:2000].decode("utf-8", "replace"))
+        outdir = os.path.join(workdir, "jadx-out")
+        found = []
+        for root, _, files in os.walk(outdir):
+            for name in files:
+                if not name.endswith(".java"):
+                    continue
+                path = os.path.join(root, name)
+                with open(path, "r", encoding="utf-8") as fh:
+                    if runner.FIXTURE_MARKER in fh.read():
+                        found.append(os.path.relpath(path, outdir))
+        self.assertTrue(
+            found,
+            "no .java under %s contains %r" % (
+                outdir, runner.FIXTURE_MARKER))
+
+    def test_real_scoping_survives_readonly_home(self):
+        # Production runs on a read-only root where the
+        # passwd-derived user home is unwritable; with the runner's
+        # per-job JADX_*_DIR scoping the decompile must still
+        # succeed. Simulated by pointing user.home at a read-only
+        # dir via JADX_OPTS (jadx ignores $HOME).
+        home = os.path.join(self.tmp, "ro-home")
+        os.makedirs(home)
+        os.chmod(home, 0o555)
+        workdir = os.path.join(self.tmp, "work")
+        os.makedirs(workdir)
+        argv = runner.build_argv("jadx", "apk", {"threads": 1},
+                                workdir, self.fixture)
+        env = runner.tool_env("jadx", workdir)
+        env["JADX_OPTS"] = "-Duser.home=%s" % home
+        proc = subprocess.run(
+            argv, stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            cwd=workdir, timeout=300, env=env)
+        self.assertEqual(
+            proc.returncode, 0,
+            "scoped jadx failed under read-only home: %r"
+            % proc.stdout[:2000].decode("utf-8", "replace"))
 
 
 if __name__ == "__main__":

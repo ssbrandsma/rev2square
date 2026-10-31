@@ -414,6 +414,37 @@ class AnalysisDeploymentTest extends TestCase
         $this->assertStringNotContainsString('jadxdist/jadx-', $jadx);
     }
 
+    public function test_jadx_dockerfile_uses_verified_cli_and_scoped_dirs(): void
+    {
+        // Regression net for the ARM64 build failure: jadx 1.5.6 has
+        // no --no-src-save-cache flag (verified via --help; passing
+        // it aborts with "Unknown option"), so the Dockerfile must
+        // run the REAL runner argv + per-job env (never a hand-written
+        // jadx copy that can drift), qualify the DEX fixture with the
+        // known class marker as BOTH users, and carry no HOME masking
+        // (jadx ignores $HOME; JADX_*_DIR scoping isolates instead).
+        $jadx = (string) file_get_contents(base_path('docker/analysis/Dockerfile.jadx'));
+        // Absence is asserted on executed-argument spellings (comments
+        // legitimately name the removed flag to explain the history).
+        $this->assertStringNotContainsString('bin/jadx --no-src-save-cache', $jadx);
+        $this->assertStringNotContainsString("'--no-src-save-cache'", $jadx);
+        $this->assertStringContainsString("build_argv('jadx'", $jadx);
+        $this->assertStringContainsString("tool_env('jadx'", $jadx);
+        $this->assertStringContainsString('597807fe5c8d9d999ba7ca4292a8707618281463638b7449384d9907e95f8b80', $jadx);
+        $this->assertSame(2, substr_count($jadx, 'grep -rq FixtureSmoketest'), 'fixture marker gated as root and as www-data');
+        $this->assertStringNotContainsString('export HOME=/tmp', $jadx);
+
+        // The documented argv contract stays in sync: PHP builder,
+        // runner builder, and protocol doc emit the same shape.
+        $adapter = (string) file_get_contents(base_path('app/Services/Binary/Adapters/JadxAdapter.php'));
+        $this->assertStringNotContainsString("'--no-src-save-cache'", $adapter);
+        $runner = (string) file_get_contents(base_path('docker/analysis/runner.py'));
+        $this->assertStringNotContainsString('"--no-src-save-cache"', $runner);
+        $protocol = (string) file_get_contents(base_path('docs/analysis-spool-protocol.md'));
+        $this->assertStringNotContainsString('no-src-save-cache', $protocol);
+        $this->assertStringContainsString('`jadx -j T -d <out> <in>`', $protocol);
+    }
+
     public function test_setup_docs_gate_startup_on_successful_build(): void
     {
         $setup = (string) file_get_contents(base_path('docs/binary-analysis-setup.md'));

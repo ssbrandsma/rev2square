@@ -168,7 +168,12 @@ final class JadxAdapter extends SandboxedBackend
             return null;
         }
 
-        return ['/opt/jadx/bin/jadx', '--no-src-save-cache', '-j', (string) $threads, '-d', $params['output'], $params['input']];
+        // Verified against jadx 1.5.6 --help: -j/--threads-count and
+        // -d/--output-dir exist; there is NO --no-src-save-cache option
+        // (passing it aborts the run with "Unknown option"). Cache /
+        // config / tmp isolation is via per-job JADX_*_DIR in the
+        // runner environment, not a CLI flag.
+        return ['/opt/jadx/bin/jadx', '-j', (string) $threads, '-d', $params['output'], $params['input']];
     }
 
     /** @param list<array{path: string, size: int, sha256: string}> $files @return list<array{name: string, file: string}> */

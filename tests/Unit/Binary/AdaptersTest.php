@@ -129,9 +129,12 @@ class AdaptersTest extends TestCase
         $jadx = new JadxAdapter;
         $command = $jadx->buildCommand(['job_dir' => $jobDir, 'input' => $jobDir.'/input.apk', 'output' => $jobDir.'/out', 'threads' => 2]);
         $this->assertSame(
-            ['/opt/jadx/bin/jadx', '--no-src-save-cache', '-j', '2', '-d', $jobDir.'/out', $jobDir.'/input.apk'],
+            ['/opt/jadx/bin/jadx', '-j', '2', '-d', $jobDir.'/out', $jobDir.'/input.apk'],
             $command
         );
+        // Regression: jadx 1.5.6 has no --no-src-save-cache flag
+        // (verified via --help); re-adding it breaks every run.
+        $this->assertStringNotContainsString('no-src-save-cache', implode(' ', $command));
         $this->assertNull($jadx->buildCommand(['job_dir' => $jobDir, 'input' => $jobDir.'/input.apk', 'output' => $jobDir.'/out', 'threads' => 99]));
         $this->assertNull($jadx->buildCommand(['job_dir' => $jobDir, 'input' => $jobDir.'/input.apk']));
 
