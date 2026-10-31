@@ -31,15 +31,29 @@ abstract class SandboxedBackend implements BinaryAdapter
 
     public function version(): ?string
     {
+        // Single choke point: every consumer (snapshots, dispatch,
+        // mismatch comparison, display) gets the concise bounded
+        // identifier, never the raw multiline banner.
         if (! app()->runningInConsole() || ! $this->hasSpoolMounts()) {
-            return WorkerCapability::verifiedFor($this)['version'];
+            return ToolVersion::identifier(WorkerCapability::verifiedFor($this)['version']);
         }
 
         $probe = $this->spoolProbe();
 
-        return is_string($probe['tool_version'] ?? null) && $probe['tool_version'] !== ''
-            ? substr($probe['tool_version'], 0, 200)
-            : null;
+        return ToolVersion::identifier($probe['tool_version'] ?? null);
+    }
+
+    /**
+     * Bounded full tool banner for snapshot diagnostics. Null outside
+     * the coordinator (no spool answer to quote).
+     */
+    public function fullToolVersion(): ?string
+    {
+        if (! app()->runningInConsole() || ! $this->hasSpoolMounts()) {
+            return null;
+        }
+
+        return ToolVersion::full($this->spoolProbe()['tool_version'] ?? null);
     }
 
     public function probe(): array
@@ -132,7 +146,7 @@ abstract class SandboxedBackend implements BinaryAdapter
      * diagnostics. Never contains secrets — only versions, arch, and
      * image identity.
      *
-     * @return array{runner_arch: ?string, image_digest: string, tool_image: string, coordinator_arch: string}
+     * @return array{runner_arch: ?string, image_digest: string, tool_image: string, coordinator_arch: string, tool_version_full: ?string}
      */
     public function runnerDetails(): array
     {
@@ -143,6 +157,7 @@ abstract class SandboxedBackend implements BinaryAdapter
             'image_digest' => (string) ($probe['image_digest'] ?? 'unknown'),
             'tool_image' => (string) ($probe['tool_image'] ?? 'unknown'),
             'coordinator_arch' => self::normalizeArch((string) php_uname('m')),
+            'tool_version_full' => $this->fullToolVersion(),
         ];
     }
 

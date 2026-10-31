@@ -44,20 +44,44 @@ class RefreshWorkerCapabilities implements ShouldQueue
         return max(120, $budgets + 60);
     }
 
-    public function handle(): void
+    /**
+     * Capture every backend, isolating per-backend failures: one
+     * backend's probe crash or persistence error must not strand the
+     * remaining backends. Failed backends keep their previous
+     * snapshot as-is — a capture failure is neither ready nor proven
+     * broken, so it is reported, never stored.
+     *
+     * @return array{pending: list<string>, failed: list<string>}
+     */
+    public function handle(): array
     {
         // This job MUST run on the analysis worker: the captures are
         // only meaningful from the execution environment. Probes are
         // read-only version/architecture checks, never analysis runs.
         $worker = gethostname() ?: null;
         $pending = [];
+        $failed = [];
         foreach (AdapterRegistry::all() as $adapter) {
-            if (WorkerCapability::capture($adapter, $worker) === null) {
-                $pending[] = $adapter->id();
+            try {
+                if (WorkerCapability::capture($adapter, $worker) === null) {
+                    $pending[] = $adapter->id();
+                }
+            } catch (\Throwable $e) {
+                $failed[] = $adapter->id();
+                Log::error('Capability capture failed; previous snapshot kept.', [
+                    'adapter' => $adapter->id(), 'worker' => $worker,
+                    'exception' => get_class($e),
+                    'message' => mb_substr($e->getMessage(), 0, 500),
+                ]);
             }
         }
         if ($pending !== []) {
             Log::info('Capability refresh left backends still qualifying; previous snapshots kept.', ['adapters' => $pending, 'worker' => $worker]);
         }
+        if ($failed !== []) {
+            Log::warning('Capability refresh failed for some backends; their previous snapshots were kept.', ['adapters' => $failed, 'worker' => $worker]);
+        }
+
+        return ['pending' => $pending, 'failed' => $failed];
     }
 }

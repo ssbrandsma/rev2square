@@ -34,7 +34,10 @@ class WorkerCapabilitiesCommand extends Command
 
                 return self::FAILURE;
             }
-            (new RefreshWorkerCapabilities)->handle();
+            $result = (new RefreshWorkerCapabilities)->handle();
+            if (($result['failed'] ?? []) !== []) {
+                $this->warn('Capture failed for: '.implode(', ', $result['failed']).' (previous snapshots kept; see the log).');
+            }
             $this->info('Captured inline (this process only — meaningful on the worker host).');
         } elseif ($this->option('refresh')) {
             RefreshWorkerCapabilities::dispatch();

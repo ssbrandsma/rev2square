@@ -41,6 +41,13 @@ not-operational until rebuilt. Probe answers keep version/arch even
 when the fixture fails, so diagnostics can tell "runner down" apart
 from "runner up, decompile broken".
 
+`tool_version` is the raw bounded tool banner (runner-side 512-byte
+cap; it may be multiline, e.g. the objdump GPL notice). The
+coordinator normalizes it to a concise single-line ≤64-char
+identifier before persistence, display, dedupe, and
+worker_mismatch comparison, and keeps the bounded full banner in
+the snapshot details for diagnostics.
+
 Deadline separation: the fixture check is bounded (30s wall × 3
 attempts) and cached per runner boot — install health cannot change
 without a restart — so steady-state probes stay on the fast

@@ -184,7 +184,7 @@ final class GhidraAdapter extends SandboxedBackend
         return $this->envelope($analysis, $config, $started, 'Ghidra headless auto-analysis with tool-generated decompilation; addresses rebased to the configured base.', [
             'tool' => [
                 'name' => 'Ghidra headless',
-                'version' => is_string($raw['tool_version'] ?? null) ? substr($raw['tool_version'], 0, 100) : $this->version(),
+                'version' => ToolVersion::identifier($raw['tool_version'] ?? null) ?? $this->version(),
                 'language' => $language,
                 'compiler_spec' => is_string($raw['compiler_spec'] ?? null) ? substr($raw['compiler_spec'], 0, 100) : 'default',
             ],

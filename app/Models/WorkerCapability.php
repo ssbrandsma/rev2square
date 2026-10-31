@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Services\Binary\Adapters\BinaryAdapter;
 use App\Services\Binary\Adapters\SandboxedBackend;
+use App\Services\Binary\Adapters\ToolVersion;
 use App\Services\Ops\DeployHints;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Log;
@@ -80,16 +81,19 @@ class WorkerCapability extends Model
             $details = array_merge($details, $adapter->runnerDetails());
         }
 
+        // Schema-aware bounds at the persistence boundary: both
+        // string columns are fixed-width under strict mode, so clamp
+        // defensively here even though adapters normalize already.
         return self::updateOrCreate(
             ['adapter' => $adapter->id()],
             [
                 'available' => $probe['available'],
-                'version' => $adapter->version(),
+                'version' => ToolVersion::identifier($adapter->version()),
                 'targets' => $adapter->targets(),
                 'formats' => $adapter->formats(),
                 'details' => $details,
                 'captured_at' => now(),
-                'worker' => $worker,
+                'worker' => ToolVersion::identifier($worker, 128),
             ],
         );
     }

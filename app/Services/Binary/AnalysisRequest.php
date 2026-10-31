@@ -10,6 +10,7 @@ use App\Models\WorkerCapability;
 use App\Services\Binary\Adapters\AdapterRegistry;
 use App\Services\Binary\Adapters\Capability;
 use App\Services\Binary\Adapters\ExternalBackend;
+use App\Services\Binary\Adapters\ToolVersion;
 use Illuminate\Database\QueryException;
 
 /**
@@ -71,7 +72,9 @@ final class AnalysisRequest
             return ['ok' => false, 'error' => 'Backend “'.$adapter->name().'” produces no supported output for this file/target pair ('.implode('; ', $levels).'). '.self::missingBackendHint($artifact, $resolved['target'])];
         }
 
-        $version = $adapter->version();
+        // Schema-aware bound at the persistence boundary: the
+        // adapter_version column is 64 chars under strict mode.
+        $version = ToolVersion::identifier($adapter->version());
         $dedupe = BinaryAnalysis::dedupeKey($artifact, $adapter->id(), $version, $resolved['target'], $resolved['config']);
         $existing = BinaryAnalysis::where('dedupe_key', $dedupe)->first();
         if ($existing !== null) {
