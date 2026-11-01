@@ -384,4 +384,99 @@ class SpooledAdaptersTest extends TestCase
 
         $this->assertSame(720, AnalyzeBinaryJob::timeoutFor($analysis->id));
     }
+
+    public function test_analysis_job_persists_output_archive_with_coverage(): void
+    {
+        $this->spool->probes['jadx'] = SpoolFake::answer('jadx', '1.5.6', [
+            'fixture' => ['name' => 'dex-smoke.dex', 'ok' => true],
+        ]);
+        $zip = tempnam(sys_get_temp_dir(), 'rev2-jobzip-');
+        $arch = new \ZipArchive;
+        $arch->open($zip, \ZipArchive::OVERWRITE | \ZipArchive::CREATE);
+        $arch->addFromString('sources/com/acme/Foo.java', 'package com.acme; class Foo{}');
+        $arch->close();
+        $this->spool->runs['jadx'] = [
+            'evidence' => [
+                'schema' => 1, 'tool' => 'jadx', 'exit_code' => 0, 'profile' => 'apk',
+                'files' => [['path' => 'sources/com/acme/Foo.java', 'size' => 30, 'sha256' => hash('sha256', 'x')]],
+                'inline' => ['sources/com/acme/Foo.java' => 'package com.acme; class Foo{}'],
+                'truncated' => false,
+            ],
+            'output_archive' => [
+                'tmp' => $zip, 'sha256' => hash_file('sha256', $zip), 'bytes' => filesize($zip),
+                'files' => 1, 'files_seen' => 1, 'truncated' => false, 'reason' => null,
+            ],
+        ];
+
+        [$artifact, $owner] = $this->seedArtifact('PK fake apk', 'app.apk');
+        $artifact->forceFill(['format' => ProjectArtifact::FORMAT_APK, 'state' => ProjectArtifact::STATE_READY])->save();
+        $analysis = BinaryAnalysis::create([
+            'project_artifact_id' => $artifact->id,
+            'requested_by' => $owner->id,
+            'adapter' => 'jadx',
+            'adapter_version' => \App\Services\Binary\Adapters\ToolVersion::identifier('1.5.6'),
+            'target' => 'dalvik',
+            'config' => [],
+            'status' => BinaryAnalysis::STATUS_QUEUED,
+            'dedupe_key' => 'test-'.str()->random(32),
+        ]);
+
+        $digest = hash_file('sha256', $zip);
+        (new AnalyzeBinaryJob($analysis->id))->handle();
+
+        $analysis = $analysis->fresh();
+        $this->assertSame(BinaryAnalysis::STATUS_READY, $analysis->status);
+        $this->assertSame($digest, $analysis->output_meta['sha256'] ?? null);
+        $this->assertSame(1, $analysis->output_meta['files']);
+        $this->assertSame(1, $analysis->output_meta['files_seen']);
+        $this->assertFalse($analysis->output_meta['truncated']);
+        $this->assertTrue($analysis->hasOutputArchive());
+        $this->assertSame($digest, hash('sha256', (string) Storage::disk('artifacts')->get($analysis->outputPath())));
+        // The coordinator tmp file is unlinked on the success path.
+        $this->assertFileDoesNotExist($zip);
+        $this->assertNotContains('output_archive_discarded', $analysis->readEvidence()['warnings'] ?? []);
+    }
+
+    public function test_analysis_job_keeps_evidence_when_archive_verify_fails(): void
+    {
+        $this->spool->probes['jadx'] = SpoolFake::answer('jadx', '1.5.6', [
+            'fixture' => ['name' => 'dex-smoke.dex', 'ok' => true],
+        ]);
+        $zip = tempnam(sys_get_temp_dir(), 'rev2-jobzip-');
+        file_put_contents($zip, 'tampered-bytes');
+        $this->spool->runs['jadx'] = [
+            'evidence' => [
+                'schema' => 1, 'tool' => 'jadx', 'exit_code' => 0, 'profile' => 'apk',
+                'files' => [], 'inline' => [], 'truncated' => false,
+            ],
+            // Claimed hash does not match the bytes: the archive is
+            // discarded, the run still completes on its evidence.
+            'output_archive' => [
+                'tmp' => $zip, 'sha256' => str_repeat('0', 64), 'bytes' => filesize($zip),
+                'files' => 0, 'files_seen' => 0, 'truncated' => false, 'reason' => null,
+            ],
+        ];
+
+        [$artifact, $owner] = $this->seedArtifact('PK fake apk', 'app.apk');
+        $artifact->forceFill(['format' => ProjectArtifact::FORMAT_APK, 'state' => ProjectArtifact::STATE_READY])->save();
+        $analysis = BinaryAnalysis::create([
+            'project_artifact_id' => $artifact->id,
+            'requested_by' => $owner->id,
+            'adapter' => 'jadx',
+            'adapter_version' => \App\Services\Binary\Adapters\ToolVersion::identifier('1.5.6'),
+            'target' => 'dalvik',
+            'config' => [],
+            'status' => BinaryAnalysis::STATUS_QUEUED,
+            'dedupe_key' => 'test-'.str()->random(32),
+        ]);
+
+        (new AnalyzeBinaryJob($analysis->id))->handle();
+
+        $analysis = $analysis->fresh();
+        $this->assertSame(BinaryAnalysis::STATUS_READY, $analysis->status);
+        $this->assertNull($analysis->output_meta);
+        $this->assertFalse($analysis->hasOutputArchive());
+        $this->assertContains('output_archive_discarded', $analysis->readEvidence()['warnings'] ?? []);
+        $this->assertFileDoesNotExist($zip);
+    }
 }

@@ -12,6 +12,7 @@ use App\Services\Binary\Adapters\SandboxedBackend;
 use App\Services\Binary\ArchiveMember;
 use App\Services\Binary\Sandbox\EvidenceValidator;
 use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Filesystem\FilesystemAdapter;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
@@ -111,7 +112,7 @@ class AnalyzeBinaryJob implements ShouldQueue
             $config = $analysis->config ?? [];
 
             $memberName = $config['member'] ?? null;
-            if ($artifact->format === ProjectArtifact::FORMAT_ARCHIVE && is_string($memberName) && $memberName !== '') {
+            if (in_array($artifact->format, [ProjectArtifact::FORMAT_ARCHIVE, ProjectArtifact::FORMAT_APK], true) && is_string($memberName) && $memberName !== '') {
                 $analysis->forceFill(['progress_note' => 'Extracting archive member…'])->save();
                 $staged = ArchiveMember::prepare($bytes, $memberName, $analysis->target, $config);
                 if (! ($staged['ok'] ?? false)) {
@@ -175,38 +176,54 @@ class AnalyzeBinaryJob implements ShouldQueue
             $heartbeat = fn (): bool => $analysis->fresh()?->status === BinaryAnalysis::STATUS_ANALYZING;
 
             $evidence = $adapter->analyze($analysis, $bytes, $snapshot, $config, $heartbeat);
+            $archive = $adapter instanceof SandboxedBackend ? $adapter->lastOutputArchive() : null;
+            try {
+                // Single choke point: normalize + bound + reject hostile
+                // evidence before anything is stored or rendered.
+                $evidence = EvidenceValidator::validate($adapter->id(), $evidence);
 
-            // Single choke point: normalize + bound + reject hostile
-            // evidence before anything is stored or rendered.
-            $evidence = EvidenceValidator::validate($adapter->id(), $evidence);
+                // Retained-output persistence BEFORE fitEvidence: an
+                // archive discard is recorded in the stored evidence
+                // warnings. The tmp file is unlinked on every path by
+                // the finally below; persist itself never throws.
+                $outputMeta = $this->persistOutputArchive($analysis, $archive, $disk);
+                if ($archive !== null && $outputMeta === null) {
+                    $evidence['warnings'][] = 'output_archive_discarded';
+                }
 
-            $encoded = self::fitEvidence($evidence);
-            if ($encoded === null) {
-                $this->finishFailed($analysis, 'evidence_too_large', 'Analysis output exceeded the storage cap even after trimming disassembly. Narrow the target range and retry.');
+                $encoded = self::fitEvidence($evidence);
+                if ($encoded === null) {
+                    $this->finishFailed($analysis, 'evidence_too_large', 'Analysis output exceeded the storage cap even after trimming disassembly. Narrow the target range and retry.');
 
-                return;
-            }
+                    return;
+                }
 
-            $key = Str::random(40);
-            $disk->put($artifact->project_id.'/'.$key.'.analysis.json', $encoded);
+                $key = Str::random(40);
+                $disk->put($artifact->project_id.'/'.$key.'.analysis.json', $encoded);
 
-            $warnings = $evidence['warnings'] ?? [];
-            $partial = false;
-            foreach ($warnings as $warning) {
-                if (str_contains((string) $warning, 'capped') || str_contains((string) $warning, 'trimmed')) {
-                    $partial = true;
-                    break;
+                $warnings = $evidence['warnings'] ?? [];
+                $partial = false;
+                foreach ($warnings as $warning) {
+                    if (str_contains((string) $warning, 'capped') || str_contains((string) $warning, 'trimmed')) {
+                        $partial = true;
+                        break;
+                    }
+                }
+
+                $analysis->forceFill([
+                    'status' => $partial ? BinaryAnalysis::STATUS_PARTIAL : BinaryAnalysis::STATUS_READY,
+                    'progress_note' => null,
+                    'error_code' => null,
+                    'error_message' => null,
+                    'evidence_key' => $key,
+                    'output_meta' => $outputMeta,
+                    'finished_at' => now(),
+                ])->save();
+            } finally {
+                if (is_string($archive['tmp'] ?? null)) {
+                    @unlink($archive['tmp']);
                 }
             }
-
-            $analysis->forceFill([
-                'status' => $partial ? BinaryAnalysis::STATUS_PARTIAL : BinaryAnalysis::STATUS_READY,
-                'progress_note' => null,
-                'error_code' => null,
-                'error_message' => null,
-                'evidence_key' => $key,
-                'finished_at' => now(),
-            ])->save();
         } catch (AnalysisFailedException $e) {
             if ($e->errorCode === 'cancelled_race') {
                 $analysis->forceFill([
@@ -230,6 +247,57 @@ class AnalyzeBinaryJob implements ShouldQueue
         if ($analysis !== null && ! $analysis->isTerminal()) {
             $this->finishFailed($analysis, 'job_failed', 'Analysis did not finish (worker timeout or crash). Retry from the analysis page.');
         }
+    }
+
+    /**
+     * Stream the retained tool-output archive into private project
+     * storage at the run's deterministic output path. Bytes are
+     * re-verified (size + sha256) before the write; any failure
+     * returns null WITHOUT failing the run — the bounded evidence
+     * still stands, the run simply offers no download. Never throws
+     * and never persists the tmp path itself.
+     *
+     * @param  array{tmp: string, sha256: string, bytes: int, files: int, files_seen: int, truncated: bool, reason: string|null}|null  $archive
+     * @return array{sha256: string, bytes: int, files: int, files_seen: int, truncated: bool, reason: string|null}|null
+     */
+    private function persistOutputArchive(BinaryAnalysis $analysis, ?array $archive, FilesystemAdapter $disk): ?array
+    {
+        if ($archive === null) {
+            return null;
+        }
+        $tmp = (string) ($archive['tmp'] ?? '');
+        try {
+            if ($tmp === '' || ! is_file($tmp) || is_link($tmp)
+                || @filesize($tmp) !== (int) $archive['bytes']
+                || ! is_string($archive['sha256'] ?? null)
+                || hash_file('sha256', $tmp) !== $archive['sha256']) {
+                return null;
+            }
+            $stream = @fopen($tmp, 'rb');
+            if (! is_resource($stream)) {
+                return null;
+            }
+            try {
+                $disk->put($analysis->outputPath(), $stream);
+            } finally {
+                if (is_resource($stream)) {
+                    fclose($stream);
+                }
+            }
+        } catch (\Throwable $e) {
+            report($e);
+
+            return null;
+        }
+
+        return [
+            'sha256' => (string) $archive['sha256'],
+            'bytes' => (int) $archive['bytes'],
+            'files' => (int) $archive['files'],
+            'files_seen' => (int) $archive['files_seen'],
+            'truncated' => (bool) ($archive['truncated'] ?? false),
+            'reason' => is_string($archive['reason'] ?? null) ? $archive['reason'] : null,
+        ];
     }
 
     private function finishFailed(BinaryAnalysis $analysis, string $code, string $message): void

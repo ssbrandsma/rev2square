@@ -182,6 +182,29 @@ inside the script.
 `results/<job>/files/<sha>.bin` (re-hashed at copy). Collection
 bounds: 2000 files, depth 12, 32 KiB per inline file / 256 KiB
 total, 5 × 8 MiB stored. Symlinks are skipped, never followed.
+Retention order is sources-first ((tier, path): `.java`/`.kt`/`.cs`
+before decoded text/resources before known binaries), so output
+budgets shed binaries before code; unknown extensions sort as
+text (inspectable-first).
+
+Tree runs also retain the complete output tree as
+`results/<job>/output.zip` (all tools: jadx, ilspy, extract),
+separate from the bounded Agent evidence. The zip holds every
+output file (no symlinks, no exec bits, fixed entry timestamps)
+plus a `rev2square-output.json` provenance file (tool, profile,
+exit code, coverage). Archive bounds: 20000 files, 128 MiB
+uncompressed total, 32 MiB per file; caps shed binaries first
+(same sources-first order) and are explicit in the coverage
+metadata (`files_seen` vs `files_archived`, skip counters,
+`truncated`, `reason`), so an incomplete archive never passes as
+complete. `evidence.json` carries an `output_archive` block
+(`file`, `sha256`, `bytes`, `files`, `files_seen`, `truncated`,
+`reason`); the coordinator re-verifies name/size/hash, applies
+its own byte cap (`binary_output_archive_max_bytes`, 64 MiB
+compressed), and copies the zip into private project storage for
+download and source browsing. An oversized or mismatched archive
+discards the download WITHOUT failing the run — the bounded
+evidence still stands.
 
 Tree evidence is bounded by construction against the 512 KiB
 evidence cap: manifest entries and content compete for one
@@ -192,8 +215,8 @@ a fit-loop re-checks the finished document — dropping trailing
 excerpts, then inline files, then manifest entries — so the cap
 holds even if the accounting drifts. Every omission is counted
 exactly in a `budget` block (retained/omitted counts, excerpt
-paths, skip reasons) with deterministic walk-order retention, and
-`truncated` is set whenever anything was omitted. The coordinator
+paths, skip reasons) with deterministic sources-first retention,
+and `truncated` is set whenever anything was omitted. The coordinator
 envelope adds a byte-bounded class index and stores with
 unescaped slashes, keeping the same serialized-size basis, so the
 512 KiB storage fit cap holds end to end.
@@ -215,7 +238,10 @@ fails the run closed.
 | Runner | wall clock per run | 480 s (`BINARY_SPOOL_WALL_SECONDS`) |
 | Runner | tool text / evidence / inline / stored | 8 MiB / 512 KiB / 256 KiB / 5 × 8 MiB |
 | Runner | manifest files / depth | 2000 / 12 |
+| Runner | retained output archive | 20000 files / 128 MiB uncompressed / 32 MiB per file |
 | Coordinator | grace after wall clock | 30 s (`BINARY_SPOOL_GRACE_SECONDS`) |
+| Coordinator | output archive ingest cap | 64 MiB compressed (`BINARY_OUTPUT_ARCHIVE_MAX_BYTES`) |
+| Storage | retained archive lifecycle | one file per run, deleted with its artifact |
 | Queue | visibility timeout | 900 s (`ANALYSIS_QUEUE_RETRY_AFTER`) |
 | Job | evidence JSON fit cap | 512 KiB (`BINARY_MAX_EVIDENCE_BYTES`) |
 | Concurrency | global spool lock | 1 heavy job per server |

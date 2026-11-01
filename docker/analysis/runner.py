@@ -38,6 +38,7 @@ import signal
 import subprocess
 import sys
 import time
+import zipfile
 
 SCHEMA = 1
 
@@ -114,6 +115,33 @@ MAX_COUNTED_FILES = 100000
 MAX_OUTPUT_BYTES = 8 * 1024 * 1024
 MAX_STORED_FILES = 5
 MAX_STORED_FILE_BYTES = 8 * 1024 * 1024
+# Retained-output archive (output.zip in the claim): the complete tool
+# output tree, separate from the bounded Agent evidence payload. The
+# coordinator copies it into private project storage for download and
+# source browsing. Caps are explicit and reported in the coverage
+# metadata; the archive never silently passes as complete.
+OUTPUT_ARCHIVE_NAME = "output.zip"
+OUTPUT_PROVENANCE_NAME = "rev2square-output.json"
+MAX_ARCHIVE_FILES = 20000
+MAX_ARCHIVE_UNCOMPRESSED_BYTES = 128 * 1024 * 1024
+MAX_ARCHIVE_FILE_BYTES = 32 * 1024 * 1024
+# Fixed ZIP entry timestamp: entry metadata carries no
+# build-host clock (only the archived_at provenance field does,
+# as data, so content bytes stay comparable across runs).
+ARCHIVE_ENTRY_DATE = (2020, 1, 1, 0, 0, 0)
+# Evidence priority tiers: decompiled sources win every budget
+# first, decoded text/resources second, known binaries last.
+# Unknown extensions sort as text (inspectable-first); a wrong
+# guess only changes order, never content.
+SOURCE_EXTENSIONS = frozenset((".java", ".kt", ".kts", ".cs"))
+BINARY_EXTENSIONS = frozenset((
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico",
+    ".arsc", ".dex", ".odex", ".so", ".class",
+    ".bin", ".dat", ".db", ".sqlite",
+    ".ttf", ".otf", ".woff", ".woff2",
+    ".mp3", ".ogg", ".wav", ".flac", ".mid",
+    ".mp4", ".webm", ".3gp", ".zip", ".gz",
+))
 
 GLOBAL_LOCK_NAME = "global.lock"
 POLL_INTERVAL = 1.0
@@ -864,6 +892,8 @@ class Runner:
         if self.tool == "extract":
             evidence["stored_files"] = self._store_candidates(
                 outdir, manifest, claimdir)
+        evidence["output_archive"] = self._archive_tree(
+            outdir, claimdir, profile, exit_code)
         self._write_evidence(claimdir, evidence)
         info["evidence_bytes"] = os.path.getsize(
             os.path.join(claimdir, "evidence.json"))
@@ -871,10 +901,83 @@ class Runner:
         info["truncated"] = truncated
         return None, info
 
+    @staticmethod
+    def _source_rank(rel):
+        """Evidence priority tier for one output path: decompiled
+        sources (0) sort before decoded text/resources (1), known
+        binaries (2) sort last. Unknown extensions are text —
+        inspectable-first. Ties break on the path itself, so the
+        order stays deterministic."""
+        ext = os.path.splitext(rel)[1].lower()
+        if ext in SOURCE_EXTENSIONS:
+            return 0
+        if ext in BINARY_EXTENSIONS:
+            return 2
+        return 1
+
+    @classmethod
+    def _walk_tree(cls, outdir):
+        """Single deterministic walk (sorted, no symlinks) shared by
+        the evidence collector and the output archiver. Returns
+        (files, stats): files is [(rel, size)] in walk order,
+        bounded by MAX_COUNTED_FILES, and stats carries the
+        walk-phase counters (files_seen, symlink_skipped,
+        error_skipped, depth_pruned, walk_capped, truncated)."""
+        files = []
+        stats = {"files_seen": 0, "symlink_skipped": 0,
+                 "error_skipped": 0, "depth_pruned": False,
+                 "walk_capped": False, "truncated": False}
+        if not os.path.isdir(outdir):
+            stats["truncated"] = True
+            return files, stats
+        walk_done = False
+        for root, dirs, names in os.walk(outdir):
+            if walk_done:
+                break
+            depth = root[len(outdir):].count(os.sep)
+            if depth > MAX_WALK_DEPTH:
+                dirs[:] = []
+                stats["depth_pruned"] = True
+                stats["truncated"] = True
+                continue
+            # Never follow or record symlinks: escapes hide in links.
+            # Pruned symlink dirs count like skipped symlink files.
+            kept = []
+            for d in sorted(dirs):
+                if os.path.islink(os.path.join(root, d)):
+                    stats["symlink_skipped"] += 1
+                    stats["truncated"] = True
+                else:
+                    kept.append(d)
+            dirs[:] = kept
+            for name in sorted(names):
+                full = os.path.join(root, name)
+                if os.path.islink(full) or not os.path.isfile(full):
+                    stats["symlink_skipped"] += 1
+                    stats["truncated"] = True
+                    continue
+                rel = os.path.relpath(full, outdir)
+                try:
+                    size = os.path.getsize(full)
+                except OSError:
+                    stats["error_skipped"] += 1
+                    stats["truncated"] = True
+                    continue
+                stats["files_seen"] += 1
+                if stats["files_seen"] > MAX_COUNTED_FILES:
+                    # Unprocessed: keep seen == retained + omitted.
+                    stats["files_seen"] -= 1
+                    stats["walk_capped"] = True
+                    stats["truncated"] = True
+                    walk_done = True
+                    break
+                files.append((rel, size))
+        return files, stats
+
     def _collect_tree(self, outdir):
         """Bounded tree evidence with exact truncation metadata.
 
-        Single deterministic walk (sorted, no symlinks): manifest
+        Sources-first deterministic order ((tier, path)): manifest
         entries and content compete for one serialized-size pool so
         the emitted evidence.json can never breach MAX_EVIDENCE_BYTES
         (a fit-loop in _write_evidence re-checks regardless). Files
@@ -897,106 +1000,74 @@ class Runner:
         content_bytes = 0
         excerpt_paths_bytes = 0
         inline_raw = 0
-        truncated = False
-        if not os.path.isdir(outdir):
-            return manifest, inline, True, budget
-        walk_done = False
-        for root, dirs, files in os.walk(outdir):
-            if walk_done:
-                break
-            depth = root[len(outdir):].count(os.sep)
-            if depth > MAX_WALK_DEPTH:
-                dirs[:] = []
-                budget["depth_pruned"] = True
+        files, stats = self._walk_tree(outdir)
+        budget["files_seen"] = stats["files_seen"]
+        budget["symlink_skipped"] = stats["symlink_skipped"]
+        budget["error_skipped"] = stats["error_skipped"]
+        budget["depth_pruned"] = stats["depth_pruned"]
+        budget["walk_capped"] = stats["walk_capped"]
+        truncated = stats["truncated"]
+        ordered = sorted(files,
+                         key=lambda item: (self._source_rank(item[0]),
+                                           item[0]))
+        for rel, size in ordered:
+            full = os.path.join(outdir, rel)
+            # Manifest entry: sha is always 64 hex chars, so the
+            # serialized cost is known before hashing (omitted
+            # files are counted, never read).
+            entry_cost = len(_dumps({"path": rel, "size": size,
+                                     "sha256": "0" * 64})) + 1
+            retained = (
+                len(manifest) < MAX_MANIFEST_FILES
+                and manifest_bytes + entry_cost <= MANIFEST_POOL_BYTES
+                and pool >= entry_cost)
+            if not retained:
+                budget["manifest_omitted"] += 1
                 truncated = True
                 continue
-            # Never follow or record symlinks: escapes hide in links.
-            # Pruned symlink dirs count like skipped symlink files.
-            kept = []
-            for d in sorted(dirs):
-                if os.path.islink(os.path.join(root, d)):
-                    budget["symlink_skipped"] += 1
-                    truncated = True
+            manifest.append({"path": rel, "size": size,
+                             "sha256": sha256_file(full)})
+            manifest_bytes += entry_cost
+            pool -= entry_cost
+            budget["manifest_retained"] += 1
+            text, is_excerpt, skipped = self._inline_text(full, size)
+            if text is None:
+                # Binary members were never promised inline
+                # (manifest keeps the reference); read errors are
+                # genuine omissions.
+                if skipped == "binary":
+                    budget["binary_skipped"] += 1
                 else:
-                    kept.append(d)
-            dirs[:] = kept
-            for name in sorted(files):
-                full = os.path.join(root, name)
-                if os.path.islink(full) or not os.path.isfile(full):
-                    budget["symlink_skipped"] += 1
-                    truncated = True
-                    continue
-                rel = os.path.relpath(full, outdir)
-                try:
-                    size = os.path.getsize(full)
-                except OSError:
                     budget["error_skipped"] += 1
                     truncated = True
-                    continue
-                budget["files_seen"] += 1
-                if budget["files_seen"] > MAX_COUNTED_FILES:
-                    # Unprocessed: keep seen == retained + omitted.
-                    budget["files_seen"] -= 1
-                    budget["walk_capped"] = True
-                    truncated = True
-                    walk_done = True
-                    break
-                # Manifest entry: sha is always 64 hex chars, so the
-                # serialized cost is known before hashing (omitted
-                # files are counted, never read).
-                entry_cost = len(_dumps({"path": rel, "size": size,
-                                         "sha256": "0" * 64})) + 1
-                retained = (
-                    len(manifest) < MAX_MANIFEST_FILES
-                    and manifest_bytes + entry_cost <= MANIFEST_POOL_BYTES
-                    and pool >= entry_cost)
-                if not retained:
-                    budget["manifest_omitted"] += 1
-                    truncated = True
-                    continue
-                manifest.append({"path": rel, "size": size,
-                                 "sha256": sha256_file(full)})
-                manifest_bytes += entry_cost
-                pool -= entry_cost
-                budget["manifest_retained"] += 1
-                text, is_excerpt, skipped = self._inline_text(full, size)
-                if text is None:
-                    # Binary members were never promised inline
-                    # (manifest keeps the reference); read errors are
-                    # genuine omissions.
-                    if skipped == "binary":
-                        budget["binary_skipped"] += 1
-                    else:
-                        budget["error_skipped"] += 1
-                        truncated = True
-                    continue
-                content_cost = (len(_dumps(rel)) + 2
-                                + len(_dumps(text)) + 1)
-                if (inline_raw + len(text.encode("utf-8"))
-                        > MAX_INLINE_TOTAL_BYTES
-                        or content_bytes + content_cost
-                        > CONTENT_POOL_BYTES
-                        or pool < content_cost):
-                    budget["content_omitted"] += 1
-                    truncated = True
-                    continue
-                if is_excerpt and (
-                        len(excerpt_paths) >= MAX_EXCERPT_PATHS
-                        or excerpt_paths_bytes + len(_dumps(rel)) + 1
-                        > EXCERPT_PATHS_BUDGET):
-                    budget["content_omitted"] += 1
-                    truncated = True
-                    continue
-                inline[rel] = text
-                inline_raw += len(text.encode("utf-8"))
-                content_bytes += content_cost
-                pool -= content_cost
-                if is_excerpt:
-                    excerpt_paths.append(rel)
-                    excerpt_paths_bytes += len(_dumps(rel)) + 1
-                    budget["excerpt_count"] += 1
-                else:
-                    budget["inline_full"] += 1
+                continue
+            content_cost = (len(_dumps(rel)) + 2
+                            + len(_dumps(text)) + 1)
+            if (inline_raw + len(text.encode("utf-8"))
+                    > MAX_INLINE_TOTAL_BYTES
+                    or content_bytes + content_cost
+                    > CONTENT_POOL_BYTES
+                    or pool < content_cost):
+                budget["content_omitted"] += 1
+                truncated = True
+                continue
+            if is_excerpt and (
+                    len(excerpt_paths) >= MAX_EXCERPT_PATHS
+                    or excerpt_paths_bytes + len(_dumps(rel)) + 1
+                    > EXCERPT_PATHS_BUDGET):
+                budget["content_omitted"] += 1
+                truncated = True
+                continue
+            inline[rel] = text
+            inline_raw += len(text.encode("utf-8"))
+            content_bytes += content_cost
+            pool -= content_cost
+            if is_excerpt:
+                excerpt_paths.append(rel)
+                excerpt_paths_bytes += len(_dumps(rel)) + 1
+                budget["excerpt_count"] += 1
+            else:
+                budget["inline_full"] += 1
         if budget["manifest_omitted"] or budget["content_omitted"]:
             truncated = True
         return manifest, inline, truncated, budget
@@ -1077,6 +1148,123 @@ class Runner:
             stored.append({"path": cand["path"], "size": cand["size"],
                            "sha256": cand["sha256"]})
         return stored
+
+    def _archive_tree(self, outdir, claimdir, profile, exit_code):
+        """Retain the complete tool output tree as output.zip in the
+        claim, separate from the bounded Agent evidence. Sources sort
+        first so the archive caps shed binaries before code. Every
+        cap is explicit in the coverage metadata: files_seen vs
+        files_archived reconcile with the skip counters, and the
+        archive never silently passes as complete. The coordinator
+        re-verifies sha256/size before copying the zip into private
+        project storage. Returns the output_archive evidence dict."""
+        files, stats = self._walk_tree(outdir)
+        ordered = sorted(files,
+                         key=lambda item: (self._source_rank(item[0]),
+                                           item[0]))
+        archived = 0
+        uncompressed = 0
+        skipped_over_size = 0
+        skipped_unreadable = 0
+        reason = None
+        if not os.path.isdir(outdir):
+            reason = "no_tool_output"
+        tmp = os.path.join(claimdir, OUTPUT_ARCHIVE_NAME + ".tmp")
+        digest = hashlib.sha256()
+        with open(tmp, "wb") as raw:
+            with zipfile.ZipFile(raw, "w", zipfile.ZIP_DEFLATED) as zf:
+                for rel, size in ordered:
+                    if archived >= MAX_ARCHIVE_FILES:
+                        reason = "file_cap_reached"
+                        break
+                    if uncompressed + size > MAX_ARCHIVE_UNCOMPRESSED_BYTES:
+                        reason = "byte_cap_reached"
+                        break
+                    if size > MAX_ARCHIVE_FILE_BYTES:
+                        skipped_over_size += 1
+                        continue
+                    if (rel.startswith("/") or "\\" in rel or "\0" in rel
+                            or any(p in ("", ".", "..")
+                                   for p in rel.split("/"))):
+                        skipped_unreadable += 1
+                        continue
+                    full = os.path.join(outdir, rel)
+                    if os.path.islink(full) or not os.path.isfile(full):
+                        skipped_unreadable += 1
+                        continue
+                    try:
+                        fin = open(full, "rb")
+                    except OSError:
+                        skipped_unreadable += 1
+                        continue
+                    info = zipfile.ZipInfo(rel, ARCHIVE_ENTRY_DATE)
+                    info.compress_type = zipfile.ZIP_DEFLATED
+                    # Regular file, owner read/write: no exec bits,
+                    # no symlinks, no host modes leak into the zip.
+                    info.external_attr = 0o644 << 16
+                    with fin, zf.open(info, "w") as fout:
+                        # Mid-copy I/O errors propagate: a torn entry
+                        # would corrupt the archive, so the job fails
+                        # closed instead of shipping a lying zip.
+                        shutil.copyfileobj(fin, fout, 1024 * 1024)
+                    archived += 1
+                    uncompressed += size
+                coverage = {
+                    "files_seen": stats["files_seen"],
+                    "files_archived": archived,
+                    "uncompressed_bytes": uncompressed,
+                    "skipped_over_size": skipped_over_size,
+                    "skipped_unreadable": skipped_unreadable,
+                    "symlink_skipped": stats["symlink_skipped"],
+                    "error_skipped": stats["error_skipped"],
+                    "depth_pruned": stats["depth_pruned"],
+                    "walk_capped": stats["walk_capped"],
+                    "truncated": False,
+                    "reason": reason,
+                    "file_cap": MAX_ARCHIVE_FILES,
+                    "byte_cap": MAX_ARCHIVE_UNCOMPRESSED_BYTES,
+                    "per_file_cap": MAX_ARCHIVE_FILE_BYTES,
+                }
+                # Symlinks are never archive content (counted, like
+                # binary members are never inline content): only
+                # genuine file omissions mark the archive truncated.
+                coverage["truncated"] = bool(
+                    reason is not None or skipped_over_size
+                    or skipped_unreadable
+                    or stats["error_skipped"]
+                    or stats["depth_pruned"] or stats["walk_capped"]
+                    or archived + skipped_over_size + skipped_unreadable
+                    != stats["files_seen"])
+                provenance = {
+                    "schema": SCHEMA,
+                    "generator": "rev2square-runner",
+                    "tool": self.tool,
+                    "profile": profile,
+                    "exit_code": exit_code,
+                    "warning": ("Reconstructed code; not the original "
+                                "source. Names, types and control flow "
+                                "may be incomplete or incorrect."),
+                    "archived_at": int(time.time()),
+                    "coverage": coverage,
+                }
+                info = zipfile.ZipInfo(OUTPUT_PROVENANCE_NAME,
+                                       ARCHIVE_ENTRY_DATE)
+                info.compress_type = zipfile.ZIP_DEFLATED
+                info.external_attr = 0o644 << 16
+                zf.writestr(info, _dumps(provenance))
+        with open(tmp, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+                digest.update(chunk)
+        dst = os.path.join(claimdir, OUTPUT_ARCHIVE_NAME)
+        os.replace(tmp, dst)
+        os.chmod(dst, 0o644)
+        return {"file": OUTPUT_ARCHIVE_NAME,
+                "sha256": digest.hexdigest(),
+                "bytes": os.path.getsize(dst),
+                "files": archived,
+                "files_seen": stats["files_seen"],
+                "truncated": coverage["truncated"],
+                "reason": reason}
 
     def _write_evidence(self, claimdir, evidence):
         """Serialize evidence.json, bounded by construction. The tree

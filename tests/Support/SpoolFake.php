@@ -20,7 +20,7 @@ class SpoolFake extends SpoolClient
     /** @var array<string, bool> tool => claimed override (silent-but-accepted probes) */
     public array $claimed = [];
 
-    /** @var array<string, array{evidence: array<string, mixed), tool_output?: ?string, stored_files?: array<string, array{path: string, size: int, tmp: string}}, fail?: string}> */
+    /** @var array<string, array{evidence: array<string, mixed), tool_output?: ?string, stored_files?: array<string, array{path: string, size: int, tmp: string}}, output_archive?: array{tmp: string, sha256: string, bytes: int, files: int, files_seen: int, truncated: bool, reason: string|null}, fail?: string}> */
     public array $runs = [];
 
     /** @var list<array{tool: string, profile: string, params: array<string, mixed>, input: string, bytes: int}> */
@@ -89,6 +89,7 @@ class SpoolFake extends SpoolClient
             'tool_output' => $canned['tool_output'] ?? null,
             'claim_dir' => $this->resultsDir().'/fake',
             'stored_files' => $canned['stored_files'] ?? [],
+            'output_archive' => $canned['output_archive'] ?? null,
         ];
     }
 

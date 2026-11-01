@@ -29,6 +29,18 @@ abstract class SandboxedBackend implements BinaryAdapter
 
     private bool $probeClaimed = false;
 
+    /**
+     * Retained tool-output archive from the latest runSandbox() call
+     * (tmp path + verified metadata), or null when the runner sent
+     * none. Consumed once by AnalyzeBinaryJob, which persists the
+     * bytes into private project storage and unlinks the tmp file.
+     * Adapter instances are single-job (AdapterRegistry::get builds
+     * fresh), so nothing leaks across runs.
+     *
+     * @var array{tmp: string, sha256: string, bytes: int, files: int, files_seen: int, truncated: bool, reason: string|null}|null
+     */
+    private ?array $lastOutputArchive = null;
+
     public function version(): ?string
     {
         // Single choke point: every consumer (snapshots, dispatch,
@@ -229,9 +241,21 @@ abstract class SandboxedBackend implements BinaryAdapter
     }
 
     /**
+     * Retained tool-output archive from the latest runSandbox() call.
+     * The job persists it into private project storage; the tmp file
+     * is unlinked there, never by adapters.
+     *
+     * @return array{tmp: string, sha256: string, bytes: int, files: int, files_seen: int, truncated: bool, reason: string|null}|null
+     */
+    public function lastOutputArchive(): ?array
+    {
+        return $this->lastOutputArchive;
+    }
+
+    /**
      * @param  array<string, mixed>  $params
      * @param  callable(): bool  $heartbeat
-     * @return array{status: array<string, mixed>, evidence: array<string, mixed>, tool_output: string|null, stored_files: array<string, array{path: string, size: int, tmp: string}>}
+     * @return array{status: array<string, mixed>, evidence: array<string, mixed>, tool_output: string|null, stored_files: array<string, array{path: string, size: int, tmp: string}>, output_archive: array{tmp: string, sha256: string, bytes: int, files: int, files_seen: int, truncated: bool, reason: string|null}|null}
      *
      * @throws AnalysisFailedException
      */
@@ -258,7 +282,11 @@ abstract class SandboxedBackend implements BinaryAdapter
             throw new AnalysisFailedException('evidence_rejected', 'The isolated backend returned evidence with an unknown schema. Its output was discarded.');
         }
 
-        return ['status' => $result['status'], 'evidence' => $evidence, 'tool_output' => $result['tool_output'], 'stored_files' => $result['stored_files'] ?? []];
+        // Last call wins: adapters with profile fallback
+        // (extraction) keep the archive of the run they ingested.
+        $this->lastOutputArchive = $result['output_archive'] ?? null;
+
+        return ['status' => $result['status'], 'evidence' => $evidence, 'tool_output' => $result['tool_output'], 'stored_files' => $result['stored_files'] ?? [], 'output_archive' => $result['output_archive'] ?? null];
     }
 
     /**

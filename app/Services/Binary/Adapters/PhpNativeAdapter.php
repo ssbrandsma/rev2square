@@ -57,6 +57,10 @@ final class PhpNativeAdapter implements BinaryAdapter
             ProjectArtifact::FORMAT_IHEX,
             ProjectArtifact::FORMAT_SREC,
             ProjectArtifact::FORMAT_ARCHIVE,
+            // APK as a member container only (see ObjdumpAdapter):
+            // native-library members dispatch through the member
+            // flow; whole-package CPU targets are refused.
+            ProjectArtifact::FORMAT_APK,
         ];
     }
 

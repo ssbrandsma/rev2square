@@ -101,6 +101,12 @@ Route::post('/projects/{project}/artifacts/{artifact}/analyses/{analysis}/cancel
     ->middleware('auth')->name('projects.artifacts.analyses.cancel');
 Route::post('/projects/{project}/artifacts/{artifact}/analyses/{analysis}/retry', [BinaryAnalysisController::class, 'retry'])
     ->middleware('auth')->name('projects.artifacts.analyses.retry');
+Route::get('/projects/{project}/artifacts/{artifact}/analyses/{analysis}/download', [BinaryAnalysisController::class, 'download'])
+    ->middleware('auth')->name('projects.artifacts.analyses.download');
+Route::get('/projects/{project}/artifacts/{artifact}/analyses/{analysis}/source', [BinaryAnalysisController::class, 'source'])
+    ->middleware('auth')->name('projects.artifacts.analyses.source');
+Route::post('/projects/{project}/artifacts/{artifact}/analyses/{analysis}/regenerate', [BinaryAnalysisController::class, 'regenerate'])
+    ->middleware('auth')->name('projects.artifacts.analyses.regenerate');
 
 Route::get('/projects/{project}/reports/{report}', [ReportController::class, 'show'])
     ->name('projects.reports.show');

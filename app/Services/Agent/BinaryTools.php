@@ -380,6 +380,7 @@ final class BinaryTools
                 'status' => $run->status,
                 'progress' => $run->progress_note,
                 'error' => $run->error_message,
+                'output_retained' => $run->hasOutputArchive(),
             ])->all(),
         ], [], [$artifact->id]);
     }

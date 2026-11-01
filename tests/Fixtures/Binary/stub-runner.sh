@@ -14,6 +14,9 @@
 #                 (slow first-probe qualification analog), then exit
 #
 # Canned payloads arrive via env: STUB_EVIDENCE (json), STUB_TOOLOUT (text).
+# STUB_OUTPUT_ZIP names a file whose bytes are served as output.zip
+# (retained tool-output archive); the evidence metadata must carry
+# its name/size/hash for the coordinator to ingest it.
 # STUB_VERSION_NULL=1 makes probe mode answer tool_version:null (a runner
 # that proved liveness but whose version check failed): the coordinator
 # must accept that as a terminal verdict, never poll past it as pending.
@@ -58,6 +61,9 @@ case "$MODE" in
         printf '%s' "${STUB_EVIDENCE:-null}" > "$RESULTS/$JOBID/evidence.json"
         if [ -n "${STUB_TOOLOUT:-}" ]; then
             printf '%s' "$STUB_TOOLOUT" > "$RESULTS/$JOBID/tool.out"
+        fi
+        if [ -n "${STUB_OUTPUT_ZIP:-}" ] && [ -f "$STUB_OUTPUT_ZIP" ]; then
+            cp "$STUB_OUTPUT_ZIP" "$RESULTS/$JOBID/output.zip"
         fi
         printf '{"schema":1,"state":"done","exit_code":0}' > "$RESULTS/$JOBID/status.json"
         ;;

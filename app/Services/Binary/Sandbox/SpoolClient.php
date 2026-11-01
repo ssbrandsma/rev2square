@@ -19,6 +19,7 @@ use Illuminate\Support\Str;
  *     <job-id>/status.json     claimed/running/done/timeout/...
  *     <job-id>/evidence.json   bounded tool evidence
  *     <job-id>/tool.out        bounded raw text (objdump profile)
+ *     <job-id>/output.zip      retained tool-output tree (tree tools)
  *     <job-id>/cancel          coordinator-written cancel flag
  *
  * No argv, paths, mounts, or environment cross the boundary — only the
@@ -126,7 +127,7 @@ class SpoolClient
      * @param  array<string, mixed>  $params  scalar-only profile params
      * @param  array{wall_seconds: int}  $limits
      * @param  callable(): bool  $heartbeat
-     * @return array{status: array<string, mixed>, evidence: array<string, mixed>|null, tool_output: string|null, claim_dir: string}
+     * @return array{status: array<string, mixed>, evidence: array<string, mixed>|null, tool_output: string|null, claim_dir: string, stored_files: array<string, array{path: string, size: int, tmp: string}>, output_archive: array{tmp: string, sha256: string, bytes: int, files: int, files_seen: int, truncated: bool, reason: string|null}|null}
      *
      * @throws AnalysisFailedException
      */
@@ -232,8 +233,9 @@ class SpoolClient
                 }
             }
             $storedFiles = $this->collectStoredFiles($claimDir, $evidence);
+            $outputArchive = $this->collectOutputArchive($claimDir, $evidence);
 
-            return ['status' => $status, 'evidence' => $evidence, 'tool_output' => $toolOut, 'claim_dir' => $claimDir, 'stored_files' => $storedFiles];
+            return ['status' => $status, 'evidence' => $evidence, 'tool_output' => $toolOut, 'claim_dir' => $claimDir, 'stored_files' => $storedFiles, 'output_archive' => $outputArchive];
         } finally {
             if (! $cancelled) {
                 $this->cleanup($jobId);
@@ -262,7 +264,7 @@ class SpoolClient
         if (is_link($dir) || ! is_dir($dir)) {
             return;
         }
-        foreach (['job.json', 'status.json', 'evidence.json', 'tool.out', 'cancel'] as $known) {
+        foreach (['job.json', 'status.json', 'evidence.json', 'tool.out', 'output.zip', 'output.zip.tmp', 'cancel'] as $known) {
             if (is_file($dir.'/'.$known) && ! is_link($dir.'/'.$known)) {
                 @unlink($dir.'/'.$known);
             }
@@ -408,6 +410,55 @@ class SpoolClient
         }
 
         return $out;
+    }
+
+    /**
+     * Copy the retained tool-output archive out of the claim (which
+     * is cleaned up on return) into a coordinator temp file. Name,
+     * size, and hash are re-verified against the evidence metadata,
+     * and the coordinator-side byte cap applies: an oversized or
+     * mismatched archive yields null WITHOUT failing the run — the
+     * bounded evidence still stands, the run simply offers no
+     * download. Null also covers pre-archive runners, which omit
+     * the metadata entirely.
+     *
+     * @param  array<string, mixed>  $evidence
+     * @return array{tmp: string, sha256: string, bytes: int, files: int, files_seen: int, truncated: bool, reason: string|null}|null
+     */
+    private function collectOutputArchive(string $claimDir, array $evidence): ?array
+    {
+        $meta = $evidence['output_archive'] ?? null;
+        if (! is_array($meta)) {
+            return null;
+        }
+        $cap = max(1, (int) config('artifacts.binary_output_archive_max_bytes', 64 * 1024 * 1024));
+        $sha = $meta['sha256'] ?? null;
+        $bytes = $meta['bytes'] ?? null;
+        $files = $meta['files'] ?? null;
+        $seen = $meta['files_seen'] ?? null;
+        $reason = $meta['reason'] ?? null;
+        if (($meta['file'] ?? null) !== 'output.zip'
+            || ! is_string($sha) || preg_match('#^[0-9a-f]{64}$#', $sha) !== 1
+            || ! is_int($bytes) || $bytes <= 0 || $bytes > $cap
+            || ! is_int($files) || $files < 0
+            || ! is_int($seen) || $seen < 0 || $files > $seen
+            || ($reason !== null && (! is_string($reason) || strlen($reason) > 64))) {
+            return null;
+        }
+        $src = $claimDir.'/output.zip';
+        if (! is_file($src) || is_link($src) || @filesize($src) !== $bytes) {
+            return null;
+        }
+        $tmp = tempnam(sys_get_temp_dir(), 'rev2-spool-');
+        if ($tmp === false) {
+            return null;
+        }
+        if (@copy($src, $tmp) && hash_file('sha256', $tmp) === $sha) {
+            return ['tmp' => $tmp, 'sha256' => $sha, 'bytes' => $bytes, 'files' => $files, 'files_seen' => $seen, 'truncated' => (bool) ($meta['truncated'] ?? false), 'reason' => $reason];
+        }
+        @unlink($tmp);
+
+        return null;
     }
 
     private function readBounded(string $path, int $maxBytes): ?string

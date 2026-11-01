@@ -409,8 +409,8 @@ final class BinaryFixtures
         }
 
         if ($opts['so'] ?? false) {
-            $elf = (string) file_get_contents(__DIR__.'/../Fixtures/Artifacts/files/elf64-x86_64.elf');
-            $zip->addFromString('lib/arm64-v8a/libsynth.so', $elf);
+            $elf = $opts['so_bytes'] ?? (string) file_get_contents(__DIR__.'/../Fixtures/Artifacts/files/elf64-x86_64.elf');
+            $zip->addFromString($opts['so_name'] ?? 'lib/arm64-v8a/libsynth.so', $elf);
         }
 
         $zip->addFromString('resources.arsc', "\x02\x00\x0C\x00DUMMY-ARSC");

@@ -55,6 +55,20 @@ return [
     // Max analysis-evidence JSON kept per run (bytes).
     'binary_max_evidence_bytes' => (int) env('BINARY_MAX_EVIDENCE_BYTES', 512 * 1024),
 
+    // Max retained tool-output archive (output.zip, compressed bytes)
+    // the coordinator ingests per tree-producing run. The runner caps
+    // the uncompressed tree separately (runner.py
+    // MAX_ARCHIVE_UNCOMPRESSED_BYTES); this bounds what crosses into
+    // project storage. Runs whose archive exceeds this keep their
+    // bounded evidence but no download.
+    'binary_output_archive_max_bytes' => (int) env('BINARY_OUTPUT_ARCHIVE_MAX_BYTES', 64 * 1024 * 1024),
+
+    // Max entries listed per source-browser page and max bytes shown
+    // for one archived source file. Larger files stay downloadable
+    // but are not rendered inline.
+    'binary_source_browser_page' => (int) env('BINARY_SOURCE_BROWSER_PAGE', 100),
+    'binary_source_browser_max_bytes' => (int) env('BINARY_SOURCE_BROWSER_MAX_BYTES', 256 * 1024),
+
     // Wall-clock budget per analysis job (seconds).
     'binary_timeout_seconds' => (int) env('BINARY_ANALYSIS_TIMEOUT', 120),
 

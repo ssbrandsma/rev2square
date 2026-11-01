@@ -245,6 +245,9 @@ class ArtifactController extends Controller
             if ($analysis->evidencePath() !== null) {
                 $paths[] = $analysis->evidencePath();
             }
+            // Retained tool-output archives follow their run: one
+            // deterministic path per analysis, deleted with it.
+            $paths[] = $analysis->outputPath();
         }
         $disk->delete($paths);
         $artifact->delete();

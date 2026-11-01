@@ -310,6 +310,88 @@ class SpoolClientTest extends TestCase
         }
     }
 
+    private function outputZip(): string
+    {
+        $tmp = tempnam(sys_get_temp_dir(), 'rev2-zip-');
+        $zip = new \ZipArchive;
+        $zip->open($tmp, \ZipArchive::OVERWRITE | \ZipArchive::CREATE);
+        $zip->addFromString('sources/com/acme/Foo.java', 'package com.acme; class Foo{}');
+        $zip->addFromString('rev2square-output.json', '{"schema":1}');
+        $zip->close();
+
+        return $tmp;
+    }
+
+    public function test_run_collects_output_archive_with_verified_hash(): void
+    {
+        $zip = $this->outputZip();
+        $meta = ['file' => 'output.zip', 'sha256' => hash_file('sha256', $zip), 'bytes' => filesize($zip), 'files' => 1, 'files_seen' => 1, 'truncated' => false, 'reason' => null];
+        $this->startStub('ok', [
+            'STUB_EVIDENCE' => json_encode(['schema' => 1, 'tool' => 'jadx', 'exit_code' => 0, 'files' => [], 'inline' => [], 'truncated' => false, 'output_archive' => $meta]),
+            'STUB_OUTPUT_ZIP' => $zip,
+        ]);
+
+        $result = $this->client()->run('jadx', 'apk', ['threads' => 2], 'input.apk', 'PK bytes', ['wall_seconds' => 10], fn () => true);
+
+        $this->assertSame('done', $result['status']['state']);
+        $archive = $result['output_archive'];
+        $this->assertIsArray($archive);
+        $this->assertSame($meta['sha256'], $archive['sha256']);
+        $this->assertSame($meta['bytes'], $archive['bytes']);
+        $this->assertFileExists($archive['tmp']);
+        $this->assertSame($meta['sha256'], hash_file('sha256', $archive['tmp']));
+        @unlink($archive['tmp']);
+        @unlink($zip);
+        // The claim (including output.zip) is cleaned on return.
+        $this->assertSame(['.', '..'], scandir($this->spool));
+        $this->assertSame(['.', '..'], scandir($this->results));
+    }
+
+    public function test_run_discards_mismatched_archive_without_failing(): void
+    {
+        $zip = $this->outputZip();
+        $meta = ['file' => 'output.zip', 'sha256' => str_repeat('0', 64), 'bytes' => filesize($zip), 'files' => 1, 'files_seen' => 1, 'truncated' => false, 'reason' => null];
+        $this->startStub('ok', [
+            'STUB_EVIDENCE' => json_encode(['schema' => 1, 'tool' => 'jadx', 'exit_code' => 0, 'files' => [], 'inline' => [], 'truncated' => false, 'output_archive' => $meta]),
+            'STUB_OUTPUT_ZIP' => $zip,
+        ]);
+
+        $result = $this->client()->run('jadx', 'apk', [], 'input.apk', 'PK bytes', ['wall_seconds' => 10], fn () => true);
+
+        $this->assertSame('done', $result['status']['state']);
+        $this->assertNull($result['output_archive']);
+        @unlink($zip);
+    }
+
+    public function test_run_discards_oversized_archive_without_failing(): void
+    {
+        config(['artifacts.binary_output_archive_max_bytes' => 10]);
+        $zip = $this->outputZip();
+        $meta = ['file' => 'output.zip', 'sha256' => hash_file('sha256', $zip), 'bytes' => filesize($zip), 'files' => 1, 'files_seen' => 1, 'truncated' => false, 'reason' => null];
+        $this->startStub('ok', [
+            'STUB_EVIDENCE' => json_encode(['schema' => 1, 'tool' => 'jadx', 'exit_code' => 0, 'files' => [], 'inline' => [], 'truncated' => false, 'output_archive' => $meta]),
+            'STUB_OUTPUT_ZIP' => $zip,
+        ]);
+
+        $result = $this->client()->run('jadx', 'apk', [], 'input.apk', 'PK bytes', ['wall_seconds' => 10], fn () => true);
+
+        $this->assertSame('done', $result['status']['state']);
+        $this->assertNull($result['output_archive']);
+        @unlink($zip);
+    }
+
+    public function test_cleanup_removes_output_zip(): void
+    {
+        mkdir($this->results.'/zip-job', 0755, true);
+        file_put_contents($this->results.'/zip-job/status.json', '{}');
+        file_put_contents($this->results.'/zip-job/evidence.json', '{}');
+        file_put_contents($this->results.'/zip-job/output.zip', 'fake-zip');
+
+        $this->client()->cleanup('zip-job');
+
+        $this->assertDirectoryDoesNotExist($this->results.'/zip-job');
+    }
+
     public function test_cleanup_and_prune_remove_stale_only(): void
     {
         $client = $this->client();

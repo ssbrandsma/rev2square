@@ -56,6 +56,7 @@ class BinaryAnalysis extends Model
         'error_code',
         'error_message',
         'evidence_key',
+        'output_meta',
         'dedupe_key',
         'started_at',
         'finished_at',
@@ -66,6 +67,7 @@ class BinaryAnalysis extends Model
         return [
             'config' => 'array',
             'overrides' => 'array',
+            'output_meta' => 'array',
             'started_at' => 'datetime',
             'finished_at' => 'datetime',
         ];
@@ -109,6 +111,31 @@ class BinaryAnalysis extends Model
         }
 
         return $this->artifact->project_id.'/'.$this->evidence_key.'.analysis.json';
+    }
+
+    /**
+     * Deterministic retained-output path: one archive per run, so a
+     * regeneration overwrites instead of accumulating, and failure
+     * cleanup needs no key bookkeeping. Retention follows the row:
+     * artifact deletion removes the archive with the evidence.
+     */
+    public function outputPath(): string
+    {
+        return $this->artifact->project_id.'/analysis-'.$this->id.'.output.zip';
+    }
+
+    /**
+     * True only when coverage metadata is recorded AND the bytes are
+     * actually on disk: storage may be pruned while the row says
+     * retained, and the UI must not offer a dead download.
+     */
+    public function hasOutputArchive(): bool
+    {
+        if (! is_array($this->output_meta) || ($this->output_meta['sha256'] ?? null) === null) {
+            return false;
+        }
+
+        return Storage::disk('artifacts')->exists($this->outputPath());
     }
 
     /** @return array<string, mixed>|null */

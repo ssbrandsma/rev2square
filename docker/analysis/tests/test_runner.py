@@ -712,7 +712,12 @@ class RunnerCase(unittest.TestCase):
         self.assertTrue(truncated)
         self.assertTrue(budget["manifest_omitted"] > 0)
         self.assertTrue(budget["excerpt_count"] > 0)
-        self.assertTrue(budget["binary_skipped"] >= 1)
+        # Sources-first: with 3000 sources for 2000 manifest slots,
+        # every retained entry is a source — the binaries lose their
+        # manifest slots (omitted, never silently dropped) instead
+        # of crowding sources out.
+        self.assertTrue(
+            all(m["path"].endswith(".java") for m in manifest))
         self.assertTrue(budget["depth_pruned"])
         self.assertEqual(budget["symlink_skipped"], 1)
         self._reconciles(budget, manifest, inline)
@@ -834,6 +839,219 @@ class RunnerCase(unittest.TestCase):
         self.assertEqual(inline["resources/assets/page.html"], html)
         self._reconciles(budget, manifest, inline)
 
+    def test_tree_evidence_prefers_sources_over_resources(self):
+        # Production run #5 showed the failure mode: a pure
+        # lexicographic walk lets resources/ starve sources/ out of
+        # the manifest budget (2000 entries = 1200 resources + 800
+        # sources retained, 400 sources omitted). Sources must win
+        # every budget first: decompiled code is the evidence, the
+        # resource listing is the index.
+        outdir = os.path.join(self.tmp, "mixed")
+        srcdir = os.path.join(outdir, "sources", "com", "app")
+        resdir = os.path.join(outdir, "resources", "res")
+        os.makedirs(srcdir)
+        os.makedirs(resdir)
+        java_paths = []
+        for i in range(100):
+            rel = "sources/com/app/C%03d.java" % i
+            java_paths.append(rel)
+            with open(os.path.join(outdir, rel), "w") as fh:
+                fh.write("package com.app;\npublic class C%03d {}\n" % i)
+        for i in range(300):
+            with open(os.path.join(resdir, "v%03d.xml" % i),
+                      "w") as fh:
+                fh.write("<v>%d</v>\n" % i)
+        old_max = runner.MAX_MANIFEST_FILES
+        runner.MAX_MANIFEST_FILES = 150
+        try:
+            r = runner.Runner("jadx", self.spool, self.results)
+            manifest, inline, truncated, budget = r._collect_tree(outdir)
+        finally:
+            runner.MAX_MANIFEST_FILES = old_max
+        self.assertTrue(truncated)
+        kept = {m["path"] for m in manifest}
+        # Every source survives; resources fill what is left.
+        for rel in java_paths:
+            self.assertIn(rel, kept)
+        self.assertEqual(len(manifest), 150)
+        for rel in java_paths:
+            self.assertIn(rel, inline)
+        self._reconciles(budget, manifest, inline)
+
+    def test_archive_tree_retains_complete_output(self):
+        # The retained archive carries the COMPLETE tree the bounded
+        # evidence only samples: sources, resources, and binaries,
+        # plus a provenance file with honest coverage. Symlinks are
+        # never archived (counted, like everywhere else).
+        outdir = os.path.join(self.tmp, "tree")
+        os.makedirs(os.path.join(outdir, "sources", "com"))
+        os.makedirs(os.path.join(outdir, "resources"))
+        with open(os.path.join(outdir, "sources", "com", "A.java"),
+                  "w") as fh:
+            fh.write("class A{}\n")
+        with open(os.path.join(outdir, "resources",
+                               "AndroidManifest.xml"), "w") as fh:
+            fh.write("<manifest/>\n")
+        with open(os.path.join(outdir, "resources", "icon.png"),
+                  "wb") as fh:
+            fh.write(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
+        os.symlink("sources", os.path.join(outdir, "escape"))
+        r = runner.Runner("jadx", self.spool, self.results)
+        claimdir = os.path.join(self.results, "zip")
+        os.makedirs(claimdir)
+        meta = r._archive_tree(outdir, claimdir, "apk", 0)
+        blob = os.path.join(claimdir, "output.zip")
+        self.assertTrue(os.path.isfile(blob))
+        with open(blob, "rb") as fh:
+            digest = hashlib.sha256(fh.read()).hexdigest()
+        self.assertEqual(digest, meta["sha256"])
+        self.assertEqual(meta["file"], "output.zip")
+        self.assertEqual(meta["files"], 3)
+        self.assertEqual(meta["files_seen"], 3)
+        self.assertFalse(meta["truncated"])
+        self.assertIsNone(meta["reason"])
+        import zipfile
+        with zipfile.ZipFile(blob) as zf:
+            names = zf.namelist()
+            self.assertEqual(
+                sorted(names),
+                ["resources/AndroidManifest.xml",
+                 "resources/icon.png",
+                 "rev2square-output.json",
+                 "sources/com/A.java"])
+            self.assertEqual(zf.read("sources/com/A.java"),
+                             b"class A{}\n")
+            for info in zf.infolist():
+                self.assertEqual(info.external_attr >> 16, 0o644)
+                self.assertEqual(info.date_time,
+                                 runner.ARCHIVE_ENTRY_DATE)
+            provenance = json.loads(
+                zf.read("rev2square-output.json").decode("utf-8"))
+        self.assertEqual(provenance["tool"], "jadx")
+        self.assertEqual(provenance["profile"], "apk")
+        self.assertIn("not the original source",
+                      provenance["warning"])
+        coverage = provenance["coverage"]
+        self.assertEqual(coverage["files_seen"], 3)
+        self.assertEqual(coverage["files_archived"], 3)
+        self.assertEqual(coverage["symlink_skipped"], 1)
+        self.assertFalse(coverage["truncated"])
+        # Deterministic content: a second archive carries identical
+        # entry bytes, names, modes, and dates (only the archived_at
+        # provenance timestamp differs, as data, not bytes).
+        before = int(time.time())
+        claimdir2 = os.path.join(self.results, "zip2")
+        os.makedirs(claimdir2)
+        r._archive_tree(outdir, claimdir2, "apk", 0)
+        with zipfile.ZipFile(blob) as first, zipfile.ZipFile(
+                os.path.join(claimdir2, "output.zip")) as second:
+            snap = lambda zf: sorted(
+                (i.filename, i.date_time, i.external_attr,
+                 zf.read(i.filename))
+                for i in zf.infolist()
+                if i.filename != "rev2square-output.json")
+            self.assertEqual(snap(first), snap(second))
+            stamped = json.loads(second.read(
+                "rev2square-output.json").decode("utf-8"))
+            self.assertGreaterEqual(stamped["archived_at"], before)
+            self.assertLessEqual(stamped["archived_at"],
+                                 int(time.time()))
+
+    def test_archive_tree_caps_shed_binaries_first(self):
+        # Archive caps are explicit and sources-first: when the file
+        # cap bites, binaries are omitted before code, and the reason
+        # names the cap so the UI never presents it as complete.
+        outdir = os.path.join(self.tmp, "cap")
+        os.makedirs(os.path.join(outdir, "sources"))
+        os.makedirs(os.path.join(outdir, "resources"))
+        for i in range(5):
+            with open(os.path.join(outdir, "sources", "C%d.java" % i),
+                      "w") as fh:
+                fh.write("class C%d{}\n" % i)
+        for i in range(5):
+            with open(os.path.join(outdir, "resources",
+                                   "i%d.png" % i), "wb") as fh:
+                fh.write(b"\x89PNG" + bytes([i]) * 50)
+        old_max = runner.MAX_ARCHIVE_FILES
+        runner.MAX_ARCHIVE_FILES = 4
+        try:
+            r = runner.Runner("jadx", self.spool, self.results)
+            claimdir = os.path.join(self.results, "zipcap")
+            os.makedirs(claimdir)
+            meta = r._archive_tree(outdir, claimdir, "apk", 0)
+        finally:
+            runner.MAX_ARCHIVE_FILES = old_max
+        self.assertEqual(meta["files"], 4)
+        self.assertEqual(meta["files_seen"], 10)
+        self.assertTrue(meta["truncated"])
+        self.assertEqual(meta["reason"], "file_cap_reached")
+        import zipfile
+        with zipfile.ZipFile(
+                os.path.join(claimdir, "output.zip")) as zf:
+            names = [n for n in zf.namelist()
+                     if n != "rev2square-output.json"]
+            # All four slots went to sources: nothing shed but pngs.
+            self.assertTrue(all(n.endswith(".java") for n in names))
+            provenance = json.loads(
+                zf.read("rev2square-output.json").decode("utf-8"))
+        self.assertTrue(provenance["coverage"]["truncated"])
+        self.assertEqual(provenance["coverage"]["reason"],
+                         "file_cap_reached")
+
+    def test_archive_tree_byte_cap_is_explicit(self):
+        outdir = os.path.join(self.tmp, "bytecap")
+        os.makedirs(outdir)
+        with open(os.path.join(outdir, "A.java"), "w") as fh:
+            fh.write("class A{}\n")
+        with open(os.path.join(outdir, "big.bin"), "wb") as fh:
+            fh.write(b"\x00" * 4096)
+        old_max = runner.MAX_ARCHIVE_UNCOMPRESSED_BYTES
+        runner.MAX_ARCHIVE_UNCOMPRESSED_BYTES = 100
+        try:
+            r = runner.Runner("jadx", self.spool, self.results)
+            claimdir = os.path.join(self.results, "zipbyte")
+            os.makedirs(claimdir)
+            meta = r._archive_tree(outdir, claimdir, "apk", 0)
+        finally:
+            runner.MAX_ARCHIVE_UNCOMPRESSED_BYTES = old_max
+        # Sources-first: the small source fits, the binary trips the
+        # byte cap, and the metadata says exactly that.
+        self.assertEqual(meta["files"], 1)
+        self.assertEqual(meta["files_seen"], 2)
+        self.assertTrue(meta["truncated"])
+        self.assertEqual(meta["reason"], "byte_cap_reached")
+        import zipfile
+        with zipfile.ZipFile(
+                os.path.join(claimdir, "output.zip")) as zf:
+            self.assertIn("A.java", zf.namelist())
+            self.assertNotIn("big.bin", zf.namelist())
+
+    def test_collect_writes_output_archive(self):
+        # End to end through a stub tool: the claim carries evidence
+        # AND the retained archive, with the evidence hash matching
+        # the zip bytes.
+        os.environ["JADX_BIN"] = self.stub(
+            "jadx",
+            "mkdir -p \"$4\"/sources\n"
+            "printf 'class T{}\\n' > \"$4\"/sources/T.java\n")
+        self.submit("jadx", profile="apk", params={"threads": 1})
+        self.run_once("jadx")
+        self.assertEqual(self.claim("job1")["state"], "done")
+        with open(os.path.join(self.results, "job1",
+                               "evidence.json")) as fh:
+            evidence = json.load(fh)
+        archive = evidence["output_archive"]
+        blob = os.path.join(self.results, "job1", archive["file"])
+        self.assertTrue(os.path.isfile(blob))
+        with open(blob, "rb") as fh:
+            digest = hashlib.sha256(fh.read()).hexdigest()
+        self.assertEqual(digest, archive["sha256"])
+        self.assertEqual(os.path.getsize(blob), archive["bytes"])
+        import zipfile
+        with zipfile.ZipFile(blob) as zf:
+            self.assertIn("sources/T.java", zf.namelist())
+            self.assertIn("rev2square-output.json", zf.namelist())
+
     def test_tree_evidence_small_tree_complete(self):
         # Small outputs keep the old complete behavior: everything
         # retained, truncated false, counts exact.
@@ -848,6 +1066,28 @@ class RunnerCase(unittest.TestCase):
         self.assertEqual(budget["manifest_retained"], 1)
         self.assertEqual(budget["inline_full"], 1)
         self.assertEqual(inline["sources/A.java"], "class A{}\n")
+        self._reconciles(budget, manifest, inline)
+
+    def test_tree_evidence_binary_retained_as_reference(self):
+        # A retained binary counts as binary_skipped (manifest keeps
+        # the reference; inline was never promised), never as a
+        # content omission — and a binary alone never truncates.
+        outdir = os.path.join(self.tmp, "withbin")
+        os.makedirs(os.path.join(outdir, "sources"))
+        os.makedirs(os.path.join(outdir, "resources"))
+        with open(os.path.join(outdir, "sources", "A.java"), "w") as fh:
+            fh.write("class A{}\n")
+        with open(os.path.join(outdir, "resources", "icon.png"),
+                  "wb") as fh:
+            fh.write(b"\x89PNG\r\n\x1a\n\xff\xfe\x00binary")
+        r = runner.Runner("jadx", self.spool, self.results)
+        manifest, inline, truncated, budget = r._collect_tree(outdir)
+        self.assertFalse(truncated)
+        self.assertEqual(budget["files_seen"], 2)
+        self.assertEqual(budget["manifest_retained"], 2)
+        self.assertEqual(budget["binary_skipped"], 1)
+        self.assertEqual(budget["content_omitted"], 0)
+        self.assertEqual(inline, {"sources/A.java": "class A{}\n"})
         self._reconciles(budget, manifest, inline)
 
     def test_probe_answer_atomic_no_tmp_residue(self):
@@ -1049,6 +1289,62 @@ class RealJadxCase(unittest.TestCase):
         self.assertLessEqual(
             os.path.getsize(os.path.join(claimdir, "evidence.json")),
             runner.MAX_EVIDENCE_BYTES)
+        # The retained archive keeps what the bounded evidence
+        # sampled: every real jadx output file, with honest
+        # coverage, from the same real tree.
+        meta = r._archive_tree(outdir, claimdir, "apk", 0)
+        blob = os.path.join(claimdir, "output.zip")
+        self.assertTrue(os.path.isfile(blob))
+        with open(blob, "rb") as fh:
+            digest = hashlib.sha256(fh.read()).hexdigest()
+        self.assertEqual(digest, meta["sha256"])
+        self.assertEqual(meta["files"], meta["files_seen"])
+        self.assertGreaterEqual(meta["files"], 1500)
+        self.assertFalse(meta["truncated"])
+        import zipfile
+        with zipfile.ZipFile(blob) as zf:
+            names = zf.namelist()
+            self.assertTrue(any(n.endswith("Widget0.java")
+                               for n in names))
+            self.assertIn("rev2square-output.json", names)
+            provenance = json.loads(
+                zf.read("rev2square-output.json").decode("utf-8"))
+        self.assertEqual(provenance["coverage"]["files_archived"],
+                         meta["files"])
+        self.assertFalse(provenance["coverage"]["truncated"])
+
+    def test_real_fixture_archive_complete(self):
+        # Fast real-tier archive proof on the smoke fixture: real
+        # jadx output (sources/ + resources/) archives completely
+        # with the FixtureSmoketest class inside.
+        workdir = os.path.join(self.tmp, "zipwork")
+        os.makedirs(workdir)
+        argv = runner.build_argv("jadx", "apk", {"threads": 1},
+                                workdir, self.fixture)
+        proc = subprocess.run(
+            argv, stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            cwd=workdir, timeout=300,
+            env=runner.tool_env("jadx", workdir))
+        self.assertEqual(proc.returncode, 0, "real jadx failed")
+        outdir = os.path.join(workdir, "jadx-out")
+        r = runner.Runner("jadx", self.tmp, self.tmp)
+        claimdir = os.path.join(self.tmp, "zipclaim")
+        os.makedirs(claimdir)
+        meta = r._archive_tree(outdir, claimdir, "apk", 0)
+        self.assertFalse(meta["truncated"])
+        self.assertEqual(meta["files"], meta["files_seen"])
+        import zipfile
+        with zipfile.ZipFile(
+                os.path.join(claimdir, "output.zip")) as zf:
+            names = zf.namelist()
+            javas = [n for n in names if n.endswith(".java")]
+            self.assertTrue(javas)
+            found = any(runner.FIXTURE_MARKER in zf.read(n).decode(
+                "utf-8", "replace") for n in javas)
+            self.assertTrue(
+                found, "no archived .java contains %r (entries: %r)"
+                % (runner.FIXTURE_MARKER, names[:10]))
 
     def test_real_scoping_survives_readonly_home(self):
         # Production runs on a read-only root where the

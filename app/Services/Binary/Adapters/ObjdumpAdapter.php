@@ -77,6 +77,11 @@ final class ObjdumpAdapter extends SandboxedBackend
             ProjectArtifact::FORMAT_IHEX,
             ProjectArtifact::FORMAT_SREC,
             ProjectArtifact::FORMAT_ARCHIVE,
+            // APK as a member container only: whole-package CPU
+            // targets are refused by TargetResolver (an APK is a
+            // Dalvik package, not machine code); native-library
+            // members dispatch through the member flow.
+            ProjectArtifact::FORMAT_APK,
         ];
     }
 

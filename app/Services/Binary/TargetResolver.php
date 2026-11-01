@@ -36,7 +36,11 @@ final class TargetResolver
         // the snapshot already proves (existence, method, size).
         $member = is_string($input['member'] ?? null) && $input['member'] !== '' ? $input['member'] : null;
         $memberSize = null;
-        if ($format === ProjectArtifact::FORMAT_ARCHIVE && $member !== null) {
+        // APKs double as member containers for native libraries:
+        // checkMember reads the same data.members census the APK
+        // parser writes, and the member's real format is detected
+        // from bytes at job time, exactly like archives.
+        if (in_array($format, [ProjectArtifact::FORMAT_ARCHIVE, ProjectArtifact::FORMAT_APK], true) && $member !== null) {
             $checked = self::checkMember($member, $snapshot);
             if (! ($checked['ok'] ?? false)) {
                 return ['ok' => false, 'errors' => [$checked['error']]];
@@ -46,6 +50,10 @@ final class TargetResolver
         }
         if ($format === ProjectArtifact::FORMAT_ARCHIVE && $member === null && $structural === null) {
             return ['ok' => false, 'errors' => ['This archive has no whole-file processor target. Select the archive member to analyze, plus its exact processor target.']];
+        }
+        if ($format === ProjectArtifact::FORMAT_APK && $member === null && $requested !== null
+            && ! in_array($requested, ['dalvik', 'jvm', 'extract'], true)) {
+            return ['ok' => false, 'errors' => ['Processor target “'.$requested.'” applies to a native library inside this APK, not the package itself. Open a JADX run and choose “Analyze” on one library.']];
         }
 
         // Raw images and address-only formats have no structural

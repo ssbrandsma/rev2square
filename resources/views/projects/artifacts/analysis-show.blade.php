@@ -42,6 +42,39 @@
             </div>
         </section>
 
+        @if($analysis->isUsable())
+            <section class="mt-6 rounded-xl border border-zinc-200 bg-white p-6">
+                <h2 class="font-semibold">Reconstructed output</h2>
+                @if($analysis->hasOutputArchive() && is_array($analysis->output_meta))
+                    @php($outputMeta = $analysis->output_meta)
+                    <p class="mt-1 text-sm text-zinc-600">
+                        Retained {{ number_format((int) ($outputMeta['files'] ?? 0)) }} of {{ number_format((int) ($outputMeta['files_seen'] ?? 0)) }} generated files ({{ number_format((int) ($outputMeta['bytes'] ?? 0)) }} bytes archived).
+                        @if(! empty($outputMeta['truncated']))
+                            <span class="font-semibold text-amber-700">Incomplete: {{ ['file_cap_reached' => 'the retention file cap (20,000 files) was reached', 'byte_cap_reached' => 'the retention size cap (128 MiB uncompressed) was reached', 'no_tool_output' => 'the tool produced no output tree'][$outputMeta['reason'] ?? ''] ?? ($outputMeta['reason'] ?? 'part of the output was omitted') }}. Sources were kept first; binaries were shed first.</span>
+                        @else
+                            Complete: every generated file is in the archive.
+                        @endif
+                    </p>
+                    <p class="mt-1 font-mono text-xs text-zinc-500">SHA-256 {{ $outputMeta['sha256'] ?? '?' }}</p>
+                    <div class="mt-3 flex flex-wrap gap-2">
+                        <a href="{{ route('projects.artifacts.analyses.download', [$project, $artifact, $analysis]) }}" class="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500">Download reconstructed sources (.zip)</a>
+                        <a href="{{ route('projects.artifacts.analyses.source', [$project, $artifact, $analysis]) }}" class="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-semibold text-zinc-700 hover:bg-zinc-50">Browse sources</a>
+                    </div>
+                @else
+                    <p class="mt-1 text-sm text-zinc-600">No downloadable output was retained for this run — it predates output retention, its archive was discarded by the coordinator cap, or storage was pruned. The bounded evidence below still stands.</p>
+                    <div class="mt-3 flex flex-wrap gap-2">
+                        @if(! empty($evidence['reconstruction']['files'] ?? $evidence['extraction']['files'] ?? []))
+                            <a href="{{ route('projects.artifacts.analyses.source', [$project, $artifact, $analysis]) }}" class="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-semibold text-zinc-700 hover:bg-zinc-50">Browse evidence listing</a>
+                        @endif
+                        <form method="POST" action="{{ route('projects.artifacts.analyses.regenerate', [$project, $artifact, $analysis]) }}">
+                            @csrf
+                            <button type="submit" class="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-semibold text-zinc-700 hover:bg-zinc-50" title="Queues a fresh run that retains downloadable output. This replaces the current results.">Regenerate with downloadable output</button>
+                        </form>
+                    </div>
+                @endif
+            </section>
+        @endif
+
         @if($evidence !== null)
             <p class="mt-6 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">Reconstructed code; not the original source. Names, types and control flow may be incomplete or incorrect.</p>
 
@@ -78,7 +111,11 @@
                             <span class="text-zinc-500">[{{ $function['source'] }}@if($function['size'] !== null), ~{{ $function['size'] }} bytes @endif]</span>
                         </li>
                     @empty
-                        <li class="font-sans text-sm text-zinc-500">No functions discovered.</li>
+                        @if(in_array($analysis->adapter, ['jadx', 'ilspy'], true))
+                            <li class="font-sans text-sm text-zinc-500">No function table: {{ $analysis->adapter === 'jadx' ? 'JADX reconstructs Java sources' : 'ILSpy reconstructs C# sources' }} rather than machine-code functions. Browse the sources above; native libraries (if any) need a separate CPU run.</li>
+                        @else
+                            <li class="font-sans text-sm text-zinc-500">No functions discovered.</li>
+                        @endif
                     @endforelse
                 </ul>
             </section>
@@ -131,6 +168,53 @@
                             <li>{{ $file['path'] }} <span class="text-zinc-500">· {{ number_format($file['size']) }} bytes</span></li>
                         @endforeach
                     </ul>
+                    <p class="mt-2 text-sm"><a href="{{ route('projects.artifacts.analyses.source', [$project, $artifact, $analysis]) }}" class="font-semibold text-emerald-700 hover:underline">Browse all indexed files with search →</a></p>
+                </section>
+            @endif
+
+            @if($analysis->adapter === 'jadx' && ($snapshot['data']['native_libs'] ?? []) !== [])
+                @php($nativeLibs = $snapshot['data']['native_libs'])
+                @php($nativeLibCount = (int) ($snapshot['data']['native_lib_count'] ?? count($nativeLibs)))
+                <section class="mt-6 rounded-xl border border-zinc-200 bg-white p-6">
+                    <h2 class="font-semibold">Native libraries ({{ count($nativeLibs) }}@if($nativeLibCount > count($nativeLibs)) of {{ $nativeLibCount }}@endif)</h2>
+                    <p class="mt-1 text-xs text-zinc-500">DEX→Java reconstruction above does not cover native code. Each library below can be analyzed explicitly as machine code — nothing here was analyzed automatically. Cross-architecture targets are refused; ARM and Thumb stay switchable.</p>
+                    @php($libsByAbi = [])
+                    @foreach($nativeLibs as $lib)
+                        @php($libsByAbi[$lib['abi'] ?? 'unknown'][] = $lib)
+                    @endforeach
+                    @foreach($libsByAbi as $abi => $libs)
+                        <h3 class="mt-3 font-mono text-xs font-semibold text-zinc-500">ABI {{ $abi }} ({{ count($libs) }})</h3>
+                        <div class="mt-1 space-y-3">
+                        @foreach($libs as $lib)
+                            <div class="rounded-lg border border-zinc-200 p-3">
+                                <p class="font-mono text-xs font-semibold">{{ $lib['name'] ?? '?' }}</p>
+                                <p class="mt-0.5 font-mono text-xs text-zinc-500">ABI {{ $lib['abi'] ?? 'unknown' }} · {{ number_format((int) ($lib['size'] ?? 0)) }} bytes · @if(! empty($lib['ok']))ELF, {{ $lib['arch'] ?? 'unknown arch' }}@else not analyzable as ELF ({{ $lib['error'] ?? 'unknown' }})@endif</p>
+                                @if(! empty($lib['ok']))
+                                    <form method="POST" action="{{ route('projects.artifacts.analyses.store', [$project, $artifact]) }}" class="mt-2 flex flex-wrap items-end gap-2">
+                                        @csrf
+                                        <input type="hidden" name="member" value="{{ $lib['name'] }}" />
+                                        <label class="block text-xs">Target
+                                            <select name="target" required class="mt-1 block rounded-lg border border-zinc-300 px-2 py-1.5 font-mono text-xs">
+                                                <option value="">— select target —</option>
+                                                @foreach($cpuTargets as $cpuTarget)
+                                                    <option value="{{ $cpuTarget['id'] }}" @selected(($lib['arch'] ?? null) === $cpuTarget['id'])>{{ $cpuTarget['name'] }} ({{ $cpuTarget['id'] }})@if(($lib['arch'] ?? null) === $cpuTarget['id']) — suggested from ELF header@endif</option>
+                                                @endforeach
+                                            </select>
+                                        </label>
+                                        <label class="block text-xs">Backend
+                                            <select name="adapter" class="mt-1 block rounded-lg border border-zinc-300 px-2 py-1.5 text-xs">
+                                                <option value="">Auto (recommended)</option>
+                                                <option value="objdump">Objdump (isolated)</option>
+                                                <option value="php-native">PHP (bundled)</option>
+                                            </select>
+                                        </label>
+                                        <button type="submit" class="rounded-lg border border-zinc-300 px-3 py-1.5 text-xs font-semibold text-zinc-700 hover:bg-zinc-50">Analyze this library</button>
+                                    </form>
+                                @endif
+                            </div>
+                        @endforeach
+                        </div>
+                    @endforeach
                 </section>
             @endif
 
@@ -185,7 +269,11 @@
                     @forelse($evidence['xrefs'] ?? [] as $xref)
                         <li>{{ sprintf('0x%x', $xref['from']) }} → {{ sprintf('0x%x', $xref['to']) }} [{{ $xref['kind'] }}]</li>
                     @empty
-                        <li class="font-sans text-sm text-zinc-500">No references recorded.</li>
+                        @if(in_array($analysis->adapter, ['jadx', 'ilspy'], true))
+                            <li class="font-sans text-sm text-zinc-500">No call graph: {{ $analysis->adapter === 'jadx' ? 'JADX' : 'ILSpy' }} reconstructions carry no cross-reference table. The sources above are the findings.</li>
+                        @else
+                            <li class="font-sans text-sm text-zinc-500">No references recorded.</li>
+                        @endif
                     @endforelse
                 </ul>
             </details>
