@@ -21,7 +21,9 @@ import { resolveChannels } from '../channel-refresh.js';
     }
 
     function setState(box, text) {
-        setCollapsed(box, false);
+        // Content only: visibility is decided by the caller. Empty and
+        // pending rosters stay collapsed; only the denied-access notice
+        // is ever shown as panel content.
         const list = box.querySelector('[data-presence-list]');
         if (list) {
             list.innerHTML = `<p class="text-sm text-zinc-500" data-presence-state>${escapeHtml(text)}</p>`;
@@ -51,8 +53,8 @@ import { resolveChannels } from '../channel-refresh.js';
 
     function initRoster(box) {
         const echo = realtime();
+        setCollapsed(box, true);
         if (!echo) {
-            setState(box, 'Presence is unavailable right now.');
             return;
         }
 
@@ -61,10 +63,7 @@ import { resolveChannels } from '../channel-refresh.js';
             return;
         }
 
-        setState(box, 'Loading presence…');
-
         const members = new Map();
-        let settled = false;
         let channelName = null;
         let lastErrorChannel = null;
 
@@ -79,7 +78,6 @@ import { resolveChannels } from '../channel-refresh.js';
                 } catch (_) {}
                 untrackPresenceChannel(channelName);
                 members.clear();
-                settled = false;
             }
 
             channelName = name.replace(/^presence-/, '');
@@ -90,12 +88,11 @@ import { resolveChannels } from '../channel-refresh.js';
                 channel = echo.join(channelName);
                 trackPresenceChannel(channelName);
             } catch (_) {
-                setState(box, 'Presence is unavailable right now.');
+                setCollapsed(box, true);
                 return;
             }
 
             channel.here((initial) => {
-                settled = true;
                 (initial ?? []).forEach((member) => {
                     const info = member.info ?? member;
                     const id = String(member.id ?? info.id);
@@ -135,20 +132,17 @@ import { resolveChannels } from '../channel-refresh.js';
                         subscribe(resolved.channels.presence);
                     } else if (resolved.status === 'denied') {
                         setState(box, 'Presence is unavailable: you no longer have access here.');
+                        setCollapsed(box, false);
                     } else {
-                        setState(box, 'Presence is unavailable right now — this may mean you opted out, or the connection dropped.');
+                        // Opted out, still settling, or connection trouble:
+                        // the effective roster is empty, so stay collapsed.
+                        setCollapsed(box, true);
                     }
                 });
             });
         }
 
         subscribe(initialName);
-
-        setTimeout(() => {
-            if (!settled) {
-                setState(box, 'Presence is unavailable right now.');
-            }
-        }, 10000);
     }
 
     document.addEventListener('DOMContentLoaded', () => {

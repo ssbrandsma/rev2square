@@ -90,13 +90,12 @@
     </div>
 
     @auth
-    <aside class="lg:col-span-1">
+    <aside class="hidden lg:col-span-1">
         <div class="rounded-xl border border-zinc-200 bg-white p-5" data-presence-roster data-channel="presence-{{ $presenceChannel }}" data-channels-url="{{ $channelsUrl }}">
             <h2 class="text-sm font-semibold text-zinc-500">Here now</h2>
             <div data-presence-list class="mt-3">
-                <p class="text-sm text-zinc-500" data-presence-state>Loading…</p>
+                <p class="text-sm text-zinc-500" data-presence-state></p>
             </div>
-            <p class="mt-3 text-xs text-zinc-500">Only members who opted in to presence appear here. <a href="{{ route('profile.edit') }}" class="font-semibold text-emerald-700 hover:text-emerald-600">Presence settings</a></p>
         </div>
     </aside>
     @endauth

@@ -26,7 +26,7 @@ class ChatController extends Controller
         return view('chat.lounge', [
             'messages' => $this->recent(ChatMessage::loungeRoom()),
             'room' => ChatMessage::loungeRoom(),
-            'roomLabel' => 'Community lounge',
+            'roomLabel' => 'Community',
             'project' => null,
             'channel' => ChatMessage::loungeChannel(),
             'presenceChannel' => ChannelNames::loungeRoster(RealtimeEpoch::current()),
@@ -167,7 +167,7 @@ class ChatController extends Controller
                 ->orWhereHas('offers', fn ($query) => $query->where('user_id', $user->id)))
             ->pluck('id');
 
-        $rooms = collect([['room' => ChatMessage::loungeRoom(), 'label' => 'Community lounge', 'url' => route('lounge')]]);
+        $rooms = collect([['room' => ChatMessage::loungeRoom(), 'label' => 'Community', 'url' => route('lounge')]]);
 
         $projects = Project::whereIn('id', $projectIds)->orderBy('title')->take(12)->get();
         foreach ($projects as $project) {

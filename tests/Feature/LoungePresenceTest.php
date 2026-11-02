@@ -17,9 +17,10 @@ class LoungePresenceTest extends TestCase
         $html = $this->get(route('lounge'))->assertOk()->getContent();
 
         $this->assertSame(1, substr_count($html, '<h1'));
-        $this->assertStringContainsString('>Community lounge</h1>', $html);
+        $this->assertStringContainsString('>Community</h1>', $html);
+        $this->assertStringNotContainsString('Community lounge', $html);
         $this->assertStringContainsString('Say hello, ask around, find a project.', $html);
-        $this->assertStringContainsString('<title>Community lounge — Rev²Square</title>', $html);
+        $this->assertStringContainsString('<title>Community — Rev²Square</title>', $html);
     }
 
     public function test_presence_panel_lists_no_member_names_server_side(): void
@@ -32,19 +33,24 @@ class LoungePresenceTest extends TestCase
 
         $this->assertStringContainsString('Here now', $html);
         $this->assertStringContainsString('data-presence-list', $html);
-        $this->assertStringContainsString('Loading…', $html);
+        $this->assertStringContainsString('data-presence-state', $html);
+        $this->assertStringContainsString('<aside class="hidden', $html);
+        $this->assertStringNotContainsString('Loading…', $html);
         $this->assertStringNotContainsString('Signing you in', $html);
         $this->assertStringNotContainsString('Opted In Friend', $html);
         $this->assertStringNotContainsString('Opted Out Stranger', $html);
-        $this->assertStringContainsString('Only members who opted in to presence appear here.', $html);
-        $this->assertStringContainsString('Presence settings', $html);
+        $this->assertStringNotContainsString('Only members who opted in to presence appear here.', $html);
+        $this->assertStringNotContainsString('Presence settings', $html);
 
         $project = Project::factory()->create(['publication_status' => PublicationStatus::Published]);
         $room = $this->actingAs($viewer)->get(route('projects.chat.show', $project))->assertOk()->getContent();
 
         $this->assertStringContainsString('Here now', $room);
+        $this->assertStringContainsString('<aside class="hidden', $room);
         $this->assertStringNotContainsString('Opted In Friend', $room);
         $this->assertStringNotContainsString('Opted Out Stranger', $room);
+        $this->assertStringNotContainsString('Only members who opted in to presence appear here.', $room);
+        $this->assertStringNotContainsString('Presence settings', $room);
     }
 
     public function test_chat_picker_labels_match_room_headings(): void
@@ -58,11 +64,12 @@ class LoungePresenceTest extends TestCase
 
         $rooms = $this->actingAs($user)->getJson(route('chat.unread'))->assertOk()->json('rooms');
 
-        $this->assertSame('Community lounge', collect($rooms)->firstWhere('room', 'lounge')['label']);
+        $this->assertSame('Community', collect($rooms)->firstWhere('room', 'lounge')['label']);
         $this->assertSame('Signal Revival chat', collect($rooms)->firstWhere('room', 'project.'.$project->id)['label']);
 
         $lounge = $this->actingAs($user)->get(route('lounge'))->assertOk()->getContent();
-        $this->assertStringContainsString('>Community lounge</h1>', $lounge);
+        $this->assertStringContainsString('>Community</h1>', $lounge);
+        $this->assertStringNotContainsString('Community lounge', $lounge);
         $room = $this->actingAs($user)->get(route('projects.chat.show', $project))->assertOk()->getContent();
         $this->assertStringContainsString('>Signal Revival chat</h1>', $room);
     }
@@ -87,9 +94,11 @@ class LoungePresenceTest extends TestCase
         $this->assertStringNotContainsString('Away', $roster);
         $this->assertStringNotContainsString('Nobody else is here right now.', $roster);
         $this->assertStringNotContainsString('Signing you in', $roster);
+        $this->assertStringNotContainsString('Loading presence', $roster);
+        $this->assertStringNotContainsString('you opted out', $roster);
         $this->assertStringContainsString("closest('aside')", $roster);
         $this->assertStringContainsString('channel.error', $roster);
-        $this->assertStringContainsString('you opted out', $roster);
+        $this->assertStringContainsString('no longer have access here', $roster);
     }
 
     public function test_opted_in_members_register_sitewide_presence(): void

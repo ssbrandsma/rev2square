@@ -1,8 +1,7 @@
 <x-app-layout>
-    <x-slot name="title">Community lounge</x-slot>
+    <x-slot name="title">Community</x-slot>
     <x-slot name="header">
-        <p class="text-sm font-semibold text-emerald-700">Community</p>
-        <h1 class="mt-1 text-[1.75rem] font-semibold leading-tight tracking-tight sm:text-3xl">Community lounge</h1>
+        <h1 class="mt-1 text-[1.75rem] font-semibold leading-tight tracking-tight sm:text-3xl">Community</h1>
         <p class="mt-1 text-sm text-zinc-600">Say hello, ask around, find a project.</p>
     </x-slot>
 
