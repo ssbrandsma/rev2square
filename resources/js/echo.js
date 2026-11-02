@@ -1,29 +1,9 @@
 import Echo from 'laravel-echo';
 import Pusher from 'pusher-js';
 import { clearAllDrafts } from './drafts.js';
+import { resolveSocketConfig } from './socket-config.js';
 
 window.Pusher = Pusher;
-
-// Browsers connect through the app's own host: nginx proxies /app/* to the
-// Reverb server, so this works for host browsers and container browsers
-// alike without per-environment socket URLs.
-function socketHost() {
-    return import.meta.env.VITE_REVERB_HOST && import.meta.env.VITE_REVERB_HOST.length > 0
-        ? import.meta.env.VITE_REVERB_HOST
-        : window.location.hostname;
-}
-
-function socketPort() {
-    if (import.meta.env.VITE_REVERB_PORT && import.meta.env.VITE_REVERB_PORT.length > 0) {
-        return Number(import.meta.env.VITE_REVERB_PORT);
-    }
-
-    if (window.location.port && window.location.port.length > 0) {
-        return Number(window.location.port);
-    }
-
-    return window.location.protocol === 'https:' ? 443 : 80;
-}
 
 let echo = null;
 
@@ -39,13 +19,15 @@ export function realtime() {
         return null;
     }
 
+    const socket = resolveSocketConfig(import.meta.env, window.location);
+
     echo = new Echo({
         broadcaster: 'reverb',
         key: import.meta.env.VITE_REVERB_APP_KEY,
-        wsHost: socketHost(),
-        wsPort: socketPort(),
-        wssPort: socketPort(),
-        forceTLS: (import.meta.env.VITE_REVERB_SCHEME ?? 'http') === 'https',
+        wsHost: socket.host,
+        wsPort: socket.port,
+        wssPort: socket.port,
+        forceTLS: socket.tls,
         enabledTransports: ['ws', 'wss'],
         authEndpoint: '/broadcasting/auth',
         auth: {
