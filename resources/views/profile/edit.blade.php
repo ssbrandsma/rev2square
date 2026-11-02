@@ -203,6 +203,16 @@
 
                             <button type="submit" class="rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-emerald-500">Save preferences</button>
                         </form>
+                        @if(session('status') === 'preferences-updated' && ! $user->show_presence)
+                            <script>
+                                // One-time signal so this account's other tabs leave
+                                // their presence channels immediately (P1-2). This
+                                // tab reloaded fresh and never joined.
+                                try {
+                                    window.localStorage.setItem('rt:presence-optout', JSON.stringify({ uid: {{ $user->id }}, at: Date.now() }));
+                                } catch (e) {}
+                            </script>
+                        @endif
                     </section>
                 </div>
             </div>

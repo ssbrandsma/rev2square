@@ -1,4 +1,5 @@
-import { realtime } from '../echo.js';
+import { realtime, trackPresenceChannel, untrackPresenceChannel } from '../echo.js';
+import { registerGlobalPresence } from '../presence.js';
 
 // Presence roster: who is here right now. Members appear only when they
 // opted in (enforced by the channel auth callback, not just by this UI).
@@ -54,52 +55,78 @@ import { realtime } from '../echo.js';
             return;
         }
 
-        const channelName = box.getAttribute('data-channel');
-        if (!channelName) {
+        const initialName = box.getAttribute('data-channel');
+        if (!initialName) {
             return;
         }
 
         setState(box, 'Loading presence…');
 
-        let channel;
-        try {
-            channel = echo.join(channelName.replace(/^presence-/, ''));
-        } catch (_) {
-            setState(box, 'Presence is unavailable right now.');
-            return;
-        }
-
         const members = new Map();
         let settled = false;
+        let channelName = null;
 
         const snapshot = () => [...members.values()];
 
-        channel.here((initial) => {
-            settled = true;
-            (initial ?? []).forEach((member) => {
+        // Rotation: like chat channels, roster names change when access
+        // changes; rejoining re-checks visibility and opt-in (P1-2).
+        function subscribe(name) {
+            if (channelName) {
+                try {
+                    echo.leave(channelName);
+                } catch (_) {}
+                untrackPresenceChannel(channelName);
+                members.clear();
+                settled = false;
+            }
+
+            channelName = name.replace(/^presence-/, '');
+            box.setAttribute('data-channel', `presence-${channelName}`);
+
+            let channel;
+            try {
+                channel = echo.join(channelName);
+                trackPresenceChannel(channelName);
+            } catch (_) {
+                setState(box, 'Presence is unavailable right now.');
+                return;
+            }
+
+            channel.here((initial) => {
+                settled = true;
+                (initial ?? []).forEach((member) => {
+                    const info = member.info ?? member;
+                    const id = String(member.id ?? info.id);
+                    members.set(id, { ...info, id });
+                });
+                render(box, snapshot());
+            });
+
+            channel.joining((member) => {
                 const info = member.info ?? member;
                 const id = String(member.id ?? info.id);
                 members.set(id, { ...info, id });
+                render(box, snapshot());
             });
-            render(box, snapshot());
-        });
 
-        channel.joining((member) => {
-            const info = member.info ?? member;
-            const id = String(member.id ?? info.id);
-            members.set(id, { ...info, id });
-            render(box, snapshot());
-        });
+            channel.leaving((member) => {
+                const info = member.info ?? member;
+                members.delete(String(member.id ?? info.id));
+                render(box, snapshot());
+            });
 
-        channel.leaving((member) => {
-            const info = member.info ?? member;
-            members.delete(String(member.id ?? info.id));
-            render(box, snapshot());
-        });
+            channel.listen('.channel.rotated', (event) => {
+                if (event && typeof event.channel === 'string' && event.channel !== channelName) {
+                    subscribe(event.channel);
+                }
+            });
 
-        channel.error(() => {
-            setState(box, 'Presence is unavailable right now — this may mean you opted out, or the connection dropped.');
-        });
+            channel.error(() => {
+                setState(box, 'Presence is unavailable right now — this may mean you opted out, or the connection dropped.');
+            });
+        }
+
+        subscribe(initialName);
 
         setTimeout(() => {
             if (!settled) {
@@ -110,5 +137,15 @@ import { realtime } from '../echo.js';
 
     document.addEventListener('DOMContentLoaded', () => {
         document.querySelectorAll('[data-presence-roster]').forEach(initRoster);
+
+        const echo = realtime();
+        if (echo) {
+            registerGlobalPresence(document, {
+                join: (name) => echo.join(name),
+                leave: (name) => echo.leave(name),
+                track: trackPresenceChannel,
+                untrack: untrackPresenceChannel,
+            });
+        }
     });
 })();

@@ -46,19 +46,19 @@ class PresenceAuthTest extends TestCase
     public function test_guests_cannot_join_channels(): void
     {
         // Guarded channels deny guests with 403 (no session identity).
-        $this->authRequest(null, 'private-chat.lounge')->assertForbidden();
-        $this->authRequest(null, 'presence-online')->assertForbidden();
+        $this->authRequest(null, 'private-chat.lounge.0')->assertForbidden();
+        $this->authRequest(null, 'presence-online.0')->assertForbidden();
     }
 
     public function test_presence_requires_opt_in_and_shares_identity_only(): void
     {
         $user = User::factory()->create(['email' => 'presence-private@example.test']);
 
-        $this->authRequest($user, 'presence-online')->assertForbidden();
+        $this->authRequest($user, 'presence-online.0')->assertForbidden();
 
         $user->forceFill(['show_presence' => true])->save();
 
-        $response = $this->authRequest($user, 'presence-online')->assertOk();
+        $response = $this->authRequest($user, 'presence-online.0')->assertOk();
         $auth = $response->json('channel_data');
         $data = json_decode($auth, true);
 
@@ -76,14 +76,14 @@ class PresenceAuthTest extends TestCase
         $member = User::factory()->create();
         $member->forceFill(['show_presence' => true])->save();
 
-        $this->authRequest($member, 'presence-roster.project.'.$project->id)->assertOk();
-        $this->authRequest($member, 'presence-roster.project.'.$draft->id)->assertForbidden();
+        $this->authRequest($member, 'presence-roster.project.'.$project->id.'.0.0')->assertOk();
+        $this->authRequest($member, 'presence-roster.project.'.$draft->id.'.0.0')->assertForbidden();
 
         $draft->owner->forceFill(['show_presence' => false])->save();
-        $this->authRequest($draft->owner, 'presence-roster.project.'.$draft->id)->assertForbidden();
+        $this->authRequest($draft->owner, 'presence-roster.project.'.$draft->id.'.0.0')->assertForbidden();
 
         $draft->owner->forceFill(['show_presence' => true])->save();
-        $this->authRequest($draft->owner, 'presence-roster.project.'.$draft->id)->assertOk();
+        $this->authRequest($draft->owner, 'presence-roster.project.'.$draft->id.'.0.0')->assertOk();
     }
 
     public function test_private_chat_channels_enforce_visibility(): void
@@ -91,9 +91,9 @@ class PresenceAuthTest extends TestCase
         $draft = Project::factory()->draft()->create();
         $member = User::factory()->create();
 
-        $this->authRequest($member, 'private-chat.lounge')->assertOk();
-        $this->authRequest($member, 'private-chat.project.'.$draft->id)->assertForbidden();
-        $this->authRequest($draft->owner, 'private-chat.project.'.$draft->id)->assertOk();
+        $this->authRequest($member, 'private-chat.lounge.0')->assertOk();
+        $this->authRequest($member, 'private-chat.project.'.$draft->id.'.0.0')->assertForbidden();
+        $this->authRequest($draft->owner, 'private-chat.project.'.$draft->id.'.0.0')->assertOk();
     }
 
     public function test_presence_timing_configuration_bounds_stale_members(): void

@@ -11,6 +11,7 @@ use App\Models\ProjectMember;
 use App\Models\TeamInvitation;
 use App\Models\User;
 use App\Notifications\TeamInvitationNotification;
+use App\Services\Realtime\ChannelRotation;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
@@ -102,6 +103,10 @@ class TeamController extends Controller
         // The owner row lives on the project itself, never in members, so
         // revoking members can never strand a project without a manager.
         $member->update(['status' => 'revoked']);
+
+        // The revoked member's sockets stay subscribed unless the
+        // channels rotate beneath them (P1-2).
+        ChannelRotation::rotateProject($project);
 
         AuditEvent::record('team.revoked', request()->user(), $project, $member, [
             'revoked_user_id' => $member->user_id,

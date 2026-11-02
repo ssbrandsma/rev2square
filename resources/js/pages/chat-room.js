@@ -1,4 +1,7 @@
 import { currentUserId, realtime } from '../echo.js';
+import { buildMessageNode } from '../chat-render.js';
+import { createCatchUp } from '../chat-sync.js';
+import { clearDraft, loadDraft, saveDraft } from '../drafts.js';
 
 // Live chat room: server-rendered history upgraded with realtime delivery.
 // Sending always goes through HTTP (persisted, idempotent); the socket only
@@ -64,29 +67,17 @@ import { currentUserId, realtime } from '../echo.js';
 
         const scroll = root.querySelector('[data-chat-scroll]');
         const stick = nearBottom(scroll);
-        const mine = Number(payload.author.id) === currentUserId();
 
-        const wrapper = document.createElement('div');
-        wrapper.setAttribute('data-chat-message', '');
-        wrapper.setAttribute('data-message-id', String(payload.id));
-        wrapper.id = `message-${payload.id}`;
-        wrapper.className = 'flex items-start gap-3';
-        const avatar = payload.author.avatar_url
-            ? `<img src="${escapeHtml(payload.author.avatar_url)}" alt="" class="h-9 w-9 shrink-0 rounded-full object-cover">`
-            : `<span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full ${mine ? 'bg-zinc-700' : 'bg-emerald-700'} text-xs font-bold text-white" aria-hidden="true">${escapeHtml(payload.author.initials)}</span>`;
-
-        wrapper.innerHTML =
-            `<a href="${escapeHtml(payload.author.profile_url)}" class="shrink-0" aria-label="${escapeHtml(payload.author.name)}’s profile">${avatar}</a>` +
-            `<div class="min-w-0 flex-1">` +
-            `<p class="flex flex-wrap items-center gap-x-2 text-sm">` +
-            `<a href="${escapeHtml(payload.author.profile_url)}" class="font-bold hover:text-emerald-700">${escapeHtml(payload.author.name)}</a>` +
-            (payload.author.is_maintainer ? `<span class="rounded-full bg-emerald-100 px-2 py-0.5 text-[11px] font-bold text-emerald-900">Maintainer</span>` : '') +
-            `<time datetime="${escapeHtml(payload.created_at)}" class="text-xs text-zinc-500">${escapeHtml(payload.created_human)}</time>` +
-            `</p>` +
-            `<div class="mt-0.5 text-[15px] leading-relaxed text-zinc-800 discussion-body">${payload.body_html}</div>` +
-            `</div>`;
-
-        scroll.appendChild(wrapper);
+        // Author-controlled strings never pass through HTML parsing: the
+        // builder assigns them via textContent/setAttribute (P1-1). Viewer
+        // context selects the same Retract/Report/Remove controls the
+        // server renders, with authorization enforced on POST (P2-6).
+        scroll.appendChild(buildMessageNode(document, payload, {
+            id: currentUserId(),
+            csrf: csrf(),
+            canModerate: root.getAttribute('data-can-moderate') === '1',
+            roomKind: root.getAttribute('data-room-kind') === 'project' ? 'project' : 'lounge',
+        }));
 
         if (stick) {
             scrollToBottom(scroll);
@@ -151,78 +142,6 @@ import { currentUserId, realtime } from '../echo.js';
         postJson(url, { last_read_message_id: lastMessageId(root) }).catch(() => {});
     }
 
-    async function catchUp(root) {
-        const historyUrl = root.getAttribute('data-history-url');
-        const after = lastMessageId(root);
-
-        try {
-            const response = await fetch(`${historyUrl}?after_id=${after}&limit=100`, {
-                headers: { Accept: 'application/json' },
-            });
-
-            if (!response.ok) {
-                return;
-            }
-
-            const data = await response.json();
-            (data.messages ?? []).forEach((message) => appendMessage(root, message));
-            markRead(root);
-        } catch (_) {
-            // Stay on the rendered history; the banner explains.
-        }
-    }
-
-    function watchTyping(root, channel) {
-        const label = root.querySelector('[data-chat-typing]');
-        if (!label) {
-            return () => {};
-        }
-
-        const typists = new Map();
-
-        const render = () => {
-            const now = Date.now();
-            const names = [];
-            typists.forEach((at, name) => {
-                if (now - at < 4000) {
-                    names.push(name);
-                }
-            });
-
-            if (names.length === 0) {
-                label.classList.add('hidden');
-                label.textContent = '';
-                return;
-            }
-
-            label.classList.remove('hidden');
-            label.textContent = names.length === 1
-                ? `${names[0]} is typing…`
-                : `${names.slice(0, 3).join(', ')} are typing…`;
-        };
-
-        setInterval(render, 1500);
-
-        channel.listenForWhisper('typing', (event) => {
-            if (event.name && event.id !== currentUserId()) {
-                typists.set(event.name, Date.now());
-                render();
-            }
-        });
-
-        let lastSent = 0;
-        return () => {
-            const now = Date.now();
-            if (now - lastSent < 3000) {
-                return;
-            }
-            lastSent = now;
-            try {
-                channel.whisper('typing', { id: currentUserId(), name: root.getAttribute('data-user-name') });
-            } catch (_) {}
-        };
-    }
-
     function initRoom(root) {
         const scroll = root.querySelector('[data-chat-scroll]');
         scrollToBottom(scroll);
@@ -231,23 +150,16 @@ import { currentUserId, realtime } from '../echo.js';
         const field = form?.querySelector('textarea[name="body"]');
         const draftKey = form?.getAttribute('data-draft-key');
 
-        // Draft for the chat composer (shared helper covers discussion forms).
+        // Draft for the chat composer, namespaced by account (P1-3).
         if (form && field && draftKey) {
-            try {
-                const draft = window.localStorage.getItem('composer:' + draftKey);
-                if (draft && field.value === '') {
-                    field.value = draft;
-                }
-            } catch (_) {}
+            const draftUserId = currentUserId();
+            const draft = loadDraft(window.localStorage, draftUserId, draftKey);
+            if (draft && field.value === '') {
+                field.value = draft;
+            }
 
             field.addEventListener('input', () => {
-                try {
-                    if (field.value === '') {
-                        window.localStorage.removeItem('composer:' + draftKey);
-                    } else {
-                        window.localStorage.setItem('composer:' + draftKey, field.value);
-                    }
-                } catch (_) {}
+                saveDraft(window.localStorage, draftUserId, draftKey, field.value);
             });
 
             field.addEventListener('keydown', (event) => {
@@ -272,23 +184,133 @@ import { currentUserId, realtime } from '../echo.js';
             }
         };
 
-        const channelName = root.getAttribute('data-channel');
-        const channel = echo.private(channelName.replace(/^private-/, ''));
-
-        channel.listen('.message.sent', (payload) => {
-            appendMessage(root, payload);
-            markRead(root);
+        // Reconnect reconciliation drains every history page with a
+        // contiguous cursor; live arrivals mid-catch-up are buffered so
+        // nothing is skipped or duplicated (P2-4).
+        const sync = createCatchUp({
+            fetchPage: async (after, limit) => {
+                try {
+                    const url = `${root.getAttribute('data-history-url')}?after_id=${after}&limit=${limit}`;
+                    const response = await fetch(url, { headers: { Accept: 'application/json' } });
+                    if (!response.ok) {
+                        return null;
+                    }
+                    const data = await response.json();
+                    return data.messages ?? [];
+                } catch (_) {
+                    return null;
+                }
+            },
+            append: (message) => appendMessage(root, message),
+            isPresent: (id) => root.querySelector(`[data-chat-message][data-message-id="${id}"]`) !== null,
         });
 
-        const announceTyping = watchTyping(root, channel);
+        async function catchUp() {
+            const result = await sync.run(lastMessageId(root));
+            if (result.started && !result.exhausted && !result.failed) {
+                setStatus(root, 'warn', 'A very long backlog was truncated to recent messages. <a href="" class="font-semibold underline">Refresh</a> for the full history.');
+            }
+            markRead(root);
+        }
+
+        // Typing state survives channel rotation: one shared roster, with
+        // the whisper binding moved to each new channel.
+        const typingLabel = root.querySelector('[data-chat-typing]');
+        const typists = new Map();
+
+        const renderTypists = () => {
+            if (!typingLabel) {
+                return;
+            }
+            const now = Date.now();
+            const names = [];
+            typists.forEach((at, name) => {
+                if (now - at < 4000) {
+                    names.push(name);
+                }
+            });
+
+            if (names.length === 0) {
+                typingLabel.classList.add('hidden');
+                typingLabel.textContent = '';
+                return;
+            }
+
+            typingLabel.classList.remove('hidden');
+            typingLabel.textContent = names.length === 1
+                ? `${names[0]} is typing…`
+                : `${names.slice(0, 3).join(', ')} are typing…`;
+        };
+
+        setInterval(renderTypists, 1500);
+
+        let channelName = root.getAttribute('data-channel');
+        let channel = null;
+        let lastTypingSent = 0;
+
+        const announceTyping = () => {
+            const now = Date.now();
+            if (now - lastTypingSent < 3000 || !channel) {
+                return;
+            }
+            lastTypingSent = now;
+            try {
+                channel.whisper('typing', { id: currentUserId(), name: root.getAttribute('data-user-name') });
+            } catch (_) {}
+        };
+
         field?.addEventListener('input', announceTyping);
+
+        // Rotation: the server renames channels when access changes and
+        // announces the new name on the old channel. Rejoining re-runs
+        // channel auth, so viewers that lost access are stranded without
+        // receiving anything further (P1-2).
+        function subscribe(name) {
+            if (channel) {
+                try {
+                    echo.leave(channelName);
+                } catch (_) {}
+            }
+
+            channelName = name;
+            root.setAttribute('data-channel', name);
+            channel = echo.private(name.replace(/^private-/, ''));
+
+            channel.listen('.message.sent', (payload) => {
+                if (!sync.bufferLive(payload)) {
+                    appendMessage(root, payload);
+                    markRead(root);
+                }
+            });
+
+            channel.listen('.channel.rotated', (event) => {
+                if (event && typeof event.channel === 'string' && event.channel !== channelName) {
+                    subscribe(event.channel);
+                    catchUp();
+                }
+            });
+
+            channel.listenForWhisper('typing', (event) => {
+                if (event.name && event.id !== currentUserId()) {
+                    typists.set(event.name, Date.now());
+                    renderTypists();
+                }
+            });
+
+            channel.error(() => {
+                form?.classList.add('hidden');
+                setStatus(root, 'error', 'You no longer have access to this conversation. <a href="" class="font-semibold underline">Refresh</a> to re-check.');
+            });
+        }
+
+        subscribe(channelName);
 
         const pusher = echo.connector.pusher;
         if (pusher?.connection) {
             pusher.connection.bind('connecting', () => setStatus(root, 'warn', 'Connecting to live chat…'));
             pusher.connection.bind('connected', () => {
                 setStatus(root, null);
-                catchUp(root);
+                catchUp();
             });
             pusher.connection.bind('unavailable', () => setStatus(
                 root,
@@ -314,7 +336,7 @@ import { currentUserId, realtime } from '../echo.js';
         }
 
         // If the socket is already up, reconcile anything posted since render.
-        setTimeout(() => catchUp(root), 1500);
+        setTimeout(() => catchUp(), 1500);
 
         if (!form || !field) {
             return;
@@ -336,9 +358,7 @@ import { currentUserId, realtime } from '../echo.js';
                 const data = await postJson(root.getAttribute('data-send-url'), { body, client_key: clientKey }, socketHeaders());
                 appendMessage(root, data.message);
                 field.value = '';
-                try {
-                    window.localStorage.removeItem('composer:' + draftKey);
-                } catch (_) {}
+                clearDraft(window.localStorage, currentUserId(), draftKey);
                 markRead(root);
             } catch (error) {
                 queueOutbox(root, body, clientKey);

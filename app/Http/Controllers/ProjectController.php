@@ -13,6 +13,7 @@ use App\Models\Project;
 use App\Models\ProjectMedia;
 use App\Services\Community\ProjectActionPolicy;
 use App\Services\Media\StoryDocument;
+use App\Services\Realtime\ChannelRotation;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
@@ -127,6 +128,10 @@ class ProjectController extends Controller
 
         $project->fill($validated);
 
+        // Publishing or unpublishing changes who may listen: rotate the
+        // realtime channels so earlier subscribers stop receiving (P1-2).
+        $visibilityChanged = $project->isDirty('publication_status');
+
         // Shelving a project closes new conversation by default; posting
         // resumes only when a maintainer deliberately reopens it. Ordinary
         // edits never flip a deliberate reopen back.
@@ -137,6 +142,10 @@ class ProjectController extends Controller
 
         $project->save();
         $this->syncDevice($project, $request->validated());
+
+        if ($visibilityChanged) {
+            ChannelRotation::rotateProject($project);
+        }
 
         if ($wasOpen && ! $project->discussion_open) {
             AuditEvent::record('discussion.closed', $request->user(), $project, null, [

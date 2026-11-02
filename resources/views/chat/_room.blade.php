@@ -1,6 +1,7 @@
 <div data-chat-room
-    data-channel="chat.{{ $room }}"
-    data-presence-channel="presence-roster.{{ $room }}"
+    data-channel="{{ $channel }}"
+    data-room-kind="{{ $roomKind }}"
+    data-can-moderate="{{ $canModerate ? '1' : '' }}"
     data-history-url="{{ $historyUrl }}"
     data-send-url="{{ $sendUrl }}"
     data-read-url="{{ $readUrl }}"
@@ -89,7 +90,7 @@
 
     @auth
     <aside class="lg:col-span-1">
-        <div class="rounded-xl border border-zinc-200 bg-white p-5" data-presence-roster data-channel="presence-roster.{{ $room }}">
+        <div class="rounded-xl border border-zinc-200 bg-white p-5" data-presence-roster data-channel="presence-{{ $presenceChannel }}">
             <h2 class="text-sm font-semibold text-zinc-500">Here now</h2>
             <div data-presence-list class="mt-3">
                 <p class="text-sm text-zinc-500" data-presence-state>Loading…</p>

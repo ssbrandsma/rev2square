@@ -92,6 +92,23 @@ class LoungePresenceTest extends TestCase
         $this->assertStringContainsString('you opted out', $roster);
     }
 
+    public function test_opted_in_members_register_sitewide_presence(): void
+    {
+        $member = User::factory()->create(['show_presence' => true]);
+
+        // A non-/online page still registers the tab globally.
+        $html = $this->actingAs($member)->get(route('lounge'))->assertOk()->getContent();
+        $this->assertStringContainsString('data-presence-register', $html);
+        $this->assertStringContainsString('presence-online.0', $html);
+
+        $optedOut = User::factory()->create(['show_presence' => false]);
+        $html = $this->actingAs($optedOut)->get(route('lounge'))->assertOk()->getContent();
+        $this->assertStringNotContainsString('data-presence-register', $html);
+
+        $html = $this->get(route('lounge'))->assertOk()->getContent();
+        $this->assertStringNotContainsString('data-presence-register', $html);
+    }
+
     public function test_empty_chat_keeps_composer_and_help_guidance(): void
     {
         $html = $this->actingAs(User::factory()->create())->get(route('lounge'))->assertOk()->getContent();

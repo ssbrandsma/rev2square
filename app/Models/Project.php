@@ -6,6 +6,8 @@ use App\Enums\ProjectActivity;
 use App\Enums\ProjectPhase;
 use App\Enums\ProjectRole;
 use App\Enums\PublicationStatus;
+use App\Services\Realtime\ChannelNames;
+use App\Services\Realtime\RealtimeEpoch;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -32,6 +34,10 @@ class Project extends Model
         'discussion_open',
     ];
 
+    protected $attributes = [
+        'channel_epoch' => 0,
+    ];
+
     protected function casts(): array
     {
         return [
@@ -40,7 +46,22 @@ class Project extends Model
             'publication_status' => PublicationStatus::class,
             'discussion_open' => 'boolean',
             'story_document' => 'array',
+            'channel_epoch' => 'integer',
         ];
+    }
+
+    /**
+     * Current realtime channel names. Both embed the project epoch and
+     * the global epoch; rotation hands subscribers new names (P1-2).
+     */
+    public function chatChannel(): string
+    {
+        return ChannelNames::projectChat($this, RealtimeEpoch::current());
+    }
+
+    public function rosterChannel(): string
+    {
+        return ChannelNames::projectRoster($this, RealtimeEpoch::current());
     }
 
     public function getRouteKeyName(): string

@@ -1,5 +1,9 @@
 // Discussion composers: preserve drafts across validation failures and
-// reconnects (localStorage), and prevent double submission.
+// reconnects (localStorage, namespaced by account), and prevent double
+// submission.
+import { currentUserId } from '../echo.js';
+import { clearDraft, loadDraft, saveDraft } from '../drafts.js';
+
 (function () {
     'use strict';
 
@@ -14,13 +18,9 @@
             return;
         }
 
-        try {
-            const draft = window.localStorage.getItem('composer:' + key);
-            if (draft) {
-                field.value = draft;
-            }
-        } catch (_) {
-            // Private browsing: drafts simply do not persist.
+        const draft = loadDraft(window.localStorage, currentUserId(), key);
+        if (draft) {
+            field.value = draft;
         }
     }
 
@@ -31,20 +31,14 @@
             return;
         }
 
+        const userId = currentUserId();
+
         field.addEventListener('input', () => {
-            try {
-                if (field.value === '') {
-                    window.localStorage.removeItem('composer:' + key);
-                } else {
-                    window.localStorage.setItem('composer:' + key, field.value);
-                }
-            } catch (_) {}
+            saveDraft(window.localStorage, userId, key, field.value);
         });
 
         form.addEventListener('submit', () => {
-            try {
-                window.localStorage.removeItem('composer:' + key);
-            } catch (_) {}
+            clearDraft(window.localStorage, userId, key);
 
             form.querySelectorAll('[data-disable-on-submit]').forEach((button) => {
                 button.disabled = true;

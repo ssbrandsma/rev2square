@@ -10,6 +10,7 @@ use App\Models\ProjectMember;
 use App\Models\User;
 use App\Notifications\ProjectOwnershipReceivedNotification;
 use App\Notifications\ProjectOwnershipTransferredNotification;
+use App\Services\Realtime\ChannelRotation;
 use Illuminate\Support\Facades\DB;
 
 class ProjectTransferException extends \RuntimeException {}
@@ -42,7 +43,7 @@ final class AdminProjectService
         string $reason,
         int $expectedOwnerId,
     ): Project {
-        return DB::transaction(function () use ($actor, $projectId, $recipientId, $keepPreviousOwner, $reason, $expectedOwnerId): Project {
+        $project = DB::transaction(function () use ($actor, $projectId, $recipientId, $keepPreviousOwner, $reason, $expectedOwnerId): Project {
             $project = Project::whereKey($projectId)->lockForUpdate()->firstOrFail();
 
             if ($project->owner_id !== $expectedOwnerId) {
@@ -117,6 +118,12 @@ final class AdminProjectService
 
             return $project->fresh();
         });
+
+        // Management changed hands: strand sockets authorized under the
+        // previous access set, announced after the transfer commits (P1-2).
+        ChannelRotation::rotateProject($project);
+
+        return $project;
     }
 
     /** @return array<string, mixed> */

@@ -40,10 +40,12 @@ class NewChatMessage implements ShouldBroadcastNow
                 'id' => $this->message->author->id,
                 'name' => $this->message->author->name,
                 'initials' => $this->message->author->initials(),
+                'avatar_url' => $this->message->author->avatarUrl(),
                 'profile_url' => route('users.show', $this->message->author),
                 'is_maintainer' => $this->message->project !== null
                     && $this->message->project->managedBy($this->message->author),
             ],
+            'actions' => $this->message->actionUrls(),
             'created_at' => $this->message->created_at->toIso8601String(),
             'created_human' => $this->message->created_at->diffForHumans(),
         ];

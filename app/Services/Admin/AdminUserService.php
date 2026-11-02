@@ -6,6 +6,7 @@ use App\Enums\AccountStatus;
 use App\Enums\GlobalRole;
 use App\Models\AdminAuditEvent;
 use App\Models\User;
+use App\Services\Realtime\RealtimeEpoch;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
@@ -53,7 +54,9 @@ final class AdminUserService
 
     public static function suspend(User $actor, int $userId, string $reason): User
     {
-        return DB::transaction(function () use ($actor, $userId, $reason): User {
+        $didSuspend = false;
+
+        $target = DB::transaction(function () use ($actor, $userId, $reason, &$didSuspend): User {
             $target = User::where('id', $userId)->lockForUpdate()->firstOrFail();
 
             if (! $target->isSuspended()) {
@@ -67,10 +70,21 @@ final class AdminUserService
                 self::revokeSessions($target);
 
                 AdminAuditEvent::record('account.suspended', $actor, $target, $reason, $before, self::snapshot($target->fresh()));
+
+                $didSuspend = true;
             }
 
             return $target->fresh();
         });
+
+        if ($didSuspend) {
+            // Suspended accounts cannot re-auth, but their existing
+            // sockets stay subscribed: rotate every channel, announced
+            // only after the suspension commits (P1-2).
+            RealtimeEpoch::rotate();
+        }
+
+        return $target;
     }
 
     public static function reactivate(User $actor, int $userId, string $reason): User

@@ -8,6 +8,8 @@ use App\Models\ChatMessage;
 use App\Models\Project;
 use App\Services\Community\ProjectActionPolicy;
 use App\Services\Discussion\Markup;
+use App\Services\Realtime\ChannelNames;
+use App\Services\Realtime\RealtimeEpoch;
 use Illuminate\Database\QueryException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
@@ -26,6 +28,10 @@ class ChatController extends Controller
             'room' => ChatMessage::loungeRoom(),
             'roomLabel' => 'Community lounge',
             'project' => null,
+            'channel' => ChatMessage::loungeChannel(),
+            'presenceChannel' => ChannelNames::loungeRoster(RealtimeEpoch::current()),
+            'roomKind' => 'lounge',
+            'canModerate' => false,
             'denial' => auth()->check() ? null : 'Sign in to join the chat.',
         ]);
     }
@@ -43,6 +49,10 @@ class ChatController extends Controller
             'messages' => $this->recent($room),
             'room' => $room,
             'roomLabel' => $project->title.' chat',
+            'channel' => $project->chatChannel(),
+            'presenceChannel' => $project->rosterChannel(),
+            'roomKind' => 'project',
+            'canModerate' => $project->managedBy(auth()->user()),
             'denial' => ProjectActionPolicy::discussionDenial($project, auth()->user()),
         ]);
     }
@@ -292,6 +302,7 @@ class ChatController extends Controller
                 'profile_url' => $message->author->profileUrl(),
                 'is_maintainer' => $message->project !== null && $message->project->managedBy($message->author),
             ],
+            'actions' => $message->actionUrls(),
             'created_at' => $message->created_at->toIso8601String(),
             'created_human' => $message->created_at->diffForHumans(),
         ];

@@ -214,4 +214,66 @@ class ChatTest extends TestCase
         $this->assertStringContainsString('No messages yet. Say hello.', $member);
         $this->assertStringContainsString('Here now', $member);
     }
+
+    public function test_message_payloads_carry_moderation_actions(): void
+    {
+        $project = $this->publishedProject();
+        $message = ChatMessage::factory()->projectRoom($project)->create();
+
+        $json = $this->actingAs(User::factory()->create())
+            ->getJson(route('projects.chat.history', $project))
+            ->assertOk()
+            ->json('messages');
+
+        $this->assertSame([
+            'retract_url' => route('projects.chat.destroy', [$project, $message]),
+            'report_url' => route('projects.chat.report', [$project, $message]),
+            'remove_url' => route('projects.chat.destroy', [$project, $message]),
+        ], $json[0]['actions']);
+
+        $lounge = ChatMessage::factory()->create();
+
+        $json = $this->getJson(route('lounge.history'))->assertOk()->json('messages');
+
+        $this->assertSame([
+            'retract_url' => route('lounge.destroy', $lounge),
+            'report_url' => route('lounge.report', $lounge),
+            'remove_url' => null,
+        ], $json[0]['actions']);
+    }
+
+    public function test_broadcast_payload_matches_http_payload_shape(): void
+    {
+        $project = $this->publishedProject();
+        $message = ChatMessage::factory()->projectRoom($project)->create();
+
+        $payload = (new NewChatMessage($message))->broadcastWith();
+
+        $this->assertSame($message->author->avatarUrl(), $payload['author']['avatar_url']);
+        $this->assertSame([
+            'retract_url' => route('projects.chat.destroy', [$project, $message]),
+            'report_url' => route('projects.chat.report', [$project, $message]),
+            'remove_url' => route('projects.chat.destroy', [$project, $message]),
+        ], $payload['actions']);
+    }
+
+    public function test_chat_pages_render_viewer_moderation_context(): void
+    {
+        $project = $this->publishedProject();
+
+        $manager = $this->actingAs($project->owner)
+            ->get(route('projects.chat.show', $project))->assertOk()->getContent();
+        $this->assertStringContainsString('data-room-kind="project"', $manager);
+        $this->assertStringContainsString('data-can-moderate="1"', $manager);
+
+        $member = $this->actingAs(User::factory()->create())
+            ->get(route('projects.chat.show', $project))->assertOk()->getContent();
+        $this->assertStringContainsString('data-room-kind="project"', $member);
+        $this->assertStringNotContainsString('data-can-moderate="1"', $member);
+
+        $lounge = $this->actingAs($project->owner)
+            ->get(route('lounge'))->assertOk()->getContent();
+        $this->assertStringContainsString('data-room-kind="lounge"', $lounge);
+        $this->assertStringNotContainsString('data-can-moderate="1"', $lounge);
+    }
 }

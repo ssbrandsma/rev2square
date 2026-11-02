@@ -38,6 +38,8 @@ use App\Http\Controllers\TaskController;
 use App\Http\Controllers\TeamController;
 use App\Http\Controllers\TestReportController;
 use App\Models\Project;
+use App\Services\Realtime\ChannelNames;
+use App\Services\Realtime\RealtimeEpoch;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/', function () {
@@ -223,7 +225,9 @@ Route::get('/users/{user}', [PublicProfileController::class, 'show'])->name('use
 
 Route::get('/lounge', [ChatController::class, 'lounge'])->name('lounge');
 Route::get('/lounge/history', [ChatController::class, 'loungeHistory'])->name('lounge.history');
-Route::view('/online', 'online')->name('online');
+Route::get('/online', fn () => view('online', [
+    'channel' => ChannelNames::online(RealtimeEpoch::current()),
+]))->name('online');
 Route::get('/projects/{project}/chat', [ChatController::class, 'show'])->name('projects.chat.show');
 
 Route::view('/tasks', 'tasks.index')->name('tasks.index');
