@@ -56,7 +56,7 @@ case "$VARIANT" in
     virtualmin)
         COMPOSE_FILE="$ROOT/compose.virtualmin.yaml"
         [ "$ENV_SET" -eq 0 ] && ENV_FILE="/etc/rev2square/.env.virtualmin"
-        EXPECTED_SERVICES="app nginx db queue scheduler"
+        EXPECTED_SERVICES="app nginx db queue scheduler reverb analysis-coordinator"
         ;;
     *) echo "Unknown variant: $VARIANT (use prod or virtualmin)" >&2; exit 2 ;;
 esac
