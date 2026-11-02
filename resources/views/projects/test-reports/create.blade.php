@@ -1,8 +1,13 @@
 <x-app-layout>
+    <x-slot name="title">File a test report — {{ $project->title }}</x-slot>
     <x-slot name="header">
         <p class="text-sm font-semibold text-emerald-700">Test report · {{ $project->title }}</p>
         <h1 class="mt-1 text-[1.75rem] font-semibold leading-tight tracking-tight sm:text-3xl">File a test report</h1>
+        @include('projects._back-link', ['url' => route('projects.show', $project).'#test-reports', 'label' => 'Back to test reports'])
     </x-slot>
+
+    @include('projects._nav', ['project' => $project, 'active' => 'tasks'])
+
     <div class="mx-auto max-w-2xl px-4 py-10 sm:px-6">
         <form method="POST" action="{{ route('projects.test-reports.store', $project) }}" class="rounded-xl border border-zinc-200 bg-white p-6 sm:p-8">
             @csrf

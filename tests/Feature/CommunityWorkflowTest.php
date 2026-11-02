@@ -272,7 +272,7 @@ class CommunityWorkflowTest extends TestCase
             ->assertDontSee('Offer help →', false);
     }
 
-    public function test_draft_hides_task_offer_links_but_keeps_details(): void
+    public function test_draft_hides_task_offer_links_but_keeps_title_link(): void
     {
         $project = Project::factory()->draft()->create();
         $task = ContributorTask::factory()->create(['project_id' => $project->id]);
@@ -280,7 +280,8 @@ class CommunityWorkflowTest extends TestCase
         $this->actingAs($project->owner)->get(route('projects.show', $project))
             ->assertOk()
             ->assertSee('This project is not published.')
-            ->assertSee('Details →', false)
+            ->assertSee(route('projects.tasks.show', [$project, $task]), false)
+            ->assertSee($task->title, false)
             ->assertDontSee('Offer help →', false)
             ->assertDontSee(route('projects.offers.create', [$project, 'task' => $task->id]), false);
     }
@@ -374,5 +375,57 @@ class CommunityWorkflowTest extends TestCase
         $this->actingAs($empty->owner)->get(route('projects.show', $empty))
             ->assertOk()
             ->assertSee('>Offers<', false);
+    }
+
+    public function test_owner_sees_management_but_no_help_actions(): void
+    {
+        $project = Project::factory()->create();
+        $task = $this->openTask($project);
+
+        $this->actingAs($project->owner)->get(route('projects.show', $project))
+            ->assertOk()
+            ->assertDontSee('Offer help →', false)
+            ->assertDontSee('Help with this task →', false)
+            ->assertDontSee(route('projects.offers.create', [$project, 'task' => $task->id]), false)
+            ->assertSee('+ Add task', false)
+            ->assertSee(route('projects.tasks.show', [$project, $task]), false);
+    }
+
+    public function test_contributor_sees_single_help_action_per_open_task(): void
+    {
+        $project = Project::factory()->create();
+        $task = $this->openTask($project);
+
+        $this->actingAs(User::factory()->create())->get(route('projects.show', $project))
+            ->assertOk()
+            ->assertSee('Offer help →', false)
+            ->assertSee('Help with this task →', false)
+            ->assertSee(route('projects.offers.create', [$project, 'task' => $task->id]), false)
+            ->assertSee(route('projects.tasks.show', [$project, $task]), false);
+    }
+
+    public function test_maintainer_offer_is_rejected_server_side(): void
+    {
+        $project = Project::factory()->create();
+
+        $this->actingAs($project->owner)
+            ->post(route('projects.offers.store', $project), [
+                'type' => OfferType::OfferHelp->value,
+                'message' => 'I maintain this already.',
+            ])
+            ->assertSessionHasErrors('type');
+        $this->assertSame(0, ContributionOffer::count());
+
+        $this->actingAs($project->owner)->get(route('projects.offers.create', $project))
+            ->assertOk()
+            ->assertSee('You already maintain this project.', false);
+
+        $this->actingAs(User::factory()->create())
+            ->post(route('projects.offers.store', $project), [
+                'type' => OfferType::OfferHelp->value,
+                'message' => 'Happy to help.',
+            ])
+            ->assertRedirect();
+        $this->assertSame(1, ContributionOffer::count());
     }
 }

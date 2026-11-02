@@ -1,8 +1,13 @@
 <x-app-layout>
+    <x-slot name="title">Add a task — {{ $project->title }}</x-slot>
     <x-slot name="header">
         <p class="text-sm font-semibold text-emerald-700">New task · {{ $project->title }}</p>
         <h1 class="mt-1 text-[1.75rem] font-semibold leading-tight tracking-tight sm:text-3xl">Add a task</h1>
+        @include('projects._back-link', ['url' => route('projects.show', $project).'#tasks', 'label' => 'Back to tasks'])
     </x-slot>
+
+    @include('projects._nav', ['project' => $project, 'active' => 'tasks'])
+
     <div class="mx-auto max-w-2xl px-4 py-10 sm:px-6">
         <form method="POST" action="{{ route('projects.tasks.store', $project) }}" class="rounded-xl border border-zinc-200 bg-white p-6 sm:p-8">
             @csrf

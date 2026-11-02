@@ -1,9 +1,13 @@
 <x-app-layout>
+    <x-slot name="title">Contribution offers — {{ $project->title }}</x-slot>
     <x-slot name="header">
         <p class="text-sm font-semibold text-emerald-700">Contribution offers</p>
         <h1 class="mt-1 text-[1.75rem] font-semibold leading-tight tracking-tight sm:text-3xl">{{ $project->title }}</h1>
-        <p class="mt-1 text-sm text-zinc-600"><a href="{{ route('projects.show', $project) }}" class="font-semibold text-emerald-700">← Back to project</a></p>
+        @include('projects._back-link', ['url' => route('projects.show', $project), 'label' => 'Back to project'])
     </x-slot>
+
+    @include('projects._nav', ['project' => $project, 'active' => 'team'])
+
     <div class="mx-auto max-w-4xl px-4 py-10 sm:px-6">
         @if(session('status'))
             <p class="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800">{{ session('status') }}</p>

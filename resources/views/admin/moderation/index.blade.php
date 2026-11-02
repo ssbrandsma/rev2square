@@ -1,4 +1,5 @@
 <x-app-layout>
+    <x-slot name="title">Report queue</x-slot>
     <x-slot name="header">
         <p class="text-sm font-semibold text-emerald-700">Moderation</p>
         <h1 class="mt-1 text-[1.75rem] font-semibold leading-tight tracking-tight sm:text-3xl">Report queue</h1>
@@ -12,7 +13,10 @@
             <p class="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm font-medium text-red-800">{{ session('error') }}</p>
         @endif
 
-        <p class="mb-4 max-w-[70ch] text-sm text-zinc-600">Global moderators review community reports here. Moderation grants no access to API keys, settings, private Agent conversations, artifacts, or private messages. Project reports link to their project queue, where moderators may also review.</p>
+        <details class="mb-4 max-w-[70ch] text-sm text-zinc-600">
+            <summary class="cursor-pointer font-semibold text-emerald-700">What moderation covers</summary>
+            <p class="mt-1">Global moderators review community reports here. Moderation grants no access to API keys, settings, private Agent conversations, artifacts, or private messages. Project reports link to their project queue, where moderators may also review.</p>
+        </details>
 
         <section class="space-y-4">
             @forelse($reports as $report)
@@ -43,7 +47,10 @@
                     @endif
                 </article>
             @empty
-                <p class="rounded-xl border border-zinc-200 bg-white p-6 text-center text-sm text-zinc-500">No reports.</p>
+                <div class="rounded-xl border border-zinc-200 bg-white p-6 text-center">
+                    <p class="text-sm font-semibold">No reports to review</p>
+                    <p class="mt-1 text-sm text-zinc-500">New community reports will appear here.</p>
+                </div>
             @endforelse
         </section>
         <div class="mt-4">{{ $reports->links() }}</div>

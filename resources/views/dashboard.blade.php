@@ -1,4 +1,5 @@
 <x-app-layout>
+    <x-slot name="title">My workspace</x-slot>
     <x-slot name="header">
         <div class="flex flex-wrap items-end justify-between gap-4">
             <div class="flex items-center gap-3">
@@ -151,12 +152,6 @@
                             <p class="text-xs text-zinc-500">{{ $offer->created_at->diffForHumans() }} ·
                                 <a href="{{ route('projects.offers.show', [$offer->project, $offer]) }}" class="font-semibold text-emerald-700 hover:text-emerald-600">Open discussion</a></p>
                             <div class="flex items-center gap-3">
-                                @if(in_array($offer->id, $joinableOfferIds, true))
-                                    <form method="POST" action="{{ route('projects.offers.join', [$offer->project, $offer]) }}" class="inline">
-                                        @csrf
-                                        <button type="submit" class="text-xs font-semibold text-emerald-700 hover:text-emerald-600">Join project</button>
-                                    </form>
-                                @endif
                                 @if($offer->status->value === 'pending')
                                     <form method="POST" action="{{ route('projects.offers.withdraw', [$offer->project, $offer]) }}">
                                         @csrf

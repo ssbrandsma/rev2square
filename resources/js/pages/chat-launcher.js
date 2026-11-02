@@ -46,18 +46,24 @@
         }
     }
 
+    function setOpen(toggle, panel, open) {
+        panel?.classList.toggle('hidden', !open);
+        toggle?.setAttribute('aria-expanded', open ? 'true' : 'false');
+        toggle?.setAttribute('aria-label', open ? 'Close chat rooms' : 'Open chat rooms');
+    }
+
     function initLauncher(root) {
         const toggle = root.querySelector('[data-launcher-toggle]');
         const panel = root.querySelector('[data-launcher-panel]');
 
         toggle?.addEventListener('click', () => {
-            panel?.classList.toggle('hidden');
+            setOpen(toggle, panel, panel?.classList.contains('hidden') ?? false);
             refresh(root);
         });
 
         document.addEventListener('keydown', (event) => {
             if (event.key === 'Escape') {
-                panel?.classList.add('hidden');
+                setOpen(toggle, panel, false);
             }
         });
 

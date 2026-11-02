@@ -1,4 +1,5 @@
 <x-app-layout>
+    <x-slot name="title">{{ $artifact->original_name }} — {{ $project->title }}</x-slot>
     <x-slot name="header">
         <p class="text-sm font-semibold text-emerald-700">Uploaded file [A{{ $artifact->id }}]</p>
         <h1 class="mt-1 break-words text-[1.75rem] font-semibold leading-tight tracking-tight sm:text-3xl">{{ $artifact->original_name }}</h1>
@@ -25,17 +26,24 @@
         <section class="rounded-xl border border-zinc-200 bg-white p-6">
             <h2 class="font-semibold">File details</h2>
             <dl class="mt-2 grid grid-cols-1 gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
-                <div><dt class="font-semibold text-zinc-500">State</dt><dd>{{ $artifact->stateLabel() }}</dd></div>
+                <div><dt class="font-semibold text-zinc-500">State</dt><dd>@include('projects.artifacts._status-badge', ['status' => $artifact->state, 'label' => $artifact->stateLabel()])</dd></div>
                 <div><dt class="font-semibold text-zinc-500">Format</dt><dd class="font-mono">{{ $artifact->format }}@if($artifact->arch), {{ $artifact->arch }}@endif</dd></div>
                 <div><dt class="font-semibold text-zinc-500">Size</dt><dd>{{ number_format($artifact->byte_size) }} bytes</dd></div>
-                <div><dt class="font-semibold text-zinc-500">SHA-256</dt><dd class="break-all font-mono text-xs">{{ $artifact->sha256 }}</dd></div>
-                @if($artifact->extractor)
-                    <div><dt class="font-semibold text-zinc-500">Extractor</dt><dd class="font-mono">{{ $artifact->extractor }} (schema {{ $artifact->extraction_schema }})</dd></div>
-                @endif
-                @if($artifact->extracted_at)
-                    <div><dt class="font-semibold text-zinc-500">Extracted</dt><dd>{{ $artifact->extracted_at->format('Y-m-d H:i:s') }}</dd></div>
-                @endif
             </dl>
+            <details class="mt-3 text-sm">
+                <summary class="cursor-pointer text-xs font-semibold text-zinc-500">Technical details</summary>
+                <dl class="mt-2 grid grid-cols-1 gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
+                    <div class="sm:col-span-2"><dt class="font-semibold text-zinc-500">SHA-256</dt><dd class="break-all font-mono text-xs">{{ $artifact->sha256 }}
+                        <button type="button" data-copy="{{ $artifact->sha256 }}" aria-label="Copy SHA-256" onclick="try{navigator.clipboard.writeText(this.getAttribute('data-copy'));this.textContent='Copied';}catch(e){}" class="ml-1 rounded border border-zinc-300 px-1.5 py-0.5 font-sans text-xs font-semibold text-zinc-600 hover:bg-zinc-50">Copy</button>
+                    </dd></div>
+                    @if($artifact->extractor)
+                        <div><dt class="font-semibold text-zinc-500">Extractor</dt><dd class="font-mono">{{ $artifact->extractor }} (schema {{ $artifact->extraction_schema }})</dd></div>
+                    @endif
+                    @if($artifact->extracted_at)
+                        <div><dt class="font-semibold text-zinc-500">Extracted</dt><dd>{{ $artifact->extracted_at->format('Y-m-d H:i:s') }}</dd></div>
+                    @endif
+                </dl>
+            </details>
 
             @if($artifact->state === 'failed')
                 <p class="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{{ $artifact->failure_message ?? 'Extraction failed.' }}</p>
@@ -54,14 +62,7 @@
             @endif
 
             @if(! empty($artifact->warnings))
-                <div class="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-                    <p class="font-semibold">Extraction warnings ({{ count($artifact->warnings) }})</p>
-                    <ul class="mt-1 list-inside list-disc font-mono text-xs">
-                        @foreach($artifact->warnings as $warning)
-                            <li>{{ $warning }}</li>
-                        @endforeach
-                    </ul>
-                </div>
+                @include('projects.artifacts._warnings', ['warnings' => $artifact->warnings, 'title' => 'Extraction warnings'])
             @endif
         </section>
 
@@ -237,15 +238,15 @@
                 </details>
             @else
                 @if(! empty($snapshot['detection']))
-                    <section class="mt-6 rounded-xl border border-zinc-200 bg-white p-6">
-                        <h2 class="font-semibold">Detection evidence</h2>
+                    <details class="mt-6 rounded-xl border border-zinc-200 bg-white p-6 text-sm">
+                        <summary class="cursor-pointer font-semibold">Detection evidence</summary>
                         <p class="mt-1 text-xs text-zinc-500">Why this file was classified as {{ $artifact->format }} — evidence, not a confidence percentage.</p>
                         <ul class="mt-2 space-y-1 text-sm">
                             @foreach($snapshot['detection'] as $item)
                                 <li class="font-mono text-xs"><span class="font-semibold">{{ $item['claim'] ?? '?' }}:</span> {{ $item['detail'] ?? '' }}</li>
                             @endforeach
                         </ul>
-                    </section>
+                    </details>
                 @endif
 
                 @foreach($details['panels'] ?? [] as $panel)
@@ -386,13 +387,23 @@
                 @if($analyses->isEmpty())
                     <p class="mt-2 text-sm text-zinc-500">No runs yet.</p>
                 @else
+                    @php($latestUsable = $analyses->first(fn ($run) => $run->isUsable()))
+                    @if($latestUsable !== null && $latestUsable->id !== $analyses->first()->id)
+                        <p class="mt-2 text-sm text-zinc-600">Latest usable result: <a href="{{ route('projects.artifacts.analyses.show', [$project, $artifact, $latestUsable]) }}" class="font-mono font-semibold text-emerald-700 hover:underline">#{{ $latestUsable->id }} {{ $latestUsable->adapter }}/{{ $latestUsable->adapter_version }} {{ $latestUsable->target }}</a> ({{ $latestUsable->statusLabel() }})</p>
+                    @endif
                     <ul class="mt-2 space-y-2 text-sm">
                         @foreach($analyses as $run)
                             <li class="flex flex-wrap items-center gap-2 rounded-lg border border-zinc-200 px-3 py-2">
                                 <a href="{{ route('projects.artifacts.analyses.show', [$project, $artifact, $run]) }}" class="font-mono font-semibold text-emerald-700 hover:underline">#{{ $run->id }} {{ $run->adapter }}/{{ $run->adapter_version }} {{ $run->target }}</a>
-                                <span class="rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-semibold">{{ $run->statusLabel() }}</span>
+                                @include('projects.artifacts._status-badge', ['status' => $run->status, 'label' => $run->statusLabel()])
                                 @if($run->progress_note)<span class="text-xs text-zinc-500">{{ $run->progress_note }}</span>@endif
                                 @if($run->error_message)<span class="text-xs text-red-700">{{ $run->error_message }}</span>@endif
+                                @if($run->error_code)
+                                    <details class="inline text-xs">
+                                        <summary class="inline cursor-pointer font-mono text-zinc-400 hover:underline">Diagnostic code</summary>
+                                        <code class="font-mono text-zinc-500">{{ $run->error_code }}</code>
+                                    </details>
+                                @endif
                                 <span class="ml-auto flex gap-2">
                                     @if(! $run->isTerminal())
                                         <form method="POST" action="{{ route('projects.artifacts.analyses.cancel', [$project, $artifact, $run]) }}" class="inline">

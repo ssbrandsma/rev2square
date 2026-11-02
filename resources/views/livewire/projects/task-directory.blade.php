@@ -65,7 +65,7 @@
                 <p class="mt-1 text-xs text-zinc-500">
                     <a href="{{ route('projects.show', $task->project) }}" class="font-semibold text-emerald-700 hover:text-emerald-600">{{ $task->project->title }}</a>
                     @if($task->milestone) · {{ $task->milestone->title }}@endif
-                    · {{ $task->origin->label() }}
+                    <span class="ml-1 inline-block rounded-full bg-emerald-50 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-800">{{ $task->origin->label() }}</span>
                 </p>
                 @if($task->description)
                     <p class="mt-2 text-sm text-zinc-600">{{ \Illuminate\Support\Str::limit($task->description, 200) }}</p>

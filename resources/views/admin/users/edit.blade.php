@@ -1,4 +1,5 @@
 <x-app-layout>
+    <x-slot name="title">Change role or AI limits — {{ $user->name }}</x-slot>
     <x-slot name="header">
         <p class="text-sm font-semibold text-emerald-700">Administration · User #{{ $user->id }}</p>
         <h1 class="mt-1 text-[1.75rem] font-semibold leading-tight tracking-tight sm:text-3xl">Change role or AI limits</h1>

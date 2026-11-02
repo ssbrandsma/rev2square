@@ -42,7 +42,9 @@
                     class="text-sm text-zinc-600">
                 <button type="submit" class="rounded-lg border border-zinc-300 px-3 py-1.5 text-xs font-semibold text-zinc-700 hover:bg-zinc-50">Attach file</button>
             </form>
-            <p class="mt-1 text-xs text-zinc-500">Logs and documents only (max 5 MB). Never upload credentials, private keys, serial numbers, or personal data — attachments are visible to everyone who can view this project.</p>
+            @once
+                <p class="mt-1 text-xs text-zinc-500">Logs and documents only (max 5 MB). Never upload credentials, private keys, serial numbers, or personal data — attachments are visible to everyone who can view this project.</p>
+            @endonce
         @endif
     @endauth
 </div>

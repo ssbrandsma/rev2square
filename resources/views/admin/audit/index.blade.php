@@ -1,4 +1,5 @@
 <x-app-layout>
+    <x-slot name="title">Audit log</x-slot>
     <x-slot name="header">
         <p class="text-sm font-semibold text-emerald-700">Administration</p>
         <h1 class="mt-1 text-[1.75rem] font-semibold leading-tight tracking-tight sm:text-3xl">Audit log</h1>
@@ -21,33 +22,36 @@
                 <thead class="border-b border-zinc-200 text-xs text-zinc-500">
                     <tr>
                         <th class="px-4 py-3">At (UTC)</th>
-                        <th class="px-4 py-3">Actor</th>
-                        <th class="px-4 py-3">Action</th>
-                        <th class="px-4 py-3">Target</th>
-                        <th class="px-4 py-3">Reason</th>
-                        <th class="px-4 py-3">Change</th>
+                        <th class="px-4 py-3">Event</th>
+                        <th class="px-4 py-3">Raw values</th>
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-zinc-100">
                     @forelse($events as $event)
+                        @php($readableAction = Str::ucfirst(Str::lower(Str::headline(str_replace('.', ' ', $event->action)))))
                         <tr>
-                            <td class="whitespace-nowrap px-4 py-3 font-mono text-xs">{{ $event->created_at->format('Y-m-d H:i') }}<br /><span class="text-zinc-400">{{ $event->correlation_id }}</span></td>
-                            <td class="px-4 py-3 text-xs">{{ $event->actor?->email ?? 'console' }}</td>
-                            <td class="px-4 py-3 font-mono text-xs">{{ $event->action }} <span class="text-zinc-500">({{ $event->outcome }})</span></td>
-                            <td class="px-4 py-3 font-mono text-xs">@if($event->targetAdminUrl())<a href="{{ $event->targetAdminUrl() }}" class="font-semibold text-emerald-700">{{ class_basename($event->target_type).' #'.$event->target_id }}</a>@else{{ $event->target_type ? class_basename($event->target_type).' #'.$event->target_id : '—' }}@endif</td>
-                            <td class="max-w-64 px-4 py-3 text-xs">{{ $event->reason ?? '—' }}</td>
-                            <td class="max-w-80 px-4 py-3 font-mono text-xs">
-                                @if($event->before || $event->after)
-                                    <details><summary class="cursor-pointer text-emerald-700">before → after</summary>
+                            <td class="whitespace-nowrap px-4 py-3 text-xs">
+                                <span class="font-mono">{{ $event->created_at->format('Y-m-d H:i') }}</span><br />
+                                <span class="text-zinc-500">{{ $event->created_at->diffForHumans() }}</span>
+                            </td>
+                            <td class="px-4 py-3 text-xs">
+                                <p class="text-sm font-semibold text-zinc-900">{{ $readableAction }}</p>
+                                <p class="mt-0.5 text-zinc-600">{{ $event->actor?->email ?? 'console' }} · @if($event->targetAdminUrl())<a href="{{ $event->targetAdminUrl() }}" class="font-semibold text-emerald-700">{{ class_basename($event->target_type).' #'.$event->target_id }}</a>@else{{ $event->target_type ? class_basename($event->target_type).' #'.$event->target_id : 'No target' }}@endif</p>
+                                <p class="mt-0.5 text-zinc-600">{{ $event->reason ?? 'No reason recorded.' }}</p>
+                            </td>
+                            <td class="px-4 py-3 font-mono text-xs">
+                                <details><summary class="cursor-pointer font-sans font-semibold text-emerald-700">Raw values</summary>
+                                    <p class="mt-1">{{ $event->action }} <span class="text-zinc-500">({{ $event->outcome }})</span></p>
+                                    <p class="text-zinc-500">{{ $event->correlation_id }}</p>
+                                    @if($event->before || $event->after)
+                                        <p class="mt-1 font-sans text-zinc-500">before → after</p>
                                         <pre class="mt-1 overflow-x-auto whitespace-pre-wrap">{{ json_encode(['before' => $event->before, 'after' => $event->after], JSON_PRETTY_PRINT) }}</pre>
-                                    </details>
-                                @else
-                                    —
-                                @endif
+                                    @endif
+                                </details>
                             </td>
                         </tr>
                     @empty
-                        <tr><td colspan="6" class="px-4 py-6 text-center text-zinc-500">No audit records match.</td></tr>
+                        <tr><td colspan="3" class="px-4 py-6 text-center text-zinc-500">No audit records match.</td></tr>
                     @endforelse
                 </tbody>
             </table>

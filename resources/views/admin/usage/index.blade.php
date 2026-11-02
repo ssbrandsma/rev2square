@@ -1,4 +1,5 @@
 <x-app-layout>
+    <x-slot name="title">AI usage</x-slot>
     <x-slot name="header">
         <p class="text-sm font-semibold text-emerald-700">Administration</p>
         <h1 class="mt-1 text-[1.75rem] font-semibold leading-tight tracking-tight sm:text-3xl">AI usage</h1>

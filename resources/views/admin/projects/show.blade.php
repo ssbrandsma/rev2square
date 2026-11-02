@@ -1,4 +1,5 @@
 <x-app-layout>
+    <x-slot name="title">{{ $project->title }} — Projects</x-slot>
     <x-slot name="header">
         <p class="text-sm font-semibold text-emerald-700">Administration · Project #{{ $project->id }}</p>
         <h1 class="mt-1 text-[1.75rem] font-semibold leading-tight tracking-tight sm:text-3xl">{{ $project->title }}</h1>

@@ -1,4 +1,5 @@
 <x-app-layout>
+    <x-slot name="title">{{ $profileUser->name }}</x-slot>
     <x-slot name="header">
         <p class="text-sm font-semibold text-emerald-700">Member</p>
         <div class="mt-1 flex items-start gap-4">
@@ -55,7 +56,7 @@
             <section aria-label="{{ $meta['title'] }}">
                 <h2 class="text-sm font-semibold text-zinc-500">{{ $meta['title'] }} <span class="text-zinc-400">({{ $sections[$key]['total'] }})</span></h2>
                 @if($sections[$key]['items']->isEmpty())
-                    <p class="mt-3 rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-6 text-sm text-zinc-600">{{ $meta['empty'] }}</p>
+                    <p class="mt-3 rounded-xl border border-dashed border-zinc-300 bg-zinc-50 px-4 py-3 text-sm text-zinc-600">{{ $meta['empty'] }}</p>
                 @else
                     <ul class="mt-3 space-y-3">
                         @foreach($sections[$key]['items'] as $card)
@@ -87,7 +88,7 @@
         <section aria-label="Contributions">
             <h2 class="text-sm font-semibold text-zinc-500">Contributions <span class="text-zinc-400">({{ $sections['contributions']['total'] }})</span></h2>
             @if($sections['contributions']['items']->isEmpty())
-                <p class="mt-3 rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-6 text-sm text-zinc-600">No recorded contributions on published projects yet.</p>
+                <p class="mt-3 rounded-xl border border-dashed border-zinc-300 bg-zinc-50 px-4 py-3 text-sm text-zinc-600">No recorded contributions on published projects yet.</p>
             @else
                 <ul class="mt-3 space-y-3">
                     @foreach($sections['contributions']['items'] as $contribution)

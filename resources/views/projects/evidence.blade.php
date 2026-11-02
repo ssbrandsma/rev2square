@@ -1,9 +1,13 @@
 <x-app-layout>
+    <x-slot name="title">Evidence — {{ $project->title }}</x-slot>
     <x-slot name="header">
         <p class="text-sm font-semibold text-emerald-700">Evidence</p>
         <h1 class="mt-1 text-[1.75rem] font-semibold leading-tight tracking-tight sm:text-3xl">{{ $project->title }}</h1>
-        <p class="mt-1 text-sm text-zinc-600"><a href="{{ route('projects.show', $project) }}" class="font-semibold text-emerald-700">← Back to project</a></p>
+        @include('projects._back-link', ['url' => route('projects.show', $project), 'label' => 'Back to project'])
     </x-slot>
+
+    @include('projects._nav', ['project' => $project, 'active' => 'evidence'])
+
     <div class="mx-auto max-w-6xl px-4 py-10 sm:px-6">
         <livewire:projects.evidence-manager :project="$project" />
 

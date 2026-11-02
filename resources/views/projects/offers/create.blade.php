@@ -1,8 +1,13 @@
 <x-app-layout>
+    <x-slot name="title">Contribute — {{ $project->title }}</x-slot>
     <x-slot name="header">
         <p class="text-sm font-semibold text-emerald-700">Contribute</p>
         <h1 class="mt-1 text-[1.75rem] font-semibold leading-tight tracking-tight sm:text-3xl">{{ $project->title }}</h1>
+        @include('projects._back-link', ['url' => route('projects.show', $project), 'label' => 'Back to project'])
     </x-slot>
+
+    @include('projects._nav', ['project' => $project, 'active' => 'team'])
+
     <div class="mx-auto max-w-2xl px-4 py-10 sm:px-6">
         @if($denial)
             <p class="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">{{ $denial }}</p>

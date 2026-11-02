@@ -19,6 +19,8 @@
         </div>
     </section>
 
+    @include('projects._nav', ['project' => $project, 'active' => 'overview'])
+
     <div class="mx-auto max-w-4xl px-4 py-10 sm:px-6">
         <p class="rounded-xl border border-zinc-200 bg-zinc-50 px-4 py-3 text-sm text-zinc-700">
             <span class="font-semibold">How to read this:</span>

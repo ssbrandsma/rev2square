@@ -1,4 +1,5 @@
 <x-app-layout>
+    <x-slot name="title">Application from {{ $offer->user->name }} — {{ $project->title }}</x-slot>
     <x-slot name="header">
         <p class="text-sm font-semibold text-emerald-700">
             <a href="{{ route('projects.show', $project) }}" class="hover:underline">{{ $project->title }}</a> · {{ $offer->type->label() }}
@@ -10,7 +11,15 @@
                 @elseif($offer->status->value === 'pending') bg-amber-100 text-amber-800
                 @else bg-zinc-100 text-zinc-700 @endif">{{ $offer->status->label() }}</span>
         </div>
+        @can('update', $project)
+            @include('projects._back-link', ['url' => route('projects.offers.index', $project), 'label' => 'All offers'])
+        @else
+            @include('projects._back-link', ['url' => route('projects.show', $project), 'label' => 'Back to project'])
+        @endcan
     </x-slot>
+
+    @include('projects._nav', ['project' => $project, 'active' => 'team'])
+
     <div class="mx-auto max-w-3xl px-4 py-10 sm:px-6">
         @if(session('status'))
             <p class="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">{{ session('status') }}</p>

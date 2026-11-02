@@ -1,4 +1,5 @@
 <x-app-layout>
+    <x-slot name="title">Analysis backends</x-slot>
     <x-slot name="header">
         <p class="text-sm font-semibold text-emerald-700">Administration</p>
         <h1 class="mt-1 text-[1.75rem] font-semibold leading-tight tracking-tight sm:text-3xl">Analysis backends</h1>
@@ -8,16 +9,15 @@
 
         <section class="mb-6 rounded-xl border border-zinc-200 bg-white p-4 sm:p-6">
             <h2 class="font-semibold">Execution readiness</h2>
-            <p class="mt-1 text-xs text-zinc-500">Worker-verified snapshots from the isolated runners. A backend queues work only when ready; {{ \App\Services\Ops\DeployHints::refreshSnapshotsHint() }}</p>
+            <p class="mt-1 text-xs text-zinc-500">Worker-verified snapshots from the isolated runners. A backend queues work only when ready.</p>
             <div class="mt-3 overflow-x-auto">
                 <table class="w-full text-left text-sm">
                     <thead>
                         <tr class="border-b border-zinc-200 text-xs uppercase tracking-wide text-zinc-500">
                             <th class="py-2 pr-4">Backend</th>
-                            <th class="py-2 pr-4">Ready</th>
-                            <th class="py-2 pr-4">Version</th>
-                            <th class="py-2 pr-4">Runner</th>
-                            <th class="py-2">Note</th>
+                            <th class="py-2 pr-4">Status</th>
+                            <th class="py-2 pr-4">Last checked</th>
+                            <th class="py-2">Details</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -31,14 +31,32 @@
                                         <span class="rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-800">not ready</span>
                                     @endif
                                 </td>
-                                <td class="py-2 pr-4 font-mono text-xs">{{ $backend['version'] ?? '—' }}</td>
-                                <td class="py-2 pr-4 font-mono text-xs">{{ $backend['runner'] ? ($backend['runner']['arch'] ?? '?').' / '.($backend['runner']['digest'] ?? '?') : 'in-process' }}</td>
-                                <td class="py-2 text-xs text-zinc-600">{{ $backend['note'] }}</td>
+                                <td class="py-2 pr-4 text-xs text-zinc-600">
+                                    @if($backend['checked_at'])
+                                        <time datetime="{{ $backend['checked_at']->toIso8601String() }}" title="{{ $backend['checked_at']->format('Y-m-d H:i:s T') }}">{{ $backend['checked_at']->diffForHumans() }}</time>
+                                    @elseif(! empty($backend['bundled']))
+                                        Bundled with the app
+                                    @else
+                                        No snapshot yet
+                                    @endif
+                                </td>
+                                <td class="py-2 text-xs text-zinc-600">
+                                    <details>
+                                        <summary class="cursor-pointer font-semibold text-emerald-700">Ops details</summary>
+                                        <dl class="mt-1 space-y-1">
+                                            <div><dt class="inline font-semibold text-zinc-500">Version: </dt><dd class="inline font-mono">{{ $backend['version'] ?? '—' }}</dd></div>
+                                            <div><dt class="inline font-semibold text-zinc-500">Runner: </dt><dd class="inline font-mono">{{ $backend['runner'] ? ($backend['runner']['arch'] ?? '?').' / '.($backend['runner']['image'] ?? '?').' / '.($backend['runner']['digest'] ?? '?') : 'in-process' }}</dd></div>
+                                            @if(! empty($backend['worker']))<div><dt class="inline font-semibold text-zinc-500">Worker: </dt><dd class="inline font-mono">{{ $backend['worker'] }}</dd></div>@endif
+                                            <div><dt class="font-semibold text-zinc-500">Note</dt><dd>{{ $backend['note'] }}</dd></div>
+                                        </dl>
+                                    </details>
+                                </td>
                             </tr>
                         @endforeach
                     </tbody>
                 </table>
             </div>
+            <p class="mt-2 text-xs text-zinc-500">Snapshots refresh on the worker. {{ \App\Services\Ops\DeployHints::refreshSnapshotsHint() }}</p>
         </section>
 
         <div class="grid grid-cols-1 gap-6 sm:grid-cols-2">

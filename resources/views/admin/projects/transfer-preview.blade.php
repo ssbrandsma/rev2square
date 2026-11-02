@@ -1,8 +1,9 @@
 <x-app-layout>
+    <x-slot name="title">Confirm transfer — {{ $project->title }}</x-slot>
     <x-slot name="header">
         <p class="text-sm font-semibold text-emerald-700">Administration · Project #{{ $project->id }}</p>
         <h1 class="mt-1 text-[1.75rem] font-semibold leading-tight tracking-tight sm:text-3xl">Confirm transfer</h1>
-        <p class="mt-1 text-sm text-zinc-600"><a href="{{ route('admin.projects.transfer', $project) }}" class="font-semibold text-emerald-700">← Change details</a></p>
+        @include('projects._back-link', ['url' => route('admin.projects.transfer', $project), 'label' => 'Change details'])
     </x-slot>
     <div class="mx-auto max-w-3xl px-4 py-10 sm:px-6">
         @include('admin._nav')

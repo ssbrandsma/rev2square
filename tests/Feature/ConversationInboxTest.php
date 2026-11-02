@@ -203,7 +203,8 @@ class ConversationInboxTest extends TestCase
         $this->actingAs($applicant)
             ->get(route('inbox.index'))
             ->assertOk()
-            ->assertSee('Task update:', false);
+            ->assertSee('Task update:', false)
+            ->assertDontSee('only notifies you in-app', false);
 
         $notification = $applicant->notifications()->firstOrFail();
         $this->assertNull($notification->read_at);

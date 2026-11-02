@@ -42,7 +42,7 @@ class OfferController extends Controller
             'tasks' => $tasks,
             'selectedTaskId' => $request->integer('task') ?: null,
             'selectedType' => $requestedType,
-            'denial' => ProjectActionPolicy::contributionDenial($project, $request->user()),
+            'denial' => ProjectActionPolicy::offerDenial($project, $request->user()),
         ]);
     }
 
@@ -50,7 +50,7 @@ class OfferController extends Controller
     {
         Gate::authorize('view', $project);
 
-        if ($denial = ProjectActionPolicy::contributionDenial($project, $request->user())) {
+        if ($denial = ProjectActionPolicy::offerDenial($project, $request->user())) {
             return back()->withInput()->withErrors(['type' => $denial]);
         }
 

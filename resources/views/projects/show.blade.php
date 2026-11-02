@@ -149,7 +149,7 @@
                                 <h3 class="font-bold"><a href="{{ route('projects.tasks.show', [$project, $task]) }}" class="hover:text-emerald-700">{{ $task->title }}</a></h3>
                                 <div class="flex flex-wrap items-center gap-1.5">
                                     <span class="rounded-full bg-zinc-100 px-2.5 py-0.5 text-xs font-semibold text-zinc-700">{{ $task->status->label() }}</span>
-                                    <span class="rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-800">{{ $task->origin->label() }}</span>
+                                    <span class="rounded-full bg-emerald-50 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-800">{{ $task->origin->label() }}</span>
                                 </div>
                             </div>
                             @if($task->description)
@@ -166,15 +166,14 @@
                                     <span class="rounded-full bg-zinc-100 px-2.5 py-0.5 text-[11px] font-semibold text-zinc-700">→ {{ $task->assignee->name }}</span>
                                 @endif
                             </div>
-                            <p class="mt-3 flex flex-wrap gap-4">
-                                <a href="{{ route('projects.tasks.show', [$project, $task]) }}" class="text-sm font-semibold text-emerald-700 hover:text-emerald-600">Details →</a>
-                                @if($task->status === \App\Enums\TaskStatus::Open && ! $contributionDenial)
+                            @if($task->status === \App\Enums\TaskStatus::Open && ! $offerDenial)
+                                <p class="mt-3">
                                     <a href="{{ route('projects.offers.create', [$project, 'task' => $task->id]) }}" class="text-sm font-semibold text-emerald-700 hover:text-emerald-600">Help with this task →</a>
-                                @endif
-                            </p>
+                                </p>
+                            @endif
                         </div>
                     @empty
-                        <p class="rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-6 text-sm text-zinc-600">No contributor tasks yet.</p>
+                        <p class="rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-6 text-sm text-zinc-600">No tasks yet.</p>
                     @endforelse
                 </div>
                 @if($retiredTaskCount > 0)
@@ -182,7 +181,7 @@
                 @endif
                 @if($contributionDenial)
                     <p class="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">{{ $contributionDenial }}</p>
-                @else
+                @elseif(! $offerDenial)
                     <p class="mt-4"><a href="{{ route('projects.offers.create', $project) }}" class="inline-block rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-emerald-500">Offer help →</a></p>
                 @endif
             </section>
@@ -382,7 +381,6 @@
                                 @if($testReport->variantLabel()) · {{ $testReport->variantLabel() }}@endif
                             </p>
                             <p class="mt-2 text-sm text-zinc-600">{{ \Illuminate\Support\Str::limit($testReport->body, 220) }}</p>
-                            <p class="mt-3"><a href="{{ route('projects.test-reports.show', [$project, $testReport]) }}" class="text-sm font-semibold text-emerald-700 hover:text-emerald-600">Read full report →</a></p>
                         </article>
                     @empty
                         <p class="rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-6 text-sm text-zinc-600">No test reports yet.</p>

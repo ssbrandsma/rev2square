@@ -1,4 +1,5 @@
 <x-app-layout>
+    <x-slot name="title">Uploaded files — {{ $project->title }}</x-slot>
     <x-slot name="header">
         <p class="text-sm font-semibold text-emerald-700">Uploaded files</p>
         <h1 class="mt-1 text-[1.75rem] font-semibold leading-tight tracking-tight sm:text-3xl">{{ $project->title }}</h1>
@@ -32,7 +33,7 @@
                             <p class="mt-0.5 text-xs text-zinc-500">
                                 {{ $artifact->format }}@if($artifact->arch), {{ $artifact->arch }}@endif
                                 · {{ number_format($artifact->byte_size / 1024, 0) }} KB
-                                · {{ $artifact->stateLabel() }}
+                                · @include('projects.artifacts._status-badge', ['status' => $artifact->state, 'label' => $artifact->stateLabel()])
                                 @if($artifact->state === 'failed' && $artifact->failure_message)
                                     — {{ $artifact->failure_message }}
                                 @endif

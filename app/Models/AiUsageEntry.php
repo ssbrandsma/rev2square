@@ -48,4 +48,64 @@ class AiUsageEntry extends Model
 
         return (int) ($this->input_tokens ?? 0) + (int) ($this->output_tokens ?? 0);
     }
+
+    public function featureLabel(): string
+    {
+        return match ($this->feature) {
+            'repo_agent' => 'Agent chat',
+            'upload_agent' => 'Agent file analysis',
+            'revival_investigator' => 'Revival analysis',
+            'architecture_investigator' => 'Architecture analysis',
+            'connection_test' => 'Connection test',
+            default => $this->feature !== null && $this->feature !== ''
+                ? ucfirst(str_replace('_', ' ', $this->feature))
+                : 'Unknown',
+        };
+    }
+
+    public function operationLabel(): string
+    {
+        $operation = (string) $this->operation;
+
+        if (preg_match('/^conversation-(\d+)$/', $operation, $match)) {
+            return 'Conversation #'.$match[1];
+        }
+        if (preg_match('/^analysis-run-(\d+)$/', $operation, $match)) {
+            return 'Analysis run #'.$match[1];
+        }
+        if (preg_match('/^architecture-snapshot-(\d+)$/', $operation, $match)) {
+            return 'Architecture snapshot #'.$match[1];
+        }
+        if ($operation === 'connection-test') {
+            return 'Connection test';
+        }
+        if ($operation === '' || $operation === 'unknown') {
+            return 'Unknown operation';
+        }
+
+        return $operation;
+    }
+
+    public function conversationId(): ?int
+    {
+        if (! in_array($this->feature, ['repo_agent', 'upload_agent'], true)) {
+            return null;
+        }
+        if (! preg_match('/^conversation-(\d+)$/', (string) $this->operation, $match)) {
+            return null;
+        }
+
+        return (int) $match[1];
+    }
+
+    public function statusLabel(): string
+    {
+        return match ($this->status) {
+            self::STATUS_QUEUED => 'Queued',
+            self::STATUS_SUCCEEDED => 'Succeeded',
+            self::STATUS_FAILED => 'Failed',
+            self::STATUS_CANCELLED => 'Cancelled',
+            default => 'Unknown',
+        };
+    }
 }

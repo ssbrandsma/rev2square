@@ -1,19 +1,19 @@
 <x-app-layout>
+    <x-slot name="title">Inbox</x-slot>
     <x-slot name="header">
-        <p class="text-sm font-semibold text-emerald-700">Inbox</p>
-        <h1 class="mt-1 text-[1.75rem] font-semibold leading-tight tracking-tight sm:text-3xl">Notifications</h1>
+        @php($unreadInboxCount = auth()->user()->unreadNotifications()->count())
+        <h1 class="text-[1.75rem] font-semibold leading-tight tracking-tight sm:text-3xl">Inbox @if($unreadInboxCount > 0)<span class="text-lg font-semibold text-zinc-400">({{ $unreadInboxCount }} unread)</span>@endif</h1>
     </x-slot>
     <div class="mx-auto max-w-3xl px-4 py-10 sm:px-6">
         @if(session('status'))
             <p class="mb-4 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">{{ session('status') }}</p>
         @endif
 
-        <div class="mb-4 flex items-center justify-between">
-            <p class="text-sm text-zinc-500">{{ auth()->user()->unreadNotifications()->count() }} unread. Rev²Square only notifies you in-app; no emails are sent.</p>
+        <div class="mb-4 flex items-center justify-end">
             <form method="POST" action="{{ route('inbox.read-all') }}" class="inline">
                 @csrf
                 @method('PATCH')
-                <button type="submit" class="text-sm font-semibold text-emerald-700 hover:text-emerald-600">Mark all as read</button>
+                <button type="submit" @disabled($unreadInboxCount === 0) class="text-sm font-semibold text-emerald-700 hover:text-emerald-600 disabled:cursor-not-allowed disabled:text-zinc-400 disabled:hover:text-zinc-400">Mark all as read</button>
             </form>
         </div>
 

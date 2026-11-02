@@ -134,10 +134,12 @@ class AnalysisOutputTest extends TestCase
         $zip = $this->outputZipBytes(['a.java' => 'class A{}']);
         $analysis = $this->readyAnalysis($artifact, $owner, 'jadx', 'dalvik', $this->reconEvidence([], []), $zip);
 
+        // Guest assertions first: actingAs persists for the rest of
+        // the test, so any later "guest" call would run authenticated.
         $this->get(route('projects.artifacts.analyses.download', [$project, $artifact, $analysis]))->assertRedirect();
+        $this->get(route('projects.artifacts.analyses.source', [$project, $artifact, $analysis]))->assertRedirect();
         $this->actingAs($outsider)->get(route('projects.artifacts.analyses.download', [$project, $artifact, $analysis]))->assertForbidden();
         // Same boundary for the browser and regeneration.
-        $this->get(route('projects.artifacts.analyses.source', [$project, $artifact, $analysis]))->assertRedirect();
         $this->actingAs($outsider)->get(route('projects.artifacts.analyses.source', [$project, $artifact, $analysis]))->assertForbidden();
         $this->actingAs($outsider)->post(route('projects.artifacts.analyses.regenerate', [$project, $artifact, $analysis]))->assertForbidden();
     }

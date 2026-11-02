@@ -1,8 +1,13 @@
 <x-app-layout>
+    <x-slot name="title">Edit project — {{ $project->title }}</x-slot>
     <x-slot name="header">
         <p class="text-sm font-semibold text-emerald-700">Edit project</p>
         <h1 class="mt-1 text-[1.75rem] font-semibold leading-tight tracking-tight sm:text-3xl">{{ $project->title }}</h1>
+        @include('projects._back-link', ['url' => route('projects.show', $project), 'label' => 'Back to project'])
     </x-slot>
+
+    @include('projects._nav', ['project' => $project, 'active' => 'overview'])
+
     <div class="mx-auto max-w-3xl px-4 py-10 sm:px-6">
         @if(session('status'))
             <p class="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800">{{ session('status') }}</p>
@@ -12,23 +17,25 @@
         @endif
 
         <nav aria-label="Edit sections" class="mb-6 flex flex-wrap gap-1 border-b border-zinc-200 pb-3 text-sm">
-            @foreach([['basics', 'Basics'], ['cover', 'Cover'], ['story', 'Story'], ['library', 'Media library'], ['gallery', 'Gallery'], ['files', 'Files']] as [$anchor, $label])
+            @foreach([['basics', 'Basics'], ['cover', 'Cover'], ['library', 'Media library'], ['gallery', 'Gallery'], ['files', 'Files']] as [$anchor, $label])
                 <a href="#{{ $anchor }}" class="rounded-lg px-3 py-2 font-semibold text-zinc-600 hover:bg-zinc-100">{{ $label }}</a>
             @endforeach
         </nav>
 
         <section id="basics" aria-label="Basics" class="scroll-mt-24 rounded-xl border border-zinc-200 bg-white p-6 sm:p-8">
             <h2 class="font-semibold">Basics</h2>
-            <form method="POST" action="{{ route('projects.update', $project) }}" class="mt-4">
+            <form method="POST" action="{{ route('projects.update', $project) }}" class="mt-4 space-y-5">
                 @csrf
                 @method('PUT')
-                @include('projects._form', ['project' => $project, 'hideBody' => $project->hasRichStory()])
-                @if($project->hasRichStory())
-                    <p class="mt-3 rounded-lg bg-zinc-100 px-3 py-2 text-sm text-zinc-600">The story is managed in the rich editor below; it is no longer edited as plain text here.</p>
-                @endif
-                <div class="mt-6 flex items-center justify-end gap-3 border-t border-zinc-100 pt-6">
+                @include('projects._form-identity', ['project' => $project])
+                <div>
+                    <h3 class="text-sm font-semibold">Project story</h3>
+                    @include('projects._story-editor', ['project' => $project, 'images' => $images])
+                </div>
+                @include('projects._form-details', ['project' => $project])
+                <div class="flex items-center justify-end gap-3 border-t border-zinc-100 pt-6">
                     <a href="{{ route('projects.show', $project) }}" class="text-sm font-semibold text-zinc-600 hover:text-zinc-900">Cancel</a>
-                    <button type="submit" class="rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-emerald-500">Save basics</button>
+                    <button type="submit" class="rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-emerald-500">Save project</button>
                 </div>
             </form>
         </section>
@@ -71,71 +78,6 @@
                 <label for="cover-upload" class="text-sm font-semibold">Upload images</label>
                 <input id="cover-upload" name="images[]" type="file" multiple required accept=".jpg,.jpeg,.png,.webp" class="mt-1 block w-full text-sm text-zinc-700 file:mr-3 file:rounded-lg file:border file:border-zinc-300 file:bg-zinc-50 file:px-3 file:py-2 file:text-sm file:font-semibold" />
                 <button type="submit" class="mt-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500">Upload</button>
-            </form>
-        </section>
-
-        <section id="story" aria-label="Story editor" class="mt-6 scroll-mt-24 rounded-xl border border-zinc-200 bg-white p-6 sm:p-8">
-            <h2 class="font-semibold">Story</h2>
-            @if(! $project->hasRichStory() && ! blank($project->body))
-                <p class="mt-1 rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">Your existing story is loaded below as paragraphs. Saving upgrades it to the rich format; no text is lost.</p>
-            @endif
-            <p class="mt-1 text-sm text-zinc-500">Text supports <span class="font-mono">**bold**</span>, <span class="font-mono">*italic*</span>, <span class="font-mono">`code`</span>, and <span class="font-mono">[text](https://…)</span>. Images come from this project's library only.</p>
-            <form method="POST" action="{{ route('projects.story.update', $project) }}" class="mt-4">
-                @csrf
-                @method('PATCH')
-                <input type="hidden" name="presentation_version" value="{{ $project->presentation_version }}" />
-                <div data-story-editor
-                    data-initial="{{ old('story_document', json_encode($project->hasRichStory() ? $project->story_document : ['version' => 1, 'blocks' => array_map(fn ($p) => ['type' => 'paragraph', 'text' => $p], preg_split('/\n\s*\n/', trim($project->body ?? '')) ?: [])])) }}"
-                    data-images="{{ json_encode($images->map(fn ($m) => ['id' => $m->id, 'title' => $m->displayTitle(), 'alt' => $m->altText(), 'caption' => $m->caption, 'thumb_url' => $m->isReady() ? route('projects.media.show', [$project, $m, 'variant' => 'thumb']) : null])->values()) }}">
-                    <input type="hidden" name="story_document" value="" />
-                    <div class="flex flex-wrap items-center gap-2">
-                        <button type="button" data-undo class="rounded-lg border border-zinc-300 px-2 py-1 text-xs font-semibold text-zinc-700 hover:bg-zinc-50">Undo</button>
-                        <button type="button" data-redo class="rounded-lg border border-zinc-300 px-2 py-1 text-xs font-semibold text-zinc-700 hover:bg-zinc-50">Redo</button>
-                        <span class="text-zinc-300">|</span>
-                        <button type="button" data-insert="**bold**" class="rounded-lg border border-zinc-300 px-2 py-1 text-xs font-bold hover:bg-zinc-50" title="Insert bold">B</button>
-                        <button type="button" data-insert="*italic*" class="rounded-lg border border-zinc-300 px-2 py-1 text-xs italic hover:bg-zinc-50" title="Insert italic">I</button>
-                        <button type="button" data-insert="[text](https://)" class="rounded-lg border border-zinc-300 px-2 py-1 font-mono text-xs hover:bg-zinc-50" title="Insert link">Link</button>
-                        <button type="button" data-preview-toggle class="rounded-lg border border-zinc-300 px-2 py-1 text-xs font-semibold text-zinc-700 hover:bg-zinc-50">Preview</button>
-                        <span data-save-state class="ml-auto text-xs text-zinc-500">Saved</span>
-                    </div>
-                    <div data-editor-pane class="mt-3">
-                        <ul data-blocks class="space-y-3"></ul>
-                        <div class="mt-3 flex flex-wrap gap-2">
-                            @foreach([['paragraph', '+ Paragraph'], ['heading', '+ Heading'], ['list', '+ List'], ['quote', '+ Quote'], ['code', '+ Code'], ['image', '+ Image']] as [$type, $label])
-                                <button type="button" data-add-block="{{ $type }}" class="rounded-lg border border-dashed border-zinc-300 px-3 py-1.5 text-xs font-semibold text-zinc-700 hover:bg-zinc-50">{{ $label }}</button>
-                            @endforeach
-                        </div>
-                    </div>
-                    <div data-preview hidden class="story-body mt-3 max-w-[70ch] space-y-4 rounded-lg bg-zinc-50 p-4 leading-relaxed"></div>
-                    <div data-image-picker hidden class="mt-3 rounded-xl border border-zinc-200 bg-zinc-50 p-4">
-                        <p class="text-sm font-semibold">Choose a project image</p>
-                        @if($images->isEmpty())
-                            <p class="mt-1 text-sm text-zinc-500">No images yet — upload one in the Cover section first.</p>
-                        @else
-                            <ul class="mt-2 grid grid-cols-3 gap-2 sm:grid-cols-4">
-                                @foreach($images as $image)
-                                    <li>
-                                        <button type="button" data-pick="{{ $image->id }}" class="block w-full overflow-hidden rounded-lg border border-zinc-200 bg-white hover:border-emerald-500" @disabled(! $image->isReady())>
-                                            @if($image->isReady())
-                                                <img src="{{ route('projects.media.show', [$project, $image, 'variant' => 'thumb']) }}" alt="" loading="lazy" class="aspect-square w-full object-cover" />
-                                            @elseif($image->isFailed())
-                                                <span class="flex aspect-square flex-col items-center justify-center gap-1 bg-red-50 px-1 text-center text-xs font-semibold text-red-700">Failed<span class="font-normal text-red-600">Retry in the media library</span></span>
-                                            @else
-                                                <span class="flex aspect-square items-center justify-center text-xs text-zinc-500">Processing…</span>
-                                            @endif
-                                            <span class="block truncate px-1 py-1 text-xs">{{ $image->displayTitle() }}</span>
-                                        </button>
-                                    </li>
-                                @endforeach
-                            </ul>
-                        @endif
-                        <button type="button" data-picker-close class="mt-2 text-sm font-semibold text-zinc-600 hover:text-zinc-900">Cancel</button>
-                    </div>
-                </div>
-                @error('story_document')<p class="mt-1 text-sm text-red-600">{{ $message }}</p>@enderror
-                <div class="mt-4 flex items-center justify-end gap-3 border-t border-zinc-100 pt-4">
-                    <button type="submit" data-save class="rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-emerald-500">Save story</button>
-                </div>
             </form>
         </section>
 
@@ -270,24 +212,33 @@
         </section>
 
         <section class="mt-6 rounded-xl border border-zinc-200 bg-white p-6">
-            <h2 class="text-sm font-semibold text-zinc-500">Publication checklist</h2>
-            <p class="mt-1 text-sm text-zinc-500">Early-stage publishing is welcome — this list only shows what visitors will (and will not) find. Nothing here blocks publishing.</p>
             @php($hasDevice = $project->devices()->exists())
             @php($hasEvidence = $project->repositories()->where('import_status', 'ready')->exists() || $project->observations()->exists() || $project->testReports()->exists())
             @php($openTasks = $project->tasks()->active()->count())
-            <ul class="mt-3 space-y-2 text-sm">
-                <li>{{ $project->pitch && ($project->body || $project->hasRichStory()) ? '✓' : '○' }} <span class="font-semibold">Purpose written</span> <span class="text-zinc-500">— pitch and story explain what this revival is about.</span></li>
-                <li>{{ $hasDevice ? '✓' : '○' }} <span class="font-semibold">Device described</span> <span class="text-zinc-500">— {{ $hasDevice ? 'a device is linked.' : 'no device linked yet; the page says so explicitly.' }}</span></li>
-                <li>{{ $hasEvidence ? '✓' : '○' }} <span class="font-semibold">Evidence started</span> <span class="text-zinc-500">— {{ $hasEvidence ? 'repository evidence or human sources exist.' : 'no evidence yet; import a repository or share an observation.' }}</span></li>
-                <li>✓ <span class="font-semibold">Maintainer identity</span> <span class="text-zinc-500">— published as {{ $project->owner->name }}.</span></li>
-                <li>{{ $openTasks > 0 ? '✓' : '○' }} <span class="font-semibold">Next steps visible</span> <span class="text-zinc-500">— {{ $openTasks > 0 ? $openTasks.' active task(s) for contributors.' : 'no active tasks yet.' }}</span></li>
-            </ul>
-            <p class="mt-3 text-sm"><a href="{{ route('projects.show', $project) }}" class="font-semibold text-emerald-700 hover:text-emerald-600">Preview the public page →</a></p>
+            @php($hasPurpose = (bool) ($project->pitch && ($project->body || $project->hasRichStory())))
+            @php($checklistDone = (int) $hasPurpose + (int) $hasDevice + (int) $hasEvidence + 1 + (int) ($openTasks > 0))
+            <details>
+                <summary class="cursor-pointer text-sm font-semibold text-zinc-700">Publication checklist · {{ $checklistDone }} of 5 ready</summary>
+                <p class="mt-1 text-sm text-zinc-500">Early-stage publishing is welcome — this list only shows what visitors will (and will not) find. Nothing here blocks publishing.</p>
+                <ul class="mt-3 space-y-2 text-sm">
+                    <li>{{ $hasPurpose ? '✓' : '○' }} <span class="font-semibold">Purpose written</span> <span class="text-zinc-500">— pitch and story explain what this revival is about.</span></li>
+                    <li>{{ $hasDevice ? '✓' : '○' }} <span class="font-semibold">Device described</span> <span class="text-zinc-500">— {{ $hasDevice ? 'a device is linked.' : 'no device linked yet; the page says so explicitly.' }}</span></li>
+                    <li>{{ $hasEvidence ? '✓' : '○' }} <span class="font-semibold">Evidence started</span> <span class="text-zinc-500">— {{ $hasEvidence ? 'repository evidence or human sources exist.' : 'no evidence yet; import a repository or share an observation.' }}</span></li>
+                    <li>✓ <span class="font-semibold">Maintainer identity</span> <span class="text-zinc-500">— published as {{ $project->owner->name }}.</span></li>
+                    <li>{{ $openTasks > 0 ? '✓' : '○' }} <span class="font-semibold">Next steps visible</span> <span class="text-zinc-500">— {{ $openTasks > 0 ? $openTasks.' active task(s) for contributors.' : 'no active tasks yet.' }}</span></li>
+                </ul>
+            </details>
+            <p class="mt-3 text-sm"><a href="{{ route('projects.show', $project) }}" class="font-semibold text-emerald-700 hover:text-emerald-600">{{ $project->isPublished() ? 'Preview the public page →' : 'Preview project →' }}</a></p>
         </section>
-        <form method="POST" action="{{ route('projects.destroy', $project) }}" class="mt-4" onsubmit="return confirm('Delete this project and its milestones and tasks?');">
-            @csrf
-            @method('DELETE')
-            <button type="submit" class="text-sm font-semibold text-red-600 hover:text-red-500">Delete project</button>
-        </form>
+
+        <section aria-label="Danger zone" class="mt-6 rounded-xl border border-red-200 bg-white p-6">
+            <h2 class="text-sm font-semibold text-red-700">Delete project</h2>
+            <p class="mt-1 text-sm text-zinc-600">Deletes the project with its milestones and tasks. This cannot be undone.</p>
+            <form method="POST" action="{{ route('projects.destroy', $project) }}" class="mt-3" onsubmit="return confirm('Delete this project and its milestones and tasks?');">
+                @csrf
+                @method('DELETE')
+                <button type="submit" class="rounded-lg border border-red-300 px-4 py-2 text-sm font-semibold text-red-600 hover:bg-red-50">Delete project</button>
+            </form>
+        </section>
     </div>
 </x-app-layout>

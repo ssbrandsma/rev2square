@@ -1,4 +1,5 @@
 <x-app-layout>
+    <x-slot name="title">Revival Agent — {{ $project->title }}</x-slot>
     <x-slot name="header">
         <p class="text-sm font-semibold text-emerald-700">Revival Agent</p>
         <h1 class="mt-1 text-[1.75rem] font-semibold leading-tight tracking-tight sm:text-3xl">{{ $project->title }}</h1>
@@ -17,11 +18,15 @@
             <h2 class="font-semibold">Ask about this project</h2>
             <p class="mt-1 max-w-[70ch] text-sm text-zinc-600">The agent investigates with the imported evidence and the architecture snapshot. Answers cite the sources they used; conversations stay private to you and the maintainers.</p>
             @if($repository === null || ! $repository->isReady())
-                @can('update', $project)
-                    <p class="mt-4 rounded-lg bg-zinc-100 px-4 py-3 text-sm text-zinc-600">Import repository evidence to enable chat — or investigate uploaded files below.</p>
+                @if($repository !== null && $repository->isImporting())
+                    <p class="mt-4 rounded-lg bg-zinc-100 px-4 py-3 text-sm text-zinc-600">Repository import is still running — chat opens when it finishes.@if($artifactsEnabled) You can investigate uploaded files below in the meantime.@endif</p>
                 @else
-                    <p class="mt-4 rounded-lg bg-zinc-100 px-4 py-3 text-sm text-zinc-600">No evidence to chat about yet.</p>
-                @endcan
+                    @can('update', $project)
+                        <p class="mt-4 rounded-lg bg-zinc-100 px-4 py-3 text-sm text-zinc-600">@if($repository !== null && $repository->import_status === 'failed')Repository import failed — start a new import from the <a href="{{ route('projects.evidence', $project) }}" class="font-semibold text-emerald-700 hover:underline">evidence tab</a>.@else Import repository evidence to enable chat — start from the <a href="{{ route('projects.evidence', $project) }}" class="font-semibold text-emerald-700 hover:underline">evidence tab</a>.@endif @if($artifactsEnabled)Or investigate uploaded files below.@endif</p>
+                    @else
+                        <p class="mt-4 rounded-lg bg-zinc-100 px-4 py-3 text-sm text-zinc-600">No repository evidence to chat about yet.@if($artifactsEnabled) You can investigate uploaded files below.@endif</p>
+                    @endcan
+                @endif
             @else
                 <form method="POST" action="{{ route('projects.agent.store', $project) }}" class="mt-4">
                     @csrf
@@ -41,14 +46,13 @@
         <section class="mt-6 rounded-xl border border-zinc-200 bg-white p-6">
             <h2 class="font-semibold">Investigate uploaded files</h2>
             <p class="mt-1 max-w-[70ch] text-sm text-zinc-600">
-                Upload executables (ELF, Windows PE, Mach-O), Android apps (APK/DEX), Java classes, firmware
-                (Intel HEX, S-record, C64 PRG), archives, or network captures (PCAP/PCAPNG).
-                Formats are detected from file contents, not extensions.
-                Limit {{ number_format($maxBytes / 1024 / 1024, 0) }} MiB per file, up to 5 files per upload. Batches are capped at about 80 MiB total — upload large files one at a time.
+                Executables, Android apps, Java classes, firmware, archives, and network captures —
+                detected from file contents, not extensions.
+                Limit {{ number_format($maxBytes / 1024 / 1024, 0) }} MiB per file, 5 files and about 80 MiB per batch — upload large files one at a time.
             </p>
             <p class="mt-2 max-w-[70ch] rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-                Captures and firmware may contain credentials, tokens, cookies, private keys, and personal data.
-                Raw files stay in private project storage; only bounded, redacted summaries are ever sent to the
+                Uploads may contain secrets and personal data.
+                Raw files stay in private project storage; only bounded, redacted summaries reach the
                 AI provider — and only after your explicit confirmation below.
             </p>
 
@@ -212,7 +216,7 @@
 
                 <label class="mt-4 flex items-start gap-2 rounded-lg border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm">
                     <input type="checkbox" name="consent" value="1" required class="mt-0.5 rounded border-zinc-300" />
-                    <span>I understand bounded, redacted evidence from the selected files (names, formats, extraction output, and — for binaries — disassembly excerpts and function lists, with credentials redacted where recognizable) will be sent to the configured Meta AI provider for this conversation. Local analysis and AI analysis are distinct steps; raw files are never sent in full. Redaction cannot catch every secret.</span>
+                    <span>Send bounded, redacted evidence from the selected files (names, formats, extraction output, and — for binaries — disassembly excerpts and function lists, with credentials redacted where recognizable) to the configured Meta AI provider for this conversation. Local and AI analysis are separate steps; raw files are never sent in full, and redaction cannot catch every secret.</span>
                 </label>
                 @error('consent')
                     <p class="mt-1 text-sm text-red-700">{{ $message }}</p>

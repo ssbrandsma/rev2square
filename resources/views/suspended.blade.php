@@ -1,4 +1,5 @@
 <x-guest-layout>
+    <x-slot name="title">Account suspended</x-slot>
     <h1 class="text-xl font-semibold">Account suspended</h1>
     <p class="mt-2 max-w-[70ch] text-sm text-zinc-600">
         This account has been suspended, so it cannot sign in or use Rev²Square right now.

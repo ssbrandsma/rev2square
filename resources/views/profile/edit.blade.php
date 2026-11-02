@@ -1,8 +1,8 @@
 <x-app-layout>
+    <x-slot name="title">Profile</x-slot>
     <x-slot name="header">
-        <h2 class="font-semibold text-xl text-gray-800 leading-tight">
-            {{ __('Profile') }}
-        </h2>
+        <p class="text-sm font-semibold text-emerald-700">Account</p>
+        <h1 class="mt-1 text-[1.75rem] font-semibold leading-tight tracking-tight sm:text-3xl">Profile</h1>
     </x-slot>
 
     <div class="py-12">
@@ -52,16 +52,57 @@
 
                             <div>
                                 <x-input-label value="Links (optional, up to 5)" />
-                                <div class="mt-1 space-y-2">
-                                    @for($i = 0; $i < 5; $i++)
-                                        @php($existing = $user->linkList()[$i] ?? ['label' => '', 'url' => ''])
+                                @php($linkRows = collect(old('links', $user->linkList()))->map(fn ($link) => ['label' => (string) ($link['label'] ?? ''), 'url' => (string) ($link['url'] ?? '')])->values()->all())
+                                @php($linkRows = array_slice([...$linkRows, ['label' => '', 'url' => '']], 0, 5))
+                                <div class="mt-1 space-y-2" data-link-rows>
+                                    @foreach($linkRows as $i => $row)
                                         <div class="flex gap-2">
-                                            <x-text-input name="links[{{ $i }}][label]" type="text" class="block w-1/3" :value="old('links.'.$i.'.label', $existing['label'])" placeholder="Label" aria-label="Link {{ $i + 1 }} label" />
-                                            <x-text-input name="links[{{ $i }}][url]" type="url" class="block w-2/3" :value="old('links.'.$i.'.url', $existing['url'])" placeholder="https://…" aria-label="Link {{ $i + 1 }} URL" />
+                                            <x-text-input name="links[{{ $i }}][label]" type="text" class="block w-1/3" :value="$row['label']" placeholder="Label" aria-label="Link {{ $i + 1 }} label" />
+                                            <x-text-input name="links[{{ $i }}][url]" type="url" class="block w-2/3" :value="$row['url']" placeholder="https://…" aria-label="Link {{ $i + 1 }} URL" />
                                         </div>
-                                    @endfor
+                                    @endforeach
                                 </div>
-                                <x-input-error class="mt-2" :messages="$errors->get('links.0.url')" />
+                                @if(count($linkRows) < 5)
+                                    <button type="button" data-add-link class="mt-2 text-sm font-semibold text-emerald-700 hover:text-emerald-600">+ Add another link</button>
+                                @endif
+                                <script>
+                                    // Adds blank link rows up to the server-enforced max of 5.
+                                    (function () {
+                                        var list = document.querySelector('[data-link-rows]');
+                                        var button = document.querySelector('[data-add-link]');
+                                        if (!list || !button) return;
+                                        button.addEventListener('click', function () {
+                                            var index = list.children.length;
+                                            if (index >= 5) {
+                                                button.hidden = true;
+                                                return;
+                                            }
+                                            var row = document.createElement('div');
+                                            row.className = 'flex gap-2';
+                                            var label = document.createElement('input');
+                                            label.name = 'links[' + index + '][label]';
+                                            label.type = 'text';
+                                            label.placeholder = 'Label';
+                                            label.setAttribute('aria-label', 'Link ' + (index + 1) + ' label');
+                                            label.className = 'border-gray-300 focus:border-indigo-500 focus:ring-indigo-500 rounded-md shadow-sm block w-1/3';
+                                            var url = document.createElement('input');
+                                            url.name = 'links[' + index + '][url]';
+                                            url.type = 'url';
+                                            url.placeholder = 'https://…';
+                                            url.setAttribute('aria-label', 'Link ' + (index + 1) + ' URL');
+                                            url.className = 'border-gray-300 focus:border-indigo-500 focus:ring-indigo-500 rounded-md shadow-sm block w-2/3';
+                                            row.appendChild(label);
+                                            row.appendChild(url);
+                                            list.appendChild(row);
+                                            if (list.children.length >= 5) {
+                                                button.hidden = true;
+                                            }
+                                            label.focus();
+                                        });
+                                    })();
+                                </script>
+                                @php($linkErrors = collect($errors->keys())->filter(fn ($key) => str_starts_with($key, 'links'))->flatMap(fn ($key) => $errors->get($key))->values()->all())
+                                <x-input-error class="mt-2" :messages="$linkErrors" />
                             </div>
 
                             <div>
@@ -97,7 +138,7 @@
                                     @csrf
                                     <label for="avatar" class="sr-only">Avatar image</label>
                                     <input id="avatar" name="avatar" type="file" accept="image/jpeg,image/png,image/webp,image/gif" required class="text-sm text-gray-600">
-                                    <x-primary-button>Upload</x-primary-button>
+                                    <x-primary-button>Upload avatar</x-primary-button>
                                 </form>
                                 <x-input-error :messages="$errors->get('avatar')" />
                                 @if($user->avatar_path)
@@ -118,7 +159,7 @@
                     <section>
                         <header>
                             <h2 class="text-lg font-medium text-gray-900">Presence and notifications</h2>
-                            <p class="mt-1 text-sm text-gray-600">Control who sees you online and what lands in your inbox. Chat messages never trigger notifications.</p>
+                            <p class="mt-1 text-sm text-gray-600">Control who sees you online and what lands in your inbox. Chat messages never trigger notifications. Rev²Square only notifies you in-app; no emails are sent.</p>
                         </header>
 
                         <form method="POST" action="{{ route('profile.preferences.update') }}" class="mt-6 space-y-5">

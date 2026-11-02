@@ -12,7 +12,7 @@
     <div class="@auth lg:col-span-2 @else lg:col-span-3 @endauth">
         <div data-chat-status class="mb-3 hidden rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900" role="status"></div>
 
-        <div data-chat-scroll class="h-[28rem] space-y-4 overflow-y-auto rounded-xl border border-zinc-200 bg-white p-5">
+        <div data-chat-scroll class="h-80 space-y-4 overflow-y-auto rounded-xl border border-zinc-200 bg-white p-5 sm:h-[28rem]">
             @if($messages->isEmpty())
                 <p class="rounded-xl border border-dashed border-zinc-300 bg-zinc-50 p-6 text-sm text-zinc-600" data-chat-empty>No messages yet.@if($canPost ?? false) Say hello.@endif</p>
             @endif
@@ -74,7 +74,10 @@
                         class="block w-full rounded-lg border-zinc-300 shadow-sm focus:border-emerald-500 focus:ring-emerald-500"></textarea>
                     <button type="submit" class="shrink-0 rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-emerald-500">Send</button>
                 </form>
-                <p class="mt-1 text-xs text-zinc-500">Links and <code class="rounded bg-zinc-100 px-1 font-mono">code</code> welcome. No DMs here: harassment or secrets go to a maintainer, not the room.</p>
+                <details class="mt-1 text-xs text-zinc-500">
+                    <summary class="cursor-pointer font-semibold text-zinc-600 hover:text-zinc-800">Chat help</summary>
+                    <p class="mt-1">Links and <code class="rounded bg-zinc-100 px-1 font-mono">code</code> welcome. No DMs here: harassment or secrets go to a maintainer, not the room. Be kind; the code of conduct applies.</p>
+                </details>
                 <div data-chat-outbox class="mt-2 space-y-2"></div>
             @else
                 <p class="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">{{ $denial ?? 'You cannot post here right now.' }}</p>
@@ -89,7 +92,7 @@
         <div class="rounded-xl border border-zinc-200 bg-white p-5" data-presence-roster data-channel="presence-roster.{{ $room }}">
             <h2 class="text-sm font-semibold text-zinc-500">Here now</h2>
             <div data-presence-list class="mt-3">
-                <p class="text-sm text-zinc-500" data-presence-state>Signing you in to presence…</p>
+                <p class="text-sm text-zinc-500" data-presence-state>Loading…</p>
             </div>
             <p class="mt-3 text-xs text-zinc-500">Only members who opted in to presence appear here. <a href="{{ route('profile.edit') }}" class="font-semibold text-emerald-700 hover:text-emerald-600">Presence settings</a></p>
         </div>

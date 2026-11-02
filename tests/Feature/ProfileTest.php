@@ -24,6 +24,15 @@ class ProfileTest extends TestCase
         ]);
     }
 
+    public function test_preferences_explain_in_app_only_delivery(): void
+    {
+        $user = User::factory()->create();
+
+        $this->actingAs($user)->get(route('profile.edit'))
+            ->assertOk()
+            ->assertSee('only notifies you in-app; no emails are sent', false);
+    }
+
     public function test_public_profile_shows_identity_but_never_email(): void
     {
         $user = User::factory()->create([

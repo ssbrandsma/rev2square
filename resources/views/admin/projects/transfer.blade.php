@@ -1,8 +1,9 @@
 <x-app-layout>
+    <x-slot name="title">Transfer ownership — {{ $project->title }}</x-slot>
     <x-slot name="header">
         <p class="text-sm font-semibold text-emerald-700">Administration · Project #{{ $project->id }}</p>
         <h1 class="mt-1 text-[1.75rem] font-semibold leading-tight tracking-tight sm:text-3xl">Transfer ownership</h1>
-        <p class="mt-1 text-sm text-zinc-600"><a href="{{ route('admin.projects.show', $project) }}" class="font-semibold text-emerald-700">← Back to project</a></p>
+        @include('projects._back-link', ['url' => route('admin.projects.show', $project), 'label' => 'Back to project'])
     </x-slot>
     <div class="mx-auto max-w-3xl px-4 py-10 sm:px-6">
         @include('admin._nav')
@@ -19,14 +20,14 @@
             <form method="POST" action="{{ route('admin.projects.transfer.preview', $project) }}" class="mt-4 max-w-xl space-y-4 text-sm">
                 @csrf
                 <div>
-                    <label for="transfer-email" class="block font-semibold">Recipient account email</label>
+                    <label for="transfer-email" class="block font-semibold">1. Recipient account email</label>
                     <input id="transfer-email" name="email" type="email" required maxlength="255" value="{{ old('email') }}" placeholder="new-owner@example.com"
-                        class="mt-1 block w-full rounded-lg border-zinc-300 px-3 py-2" />
+                        class="mt-1 block w-full rounded-lg border border-zinc-300 px-3 py-2" />
                     <p class="mt-1 text-xs text-zinc-500">Any active account qualifies; global admin status is not required and is never granted by a transfer.</p>
                     @error('email')<p class="mt-1 text-red-700">{{ $message }}</p>@enderror
                 </div>
                 <fieldset>
-                    <legend class="font-semibold">Previous owner access</legend>
+                    <legend class="font-semibold">2. Previous owner access</legend>
                     <label class="mt-1 flex items-start gap-2">
                         <input type="radio" name="keep_previous_owner" value="keep" @checked(old('keep_previous_owner') === 'keep') class="mt-1 rounded border-zinc-300" />
                         <span>Keep {{ $project->owner->name }} as a project maintainer</span>
@@ -38,7 +39,7 @@
                     @error('keep_previous_owner')<p class="mt-1 text-red-700">{{ $message }}</p>@enderror
                 </fieldset>
                 <div>
-                    <label for="transfer-reason" class="block font-semibold">Internal reason (required, recorded in the audit log)</label>
+                    <label for="transfer-reason" class="block font-semibold">3. Internal reason (required, recorded in the audit log)</label>
                     <input id="transfer-reason" name="reason" required maxlength="2000" value="{{ old('reason') }}" placeholder="e.g. Previous owner suspended; handing to an active maintainer"
                         class="mt-1 block w-full rounded-lg border border-zinc-300 px-3 py-2" />
                     @error('reason')<p class="mt-1 text-red-700">{{ $message }}</p>@enderror

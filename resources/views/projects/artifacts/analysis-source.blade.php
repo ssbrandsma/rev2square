@@ -1,8 +1,9 @@
 <x-app-layout>
+    <x-slot name="title">Source browser — run #{{ $analysis->id }} — {{ $project->title }}</x-slot>
     <x-slot name="header">
         <p class="text-sm font-semibold text-emerald-700">Analysis run #{{ $analysis->id }} · [A{{ $artifact->id }}] · Source browser</p>
         <h1 class="mt-1 break-words text-[1.75rem] font-semibold leading-tight tracking-tight sm:text-3xl">{{ $artifact->original_name }}</h1>
-        <p class="mt-1 text-sm text-zinc-600"><a href="{{ route('projects.artifacts.analyses.show', [$project, $artifact, $analysis]) }}" class="font-semibold text-emerald-700">← Back to run</a></p>
+        @include('projects._back-link', ['url' => route('projects.artifacts.analyses.show', [$project, $artifact, $analysis]), 'label' => 'Back to run'])
     </x-slot>
     @include('projects._nav', ['project' => $project, 'active' => 'agent'])
     <div class="mx-auto max-w-6xl px-4 py-10 sm:px-6">

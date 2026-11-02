@@ -1,8 +1,9 @@
 <x-app-layout>
+    <x-slot name="title">Analysis run #{{ $analysis->id }} — {{ $project->title }}</x-slot>
     <x-slot name="header">
         <p class="text-sm font-semibold text-emerald-700">Analysis run #{{ $analysis->id }} · [A{{ $artifact->id }}]</p>
         <h1 class="mt-1 break-words text-[1.75rem] font-semibold leading-tight tracking-tight sm:text-3xl">{{ $artifact->original_name }}</h1>
-        <p class="mt-1 text-sm text-zinc-600"><a href="{{ route('projects.artifacts.show', [$project, $artifact]) }}" class="font-semibold text-emerald-700">← Back to file</a></p>
+        @include('projects._back-link', ['url' => route('projects.artifacts.show', [$project, $artifact]), 'label' => 'Back to file'])
     </x-slot>
     @include('projects._nav', ['project' => $project, 'active' => 'agent'])
     <div class="mx-auto max-w-6xl px-4 py-10 sm:px-6">
@@ -15,16 +16,48 @@
 
         <section class="rounded-xl border border-zinc-200 bg-white p-6">
             <h2 class="font-semibold">Run provenance</h2>
-            <dl class="mt-2 grid grid-cols-1 gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
-                <div><dt class="font-semibold text-zinc-500">Status</dt><dd>{{ $analysis->statusLabel() }}@if($analysis->progress_note) · {{ $analysis->progress_note }}@endif</dd></div>
-                <div><dt class="font-semibold text-zinc-500">Backend</dt><dd class="font-mono">{{ $analysis->adapter }}/{{ $analysis->adapter_version ?? '?' }}</dd></div>
-                <div><dt class="font-semibold text-zinc-500">Target</dt><dd class="font-mono">{{ $analysis->target ?? '—' }}</dd></div>
-                <div><dt class="font-semibold text-zinc-500">Artifact SHA-256</dt><dd class="break-all font-mono text-xs">{{ $artifact->sha256 }}</dd></div>
-                @if($analysis->config)<div class="sm:col-span-2"><dt class="font-semibold text-zinc-500">Resolved configuration</dt><dd class="font-mono text-xs">{{ json_encode($analysis->config) }}</dd></div>@endif
-                @if(! empty($analysis->overrides))<div class="sm:col-span-2"><dt class="font-semibold text-zinc-500">Manual overrides</dt><dd class="font-mono text-xs">{{ json_encode($analysis->overrides) }}</dd></div>@endif
-            </dl>
+            <p class="mt-2 text-sm">@include('projects.artifacts._status-badge', ['status' => $analysis->status, 'label' => $analysis->statusLabel()])@if($analysis->progress_note) <span class="text-zinc-500">{{ $analysis->progress_note }}</span>@endif</p>
+            @if($analysis->status === \App\Models\BinaryAnalysis::STATUS_PARTIAL && $evidence !== null)
+                <details class="mt-3 text-sm">
+                    <summary class="cursor-pointer text-xs font-semibold text-zinc-500">Partial coverage: what was capped</summary>
+                    <ul class="mt-1 list-inside list-disc text-sm text-zinc-700">
+                        @foreach(array_values(array_filter($evidence['warnings'] ?? [], fn ($warning) => str_contains((string) $warning, 'capped') || str_contains((string) $warning, 'trimmed'))) as $warning)
+                            <li>{{ \App\Support\WarningLabels::label((string) $warning) }} <span class="font-mono text-xs text-zinc-400">{{ $warning }}</span></li>
+                        @endforeach
+                        @if(isset($evidence['reconstruction']['budget']) && is_array($evidence['reconstruction']['budget']))
+                            <li>{{ number_format((int) ($evidence['reconstruction']['budget']['manifest_retained'] ?? 0)) }} of {{ number_format((int) ($evidence['reconstruction']['budget']['files_seen'] ?? 0)) }} reconstructed files indexed.</li>
+                        @endif
+                        @if(isset($evidence['extraction']['budget']) && is_array($evidence['extraction']['budget']))
+                            <li>{{ number_format((int) ($evidence['extraction']['budget']['manifest_retained'] ?? 0)) }} of {{ number_format((int) ($evidence['extraction']['budget']['files_seen'] ?? 0)) }} extracted files indexed.</li>
+                        @endif
+                        @if($analysis->hasOutputArchive() && is_array($analysis->output_meta))
+                            <li>{{ number_format((int) ($analysis->output_meta['files'] ?? 0)) }} of {{ number_format((int) ($analysis->output_meta['files_seen'] ?? 0)) }} generated files retained in the archive.</li>
+                        @endif
+                    </ul>
+                </details>
+            @endif
+            <details class="mt-3 text-sm">
+                <summary class="cursor-pointer text-xs font-semibold text-zinc-500">Technical details</summary>
+                <dl class="mt-2 grid grid-cols-1 gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
+                    <div><dt class="font-semibold text-zinc-500">Backend</dt><dd class="font-mono">{{ $analysis->adapter }}/{{ $analysis->adapter_version ?? '?' }}</dd></div>
+                    <div><dt class="font-semibold text-zinc-500">Target</dt><dd class="font-mono">{{ $analysis->target ?? '—' }}</dd></div>
+                    <div class="sm:col-span-2"><dt class="font-semibold text-zinc-500">Artifact SHA-256</dt><dd class="break-all font-mono text-xs">{{ $artifact->sha256 }}
+                        <button type="button" data-copy="{{ $artifact->sha256 }}" aria-label="Copy SHA-256" onclick="try{navigator.clipboard.writeText(this.getAttribute('data-copy'));this.textContent='Copied';}catch(e){}" class="ml-1 rounded border border-zinc-300 px-1.5 py-0.5 font-sans text-xs font-semibold text-zinc-600 hover:bg-zinc-50">Copy</button>
+                    </dd></div>
+                    @if($analysis->config)<div class="sm:col-span-2"><dt class="font-semibold text-zinc-500">Resolved configuration</dt><dd class="font-mono text-xs">{{ json_encode($analysis->config) }}</dd></div>@endif
+                    @if(! empty($analysis->overrides))<div class="sm:col-span-2"><dt class="font-semibold text-zinc-500">Manual overrides</dt><dd class="font-mono text-xs">{{ json_encode($analysis->overrides) }}</dd></div>@endif
+                </dl>
+            </details>
             @if($analysis->error_message)
                 <p class="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{{ $analysis->error_message }}</p>
+                @if($analysis->error_code)
+                    <details class="mt-1 text-xs text-red-700">
+                        <summary class="inline cursor-pointer font-mono hover:underline">Diagnostic code</summary>
+                        <code class="font-mono">{{ $analysis->error_code }}</code>
+                    </details>
+                @endif
+            @elseif($analysis->error_code)
+                <p class="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">{{ \App\Support\WarningLabels::errorLabel($analysis->error_code) ?? 'Analysis failed.' }} <span class="font-mono text-xs">({{ $analysis->error_code }})</span></p>
             @endif
             <div class="mt-3 flex gap-2">
                 @if(! $analysis->isTerminal())
@@ -79,25 +112,20 @@
             <p class="mt-6 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">Reconstructed code; not the original source. Names, types and control flow may be incomplete or incorrect.</p>
 
             @if(! empty($evidence['warnings']))
-                <div class="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
-                    <p class="font-semibold">Analysis warnings ({{ count($evidence['warnings']) }})</p>
-                    <ul class="mt-1 list-inside list-disc font-mono text-xs">
-                        @foreach($evidence['warnings'] as $warning)
-                            <li>{{ $warning }}</li>
-                        @endforeach
-                    </ul>
-                </div>
+                @include('projects.artifacts._warnings', ['warnings' => $evidence['warnings'], 'title' => 'Analysis warnings'])
             @endif
 
-            <section class="mt-6 rounded-xl border border-zinc-200 bg-white p-6">
-                <h2 class="font-semibold">Memory map ({{ count($evidence['segments'] ?? []) }} segments)</h2>
-                <p class="mt-1 text-xs text-zinc-500">File offsets locate bytes in the upload; base addresses locate them at runtime. Both are shown — never interchange them.</p>
-                <ul class="mt-2 space-y-1 font-mono text-xs">
-                    @foreach($evidence['segments'] ?? [] as $segment)
-                        <li>{{ $segment['name'] }} ({{ $segment['kind'] }}) · base @if(($segment['base_address'] ?? null) !== null){{ sprintf('0x%x', $segment['base_address']) }}@else—@endif · {{ $segment['length'] }} bytes @if(($segment['file_offset'] ?? null) !== null)· file offset {{ sprintf('0x%x', $segment['file_offset']) }}@else· no file offset (rebuilt from records)@endif</li>
-                    @endforeach
-                </ul>
-            </section>
+            @if(! empty($evidence['segments'] ?? []) || ! in_array($analysis->adapter, ['jadx', 'ilspy'], true))
+                <section class="mt-6 rounded-xl border border-zinc-200 bg-white p-6">
+                    <h2 class="font-semibold">Memory map ({{ count($evidence['segments'] ?? []) }} segments)</h2>
+                    <p class="mt-1 text-xs text-zinc-500">File offsets locate bytes in the upload; base addresses locate them at runtime. Both are shown — never interchange them.</p>
+                    <ul class="mt-2 space-y-1 font-mono text-xs">
+                        @foreach($evidence['segments'] ?? [] as $segment)
+                            <li>{{ $segment['name'] }} ({{ $segment['kind'] }}) · base @if(($segment['base_address'] ?? null) !== null){{ sprintf('0x%x', $segment['base_address']) }}@else—@endif · {{ $segment['length'] }} bytes @if(($segment['file_offset'] ?? null) !== null)· file offset {{ sprintf('0x%x', $segment['file_offset']) }}@else· no file offset (rebuilt from records)@endif</li>
+                        @endforeach
+                    </ul>
+                </section>
+            @endif
 
             <section class="mt-6 rounded-xl border border-zinc-200 bg-white p-6">
                 <h2 class="font-semibold">Functions ({{ count($evidence['functions'] ?? []) }})</h2>
@@ -145,7 +173,7 @@
             @if(! empty($evidence['decompilation']['functions'] ?? []))
                 <section class="mt-6 rounded-xl border border-zinc-200 bg-white p-6">
                     <h2 class="font-semibold">Decompilation ({{ count($evidence['decompilation']['functions']) }} functions)@if($evidence['decompilation']['truncated'] ?? false) · <span class="font-semibold text-amber-700">truncated by output budget</span>@endif</h2>
-                    <p class="mt-1 text-xs text-zinc-500">Tool-generated pseudocode — tentative, possibly wrong. Never original source.</p>
+                    <p class="mt-1 text-xs text-zinc-500">Tool-generated pseudocode — tentative, possibly wrong. Never original source. Showing {{ number_format(min(20, count($evidence['decompilation']['functions']))) }} of {{ number_format(count($evidence['decompilation']['functions'])) }} inline.</p>
                     @foreach(array_slice($evidence['decompilation']['functions'], 0, 20) as $fn)
                         <details class="mt-2 rounded-lg border border-zinc-200">
                             <summary class="cursor-pointer px-3 py-2 font-mono text-xs font-semibold">{{ $fn['name'] }} · {{ sprintf('0x%x', $fn['address']) }}</summary>
@@ -163,8 +191,10 @@
                         @php($reconBudget = $evidence['reconstruction']['budget'])
                         <p class="mt-2 rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">Partial output: {{ number_format((int) ($reconBudget['manifest_retained'] ?? 0)) }} of {{ number_format((int) ($reconBudget['files_seen'] ?? 0)) }} files indexed, inline content for {{ number_format((int) ($reconBudget['inline_full'] ?? 0) + (int) ($reconBudget['excerpt_count'] ?? 0)) }} ({{ number_format((int) ($reconBudget['excerpt_count'] ?? 0)) }} excerpts). The analysis itself succeeded — the output budget caps how much is stored, not what was examined. The file is valid; uploading it again will not show more.</p>
                     @endif
+                    @php($reconShown = array_slice($evidence['reconstruction']['files'], 0, 200))
+                    <p class="mt-1 text-xs text-zinc-500">Showing {{ number_format(count($reconShown)) }} of {{ number_format(count($evidence['reconstruction']['files'])) }} indexed files inline.</p>
                     <ul class="mt-2 max-h-96 space-y-1 overflow-y-auto font-mono text-xs">
-                        @foreach(array_slice($evidence['reconstruction']['files'], 0, 200) as $file)
+                        @foreach($reconShown as $file)
                             <li>{{ $file['path'] }} <span class="text-zinc-500">· {{ number_format($file['size']) }} bytes</span></li>
                         @endforeach
                     </ul>
@@ -197,7 +227,7 @@
                                             <select name="target" required class="mt-1 block rounded-lg border border-zinc-300 px-2 py-1.5 font-mono text-xs">
                                                 <option value="">— select target —</option>
                                                 @foreach($cpuTargets as $cpuTarget)
-                                                    <option value="{{ $cpuTarget['id'] }}" @selected(($lib['arch'] ?? null) === $cpuTarget['id'])>{{ $cpuTarget['name'] }} ({{ $cpuTarget['id'] }})@if(($lib['arch'] ?? null) === $cpuTarget['id']) — suggested from ELF header@endif</option>
+                                                    <option value="{{ $cpuTarget['id'] }}" @selected(($lib['arch'] ?? null) === $cpuTarget['id'])>{{ $cpuTarget['name'] }} ({{ $cpuTarget['id'] }})@if(($lib['arch'] ?? null) === $cpuTarget['id']) — suggested from ELF header @endif</option>
                                                 @endforeach
                                             </select>
                                         </label>
@@ -233,11 +263,14 @@
                             @endforeach
                         </ul>
                     @endif
+                    @php($extractShown = array_slice($evidence['extraction']['files'], 0, 200))
+                    <p class="mt-1 text-xs text-zinc-500">Showing {{ number_format(count($extractShown)) }} of {{ number_format(count($evidence['extraction']['files'])) }} indexed files inline.</p>
                     <ul class="mt-2 max-h-96 space-y-1 overflow-y-auto font-mono text-xs">
-                        @foreach(array_slice($evidence['extraction']['files'], 0, 200) as $file)
+                        @foreach($extractShown as $file)
                             <li>{{ $file['path'] }} <span class="text-zinc-500">· {{ number_format($file['size']) }} bytes</span></li>
                         @endforeach
                     </ul>
+                    <p class="mt-2 text-sm"><a href="{{ route('projects.artifacts.analyses.source', [$project, $artifact, $analysis]) }}" class="font-semibold text-emerald-700 hover:underline">Browse all indexed files with search →</a></p>
                 </section>
             @endif
 

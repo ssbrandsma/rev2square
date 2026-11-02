@@ -62,6 +62,7 @@ class ProjectController extends Controller
             'retiredTaskCount' => $showRetired ? 0 : $project->tasks()->where('status', TaskStatus::Retired)->count(),
             'showRetired' => $showRetired,
             'contributionDenial' => ProjectActionPolicy::contributionDenial($project, auth()->user()),
+            'offerDenial' => ProjectActionPolicy::offerDenial($project, auth()->user()),
         ]);
     }
 
@@ -107,9 +108,20 @@ class ProjectController extends Controller
         $wasOpen = $project->discussion_open;
         $validated = $request->validated();
 
-        // The rich document is authoritative once set: the legacy body
-        // field can never overwrite it through the basics form.
-        if ($project->hasRichStory()) {
+        // The single edit form saves basics and story together. When an
+        // editor payload is present the story document wins and any
+        // legacy body value is dropped, so a stale or crafted body field
+        // can never overwrite the rich document. Without a payload the
+        // legacy body still saves for plain-text projects (the no-JS
+        // path); rich projects always ignore it.
+        $storyJson = $request->input('story_document');
+        if (is_string($storyJson) && trim($storyJson) !== '') {
+            unset($validated['body']);
+
+            if ($storyError = $this->applyStoryDocument($project, $storyJson, $request->input('presentation_version'))) {
+                return back()->withInput()->with('error', $storyError);
+            }
+        } elseif ($project->hasRichStory()) {
             unset($validated['body']);
         }
 
@@ -184,6 +196,61 @@ class ProjectController extends Controller
 
         return redirect()->route('projects.edit', $project)
             ->with('status', 'Story saved.');
+    }
+
+    /**
+     * Stage a story-document save on the project (persisted by the
+     * caller's save). Returns an error message — with the caller's
+     * input preserved as the draft — or null on success. An unchanged
+     * document skips the version check so unrelated media edits never
+     * block a basics save.
+     */
+    private function applyStoryDocument(Project $project, string $storyJson, mixed $presentedVersion): ?string
+    {
+        $decoded = json_decode($storyJson, true);
+        if (! is_array($decoded)) {
+            return 'The story document could not be read. Your draft was kept.';
+        }
+
+        $result = StoryDocument::validate($decoded, $project);
+        if (! $result['ok']) {
+            return $result['error'];
+        }
+
+        if ($result['document'] == $this->currentStoryDocument($project)) {
+            return null;
+        }
+
+        if ((int) $presentedVersion !== $project->presentation_version) {
+            return 'Someone else changed the presentation while you were editing. Your draft was kept — review the current version, then save again.';
+        }
+
+        $project->forceFill([
+            'story_document' => $result['document'],
+            'story_format' => 'rich',
+            'body' => Str::limit(StoryDocument::toPlainText($result['document']), 20000, ''),
+            'presentation_version' => $project->presentation_version + 1,
+        ]);
+
+        return null;
+    }
+
+    /**
+     * The story as the editor sees it: the rich document, or the
+     * legacy plain-text body converted to paragraph blocks.
+     */
+    private function currentStoryDocument(Project $project): array
+    {
+        if ($project->hasRichStory()) {
+            return $project->story_document ?? ['version' => StoryDocument::VERSION, 'blocks' => []];
+        }
+
+        $paragraphs = preg_split('/\n\s*\n/', trim($project->body ?? '')) ?: [];
+
+        return [
+            'version' => StoryDocument::VERSION,
+            'blocks' => array_map(fn ($paragraph) => ['type' => 'paragraph', 'text' => $paragraph], $paragraphs),
+        ];
     }
 
     /**

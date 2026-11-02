@@ -1,4 +1,5 @@
 <x-app-layout>
+    <x-slot name="title">Make this evidence or a task — {{ $project->title }}</x-slot>
     <x-slot name="header">
         <p class="text-sm font-semibold text-emerald-700">
             <a href="{{ route('projects.show', $project) }}" class="hover:underline">{{ $project->title }}</a> · Promote
@@ -6,6 +7,9 @@
         <h1 class="mt-1 text-[1.75rem] font-semibold leading-tight tracking-tight sm:text-3xl">Make this evidence or a task</h1>
         <p class="mt-1 text-sm text-zinc-600">Review and edit the wording before creating the record. The new record is a snapshot: later edits to the post never change it, and it keeps a link back to its source.</p>
     </x-slot>
+
+    @include('projects._nav', ['project' => $project, 'active' => $post->thread()->type === \App\Enums\DiscussionType::Update ? 'updates' : 'discussion'])
+
     <div class="mx-auto max-w-2xl px-4 py-10 sm:px-6">
         <div class="mb-6 rounded-xl border border-zinc-200 bg-zinc-50 p-5 text-sm">
             <p class="text-xs text-zinc-500">{{ $post->author->name }} wrote (<a href="{{ $permalink }}" class="font-semibold text-emerald-700 hover:text-emerald-600">source post</a>):</p>

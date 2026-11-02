@@ -1,4 +1,5 @@
 <x-app-layout>
+    <x-slot name="title">{{ $conversation->title ?? 'Conversation' }} — {{ $project->title }}</x-slot>
     <x-slot name="header">
         <p class="text-sm font-semibold text-emerald-700">Revival Agent</p>
         <h1 class="mt-1 text-[1.75rem] font-semibold leading-tight tracking-tight sm:text-3xl">{{ $conversation->title ?? 'Conversation' }}</h1>
@@ -78,28 +79,32 @@
                             </div>
                         @endif
 
-                        @if(! empty($message->token_usage))
-                            <p class="mt-3 text-xs text-zinc-400">
-                                @if(($message->token_usage['input'] ?? null) !== null || ($message->token_usage['output'] ?? null) !== null)
-                                    {{ number_format((int) ($message->token_usage['input'] ?? 0)) }} in / {{ number_format((int) ($message->token_usage['output'] ?? 0)) }} out tokens
-                                @else
-                                    ≈{{ number_format((int) ($message->token_usage['estimated'] ?? 0)) }} tokens (estimated)
-                                @endif
-                                @if($message->duration_ms) · {{ number_format($message->duration_ms / 1000, 1) }}s @endif
-                            </p>
-                        @endif
-
-                        @if(! empty($message->tool_trace))
+                        @if(! empty($message->token_usage) || ! empty($message->tool_trace))
                             <details class="mt-3 text-sm">
-                                <summary class="cursor-pointer text-xs font-semibold text-zinc-500">Investigation trace ({{ count($message->tool_trace) }} lookups)</summary>
-                                <ul class="mt-2 space-y-1 font-mono text-xs text-zinc-600">
-                                    @foreach($message->tool_trace as $step)
-                                        <li>
-                                            <span class="{{ $step['ok'] ? 'text-emerald-700' : 'text-red-700' }}">{{ $step['ok'] ? '✓' : '✗' }}</span>
-                                            {{ $step['name'] }}({{ $step['args'] }}) · {{ $step['ms'] }} ms
-                                        </li>
-                                    @endforeach
-                                </ul>
+                                <summary class="cursor-pointer text-xs font-semibold text-zinc-500">Diagnostics</summary>
+                                @if(! empty($message->token_usage))
+                                    <p class="mt-2 text-xs text-zinc-400">
+                                        @if(($message->token_usage['input'] ?? null) !== null || ($message->token_usage['output'] ?? null) !== null)
+                                            {{ number_format((int) ($message->token_usage['input'] ?? 0)) }} in / {{ number_format((int) ($message->token_usage['output'] ?? 0)) }} out tokens
+                                        @else
+                                            ≈{{ number_format((int) ($message->token_usage['estimated'] ?? 0)) }} tokens (estimated)
+                                        @endif
+                                        @if($message->duration_ms) · {{ number_format($message->duration_ms / 1000, 1) }}s @endif
+                                    </p>
+                                @endif
+                                @if(! empty($message->tool_trace))
+                                    <details class="mt-2 text-sm">
+                                        <summary class="cursor-pointer text-xs font-semibold text-zinc-500">Investigation trace ({{ count($message->tool_trace) }} lookups)</summary>
+                                        <ul class="mt-2 space-y-1 font-mono text-xs text-zinc-600">
+                                            @foreach($message->tool_trace as $step)
+                                                <li>
+                                                    <span class="{{ $step['ok'] ? 'text-emerald-700' : 'text-red-700' }}">{{ $step['ok'] ? '✓' : '✗' }}</span>
+                                                    {{ $step['name'] }}({{ $step['args'] }}) · {{ $step['ms'] }} ms
+                                                </li>
+                                            @endforeach
+                                        </ul>
+                                    </details>
+                                @endif
                             </details>
                         @endif
 

@@ -469,4 +469,200 @@ class ProjectPresentationTest extends TestCase
         $this->assertStringNotContainsString('storage_key', $json->getContent());
         $this->assertStringNotContainsString('media/', $json->getContent());
     }
+
+    private function updatePayload(Project $project, array $overrides = []): array
+    {
+        return [
+            'title' => $project->title,
+            'pitch' => $project->pitch,
+            'phase' => $project->phase->value,
+            'activity' => $project->activity->value,
+            'publication_status' => $project->publication_status->value,
+            ...$overrides,
+        ];
+    }
+
+    public function test_single_save_upgrades_legacy_story_without_loss(): void
+    {
+        [$project, $owner] = $this->seedProject();
+        $project->forceFill(['body' => "First paragraph.\n\nSecond paragraph."])->save();
+
+        // The editor initializes from plain text with no preliminary save.
+        $edit = $this->actingAs($owner)->get(route('projects.edit', $project));
+        $edit->assertOk();
+        $edit->assertSee('First paragraph.', false);
+        $this->assertFalse($project->fresh()->hasRichStory());
+
+        $doc = ['version' => 1, 'blocks' => [
+            ['type' => 'paragraph', 'text' => 'First paragraph.'],
+            ['type' => 'paragraph', 'text' => 'Second paragraph, edited.'],
+        ]];
+
+        $this->actingAs($owner)->put(route('projects.update', $project), $this->updatePayload($project, [
+            'title' => 'Retitled revival',
+            'story_document' => json_encode($doc),
+            'presentation_version' => 0,
+        ]))->assertRedirect(route('projects.show', $project));
+
+        $fresh = $project->fresh();
+        $this->assertSame('Retitled revival', $fresh->title);
+        $this->assertTrue($fresh->hasRichStory());
+        $this->assertStringContainsString('First paragraph.', $fresh->body);
+        $this->assertStringContainsString('Second paragraph, edited.', $fresh->body);
+
+        $show = $this->actingAs($owner)->get(route('projects.show', $project));
+        $show->assertSee('First paragraph.', false);
+        $show->assertSee('Second paragraph, edited.', false);
+    }
+
+    public function test_single_save_skips_story_check_when_unchanged(): void
+    {
+        [$project, $owner] = $this->seedProject();
+        $doc = ['version' => 1, 'blocks' => [['type' => 'paragraph', 'text' => 'Kept story.']]];
+        $project->forceFill([
+            'story_document' => $doc, 'story_format' => 'rich', 'body' => 'Kept story.',
+            'presentation_version' => 3,
+        ])->save();
+
+        // An unrelated media edit moved the version; resubmitting the
+        // identical document with a stale version still saves the basics.
+        $this->actingAs($owner)->put(route('projects.update', $project), $this->updatePayload($project, [
+            'title' => 'Basics only change',
+            'story_document' => json_encode($doc),
+            'presentation_version' => 0,
+        ]))->assertRedirect(route('projects.show', $project));
+
+        $fresh = $project->fresh();
+        $this->assertSame('Basics only change', $fresh->title);
+        $this->assertSame(3, $fresh->presentation_version);
+        $this->assertSame('Kept story.', $fresh->body);
+    }
+
+    public function test_single_save_conflict_keeps_both_drafts(): void
+    {
+        [$project, $owner] = $this->seedProject();
+        $project->forceFill([
+            'story_document' => ['version' => 1, 'blocks' => [['type' => 'paragraph', 'text' => 'Current story.']]],
+            'story_format' => 'rich',
+            'body' => 'Current story.',
+            'presentation_version' => 2,
+        ])->save();
+
+        $changed = ['version' => 1, 'blocks' => [['type' => 'paragraph', 'text' => 'Stale edit.']]];
+        $response = $this->actingAs($owner)->put(route('projects.update', $project), $this->updatePayload($project, [
+            'title' => 'Unsaved retitle',
+            'story_document' => json_encode($changed),
+            'presentation_version' => 0,
+        ]));
+
+        $response->assertSessionHas('error');
+        $response->assertSessionHasInput('title', 'Unsaved retitle');
+        $response->assertSessionHasInput('story_document', json_encode($changed));
+
+        $fresh = $project->fresh();
+        $this->assertSame($project->title, $fresh->title);
+        $this->assertSame('Current story.', $fresh->body);
+        $this->assertSame(2, $fresh->presentation_version);
+    }
+
+    public function test_legacy_body_cannot_overwrite_rich_document(): void
+    {
+        [$project, $owner] = $this->seedProject();
+        $project->forceFill([
+            'story_document' => ['version' => 1, 'blocks' => [['type' => 'paragraph', 'text' => 'Rich story.']]],
+            'story_format' => 'rich',
+            'body' => 'Rich story.',
+            'presentation_version' => 1,
+        ])->save();
+
+        // A stale body value alongside an editor payload is dropped.
+        $doc = ['version' => 1, 'blocks' => [['type' => 'paragraph', 'text' => 'Rich story, revised.']]];
+        $this->actingAs($owner)->put(route('projects.update', $project), $this->updatePayload($project, [
+            'body' => 'Stale overwrite attempt.',
+            'story_document' => json_encode($doc),
+            'presentation_version' => 1,
+        ]))->assertRedirect();
+
+        $fresh = $project->fresh();
+        $this->assertStringContainsString('Rich story, revised.', $fresh->body);
+        $this->assertStringNotContainsString('Stale overwrite attempt.', $fresh->body);
+
+        // A body-only post without any editor payload is ignored too.
+        $this->actingAs($owner)->put(route('projects.update', $project), $this->updatePayload($fresh, [
+            'body' => 'Second overwrite attempt.',
+        ]))->assertRedirect();
+
+        $this->assertStringNotContainsString('Second overwrite attempt.', $project->fresh()->body);
+    }
+
+    public function test_legacy_body_still_saves_without_editor_payload(): void
+    {
+        [$project, $owner] = $this->seedProject();
+        $project->forceFill(['body' => 'Original plain story.'])->save();
+
+        $this->actingAs($owner)->put(route('projects.update', $project), $this->updatePayload($project, [
+            'body' => 'Edited plain story.',
+        ]))->assertRedirect(route('projects.show', $project));
+
+        $fresh = $project->fresh();
+        $this->assertSame('Edited plain story.', $fresh->body);
+        $this->assertFalse($fresh->hasRichStory());
+    }
+
+    public function test_edit_page_has_single_story_editor_and_save(): void
+    {
+        [$project, $owner] = $this->seedProject();
+        $project->forceFill(['body' => "Plain intro.\n\nPlain details."])->save();
+
+        $content = $this->actingAs($owner)->get(route('projects.edit', $project))
+            ->assertOk()
+            ->assertSee('Save project', false)
+            ->assertSee('Project story', false)
+            ->assertDontSee('Save basics', false)
+            ->assertDontSee('Save story', false)
+            ->assertDontSee('managed in the rich editor below', false)
+            ->assertDontSee('Saving upgrades it to the rich format', false)
+            ->assertSee('loaded below as paragraphs', false)
+            ->assertDontSee('id="body"', false)
+            ->getContent();
+
+        $this->assertSame(1, substr_count($content, 'data-story-editor'));
+        $this->assertStringContainsString('Plain intro.', $content);
+    }
+
+    public function test_edit_page_preview_matches_publication_state(): void
+    {
+        [$draft, $owner] = $this->seedProject();
+
+        $this->actingAs($owner)->get(route('projects.edit', $draft))
+            ->assertOk()
+            ->assertSee('Publication checklist', false)
+            ->assertSee('Preview project →', false)
+            ->assertDontSee('Preview the public page', false);
+
+        $draft->forceFill(['publication_status' => PublicationStatus::Published])->save();
+
+        $this->actingAs($owner)->get(route('projects.edit', $draft))
+            ->assertOk()
+            ->assertSee('Preview the public page →', false);
+    }
+
+    public function test_delete_lives_in_a_separate_danger_zone(): void
+    {
+        [$project, $owner] = $this->seedProject();
+
+        $content = $this->actingAs($owner)->get(route('projects.edit', $project))
+            ->assertOk()
+            ->assertSee('Danger zone', false)
+            ->assertSee('Delete this project and its milestones and tasks?', false)
+            ->assertSee(route('projects.destroy', $project), false)
+            ->getContent();
+
+        // The destructive form sits outside the main save: it renders
+        // after the single save action, in its own section.
+        $this->assertGreaterThan(
+            strpos($content, 'Save project'),
+            strpos($content, 'Danger zone')
+        );
+    }
 }

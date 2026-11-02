@@ -109,12 +109,12 @@
 </div>
 @auth
     <div data-chat-launcher data-unread-url="{{ route('chat.unread') }}" class="fixed bottom-24 right-4 z-40 sm:bottom-4">
-        <div data-launcher-panel class="mb-2 hidden w-72 rounded-xl border border-zinc-200 bg-white p-2 shadow-xl">
+        <div data-launcher-panel id="chat-rooms-panel" class="mb-2 hidden w-72 rounded-xl border border-zinc-200 bg-white p-2 shadow-xl">
             <p class="px-3 pb-1 pt-2 text-sm font-semibold text-zinc-500">Your chats</p>
             <ul data-launcher-rooms class="max-h-72 space-y-1 overflow-y-auto"></ul>
             <p class="px-3 py-2 text-xs text-zinc-500"><a href="{{ route('lounge') }}" class="font-semibold text-emerald-700 hover:text-emerald-600">Open the lounge →</a></p>
         </div>
-        <button type="button" data-launcher-toggle aria-label="Open chat rooms"
+        <button type="button" data-launcher-toggle aria-label="Open chat rooms" aria-expanded="false" aria-controls="chat-rooms-panel"
             class="relative flex h-12 w-12 items-center justify-center rounded-full bg-emerald-600 text-white shadow-lg hover:bg-emerald-500">
             <svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M8 10h8m-8 4h5m7-2a8 8 0 01-8 8H6l-3 3v-5.5A8 8 0 0111 6h6a8 8 0 016 6.5z" transform="translate(-1 -1) scale(0.92)" /></svg>
             <span data-launcher-dot class="absolute -right-0.5 -top-0.5 hidden h-3.5 w-3.5 rounded-full border-2 border-white bg-red-500" aria-label="Unread chat activity"></span>

@@ -3,8 +3,10 @@
     <x-slot name="header">
         <p class="text-sm font-semibold text-emerald-700">AI revival report · v{{ $report->version_number }}</p>
         <h1 class="mt-1 text-[1.75rem] font-semibold leading-tight tracking-tight sm:text-3xl">{{ $project->title }}</h1>
-        <p class="mt-1 text-sm text-zinc-600"><a href="{{ route('projects.evidence', $project) }}" class="font-semibold text-emerald-700">← Back to evidence</a></p>
+        @include('projects._back-link', ['url' => route('projects.evidence', $project), 'label' => 'Back to evidence'])
     </x-slot>
+
+    @include('projects._nav', ['project' => $project, 'active' => 'evidence'])
 
     <div class="mx-auto max-w-4xl px-4 py-10 sm:px-6">
         @if(session('status'))

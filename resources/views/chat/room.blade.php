@@ -1,4 +1,5 @@
 <x-app-layout>
+    <x-slot name="title">{{ $roomLabel }} — {{ $project->title }}</x-slot>
     <x-slot name="header">
         <p class="text-sm font-semibold text-emerald-700">
             <a href="{{ route('projects.show', $project) }}" class="hover:underline">{{ $project->title }}</a> · Chat

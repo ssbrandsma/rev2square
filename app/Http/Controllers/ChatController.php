@@ -161,7 +161,7 @@ class ChatController extends Controller
         foreach ($projects as $project) {
             $rooms->push([
                 'room' => ChatMessage::projectRoom($project),
-                'label' => $project->title,
+                'label' => $project->title.' chat',
                 'url' => route('projects.chat.show', $project),
             ]);
         }

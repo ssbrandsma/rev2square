@@ -20,9 +20,12 @@ class AnalysisController extends Controller
         $backends = [];
         foreach (AdapterRegistry::all() as $adapter) {
             $check = WorkerCapability::verifiedFor($adapter);
+            $snapshot = $adapter->id() === 'php-native'
+                ? null
+                : WorkerCapability::where('adapter', $adapter->id())->first();
             $runner = null;
             if ($adapter instanceof SandboxedBackend) {
-                $details = WorkerCapability::where('adapter', $adapter->id())->first()?->details ?? [];
+                $details = $snapshot?->details ?? [];
                 $runner = [
                     'arch' => $details['runner_arch'] ?? null,
                     'image' => $details['tool_image'] ?? null,
@@ -36,6 +39,9 @@ class AnalysisController extends Controller
                 'version' => $check['version'],
                 'note' => $check['note'],
                 'runner' => $runner,
+                'checked_at' => $snapshot?->captured_at,
+                'worker' => $snapshot?->worker,
+                'bundled' => $adapter->id() === 'php-native',
             ];
         }
 

@@ -35,6 +35,26 @@ class ProjectActionPolicy
     }
 
     /**
+     * Null when the user may file a contribution offer or task claim,
+     * otherwise a human-readable denial reason. Lifecycle rules come
+     * first; maintainers are then excluded because they already manage
+     * the project (tasks, offers, and team) directly instead of
+     * applying to contribute to it.
+     */
+    public static function offerDenial(Project $project, ?User $user): ?string
+    {
+        if ($denial = self::contributionDenial($project, $user)) {
+            return $denial;
+        }
+
+        if ($user !== null && $project->managedBy($user)) {
+            return 'You already maintain this project. Manage its tasks, offers, and team directly instead of filing an offer.';
+        }
+
+        return null;
+    }
+
+    /**
      * Null when the user may post/reply/chat on this project, otherwise a
      * human-readable reason. Draft visibility is enforced by the view gate;
      * this covers the conversation lifecycle on visible projects.

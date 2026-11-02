@@ -11,6 +11,9 @@
             @endif
         </p>
     </x-slot>
+
+    @include('projects._nav', ['project' => $project, 'active' => 'evidence'])
+
     <div class="mx-auto max-w-6xl px-4 py-10 sm:px-6">
         @if($stale)
             <p class="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
