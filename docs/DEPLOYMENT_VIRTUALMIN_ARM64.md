@@ -230,15 +230,25 @@ the `:443` VirtualHost only. Virtualmin preserves Edit-Directives
 content across regenerations; never hand-edit the generated vhost files
 under `/etc/httpd/conf.d/` directly.
 
-Required modules: `proxy`, `proxy_http`, `headers` (plus `ssl`, already
-present). Check: `httpd -M | grep -Ei 'proxy|headers'`; on AlmaLinux
-these ship with `httpd` and usually only need their `LoadModule` lines
-enabled, then `systemctl reload httpd`.
+Required modules: `proxy`, `proxy_http`, `proxy_wstunnel`, `headers`
+(plus `ssl`, already present). Check:
+`httpd -M | grep -Ei 'proxy|headers'`; on AlmaLinux these ship with
+`httpd` and usually only need their `LoadModule` lines enabled, then
+`systemctl reload httpd`. The `/app/` upgrade rule needs httpd 2.4.47+
+(check `httpd -v`; AlmaLinux 10 ships newer); older httpd must use the
+commented mod_rewrite fallback inside the snippet instead.
 
 Behavior contract (what each line is for):
 
 - `ProxyPreserveHost On` + `ProxyPass / http://127.0.0.1:8081/`:
   forward everything to the Compose nginx on loopback.
+- `ProxyPass /app/ ws://127.0.0.1:8081/app/ upgrade=websocket
+  timeout=86400`: realtime sockets (Reverb chat + presence). Longest
+  prefix wins over `/`, so only `/app/*` requests carrying WebSocket
+  Upgrade headers tunnel over ws (TLS still terminates here); plain
+  HTTP is unaffected. The 24h per-path timeout matches the nginx
+  `/app/` proxy: sockets are long-lived and Reverb pings every 60s,
+  so the global 120s `ProxyTimeout` must not apply here.
 - `RequestHeader unset X-Forwarded-*` / `Forwarded`: strip
   client-supplied forwarding headers FIRST, so a hostile client cannot
   inject a fake IP/host/proto that Laravel would believe.
@@ -248,9 +258,6 @@ Behavior contract (what each line is for):
   the real observed values.
 - `ProxyTimeout 120`: generous for slow clients; AI work runs async in
   the queue worker, never in the web request.
-- No WebSocket/`RewriteCond %{HTTP:Upgrade}` rules: Rev2Square has no
-  websocket server (verified: no Reverb/Pusher/Echo/broadcast usage;
-  `BROADCAST_CONNECTION=log`).
 
 Before pasting (Gate 2 pre-cutover inspection, read-only): dump the live
 `:443` vhost and confirm no conflicting proxy/rewrite rules. Expected on
@@ -259,7 +266,8 @@ webmail/admin `RewriteRule` redirects (keep — they redirect before
 proxying), and a `FilesMatch \.php$` host-FPM handler (harmless: app
 URLs never end in `.php`; literal `*.php` probes keep 404ing on the
 host). Our snippet adds no `RewriteRule` and no second `.well-known`
-exclusion, so it composes with all three. Do NOT touch other vhosts.
+exclusion, and the `/app/` prefix does not collide with any of the
+three, so it composes with all of them. Do NOT touch other vhosts.
 
 ```sh
 [root]# httpd -S 2>&1 | grep -A3 'port 443 namevhost <domain>'
@@ -276,6 +284,16 @@ Verify (as root, after `apachectl configtest && systemctl reload httpd`):
 [root]# curl -s -H 'Host: evil.example.com' https://<domain>/ -o /dev/null -w '%{http_code}\n'
 # expect: 400 (untrusted Host rejected; see section 19 if Apache itself
 # answers 404 first, which is equally safe)
+[root]# curl -s -o /dev/null -w '%{http_code}\n' --max-time 10 \
+  -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
+  -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
+  https://<domain>/app/<REVERB_APP_KEY>
+# expect: 101 (full wss chain Apache -> nginx -> Reverb accepted the
+# handshake; <REVERB_APP_KEY> is the public key from
+# /etc/rev2square/.env.virtualmin, NOT the secret). Any other code:
+# diagnose per the comment in the snippet (502/503 = reverb down,
+# 404 = old nginx image without /app/, anything else usually means
+# proxy_wstunnel is not loaded).
 ```
 
 ## 8. Environment variables and secrets
@@ -291,7 +309,13 @@ Verify (as root, after `apachectl configtest && systemctl reload httpd`):
 Set at minimum: `APP_KEY` (after first build, section 9 step 5),
 `APP_URL=https://<real domain>`, `DB_PASSWORD` + `DB_ROOT_PASSWORD`
 (two distinct `openssl rand -base64 32` values), `MODEL_API_KEY`,
-optional `GITHUB_TOKEN`.
+optional `GITHUB_TOKEN`, and the realtime keys: `REVERB_APP_ID` (any
+stable id, e.g. `10001`), `REVERB_APP_KEY` (PUBLIC key, e.g.
+`openssl rand -hex 16` — it is baked into frontend assets and sent to
+every browser as the `/app/<key>` URL path, by Pusher-protocol
+design), `REVERB_APP_SECRET` (`openssl rand -base64 32`, server-side
+only, never baked into assets), and `REVERB_ALLOWED_ORIGINS` (must
+match `APP_URL`, e.g. `https://<real domain>`).
 
 Fixed values (already in the template): `APP_ENV=production`,
 `APP_DEBUG=false`, `LOG_LEVEL=warning`, `SESSION_ENCRYPT=true`,
@@ -302,15 +326,22 @@ healthchecks; pin explicitly only for extra names),
 `APP_LOOPBACK_PORT=8081` (change ONLY if 8081 collides — mirror the
 change in the Apache snippet), `DOCKER_PLATFORM=linux/arm64`,
 `DEPLOY_VARIANT=virtualmin` (drives deployment-specific owner
-commands in admin diagnostics; the standalone template uses `prod`).
+commands in admin diagnostics; the standalone template uses `prod`),
+`BROADCAST_CONNECTION=reverb`, `REVERB_HOST=reverb`,
+`REVERB_PORT=8080`, `REVERB_SCHEME=http` (internal Compose
+coordinates; the public wss URL is derived from the serving page at
+runtime, never from these). Do NOT add `VITE_*` here: this file feeds
+the container runtime, and runtime env cannot reach build-time-baked
+assets — `update_prod.sh` derives `VITE_REVERB_APP_KEY` from
+`REVERB_APP_KEY` at image build time.
 
 Two distinct mechanisms read this one file — do not confuse them.
 `--env-file` on the compose command line feeds Compose-file
 *interpolation* (`${DB_PASSWORD:?}`, image tags, ports, the
 coordinator's explicit allowlist). The services' `env_file:` entries
-in compose.virtualmin.yaml feed the *container runtime* of app, queue
-and scheduler (absolute `/etc` path, `required: true`). On this
-server both point at `/etc/rev2square/.env.virtualmin`; the
+in compose.virtualmin.yaml feed the *container runtime* of app, queue,
+scheduler, and reverb (absolute `/etc` path, `required: true`). On
+this server both point at `/etc/rev2square/.env.virtualmin`; the
 coordinator has no `env_file` entry and receives only its interpolated
 16-key allowlist.
 
@@ -329,8 +360,12 @@ coordinator has no `env_file` entry and receives only its interpolated
 [root]# chmod 600 /etc/rev2square/.env.virtualmin
 [root]# nano /etc/rev2square/.env.virtualmin   # section 8 (leave APP_KEY empty for now)
 
-[root]# docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin build
-# native ARM64 build on the VPS, 5-15 min first run
+[root]# set -a; . /etc/rev2square/.env.virtualmin; set +a   # need REVERB_APP_KEY for the frontend
+[root]# docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin build \
+  --build-arg "VITE_REVERB_APP_KEY=$REVERB_APP_KEY"
+# native ARM64 build on the VPS, 5-15 min first run. The --build-arg bakes
+# the PUBLIC Reverb key into the frontend assets (empty without it =
+# broken realtime); upgrades pass it automatically via update_prod.sh.
 
 [root]# docker images --digests rev2square/app
 [root]# docker images --digests rev2square/nginx
@@ -399,27 +434,42 @@ cannot fill the disk.
 ```sh
 [root]# cd /srv/rev2square
 [root]# git fetch origin
-[root]# git checkout <new-release-sha>
+[root]# git checkout <new-release-sha>   # never an unreviewed main
 # First upgrade carrying app-storage: run the section 18 storage
-# migration runbook BEFORE the build/up below (inventory + back up
+# migration runbook BEFORE the updater below (inventory + back up
 # container-layer files first; a new empty volume would hide them).
-[root]# ./docker/backup/backup.sh --variant virtualmin   # safety backup first
-[root]# docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin build && \
-  docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin up -d
-[root]# docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin exec -T app php artisan migrate --force
-[root]# ./docker/ops/wait-for-healthy.sh --variant virtualmin
+[root]# ./docker/ops/update_prod.sh
 [root]# ./docker/ops/status.sh --variant virtualmin
 ```
 
-Volumes survive rebuilds (database + nothing else to persist in this
-variant — TLS lives in Apache/Virtualmin). Brief 502s while `app` is
-recreated self-heal within ~10s (nginx re-resolves via Docker DNS):
-that is why verification starts with `wait-for-healthy.sh`, which
-polls container health boundedly instead of curling into startup;
-a 502 after every service reports healthy is a real failure, not a
-race.
+`update_prod.sh` (tracked in the repo; replaces the old untracked
+owner script — delete the old `/srv/rev2square/update_prod.sh` copy
+and use this path so `git pull` keeps it current) runs, in order:
+database safety backup, bounded analysis drain (aborts safely instead
+of killing a running analysis), app+nginx build (with the frontend
+key), migrations, a second drain check, graceful coordinator stop,
+recreate of app/nginx/queue/scheduler/reverb/analysis-coordinator,
+bounded readiness polling, loopback + public HTTP checks, and
+separate internal/public wss handshake checks. Runners are left alone
+unless passed via `--runners` (comma-separated subset); `--force`
+skips the drain waits (kills a running analysis);
+`./docker/ops/update_prod.sh --help` documents exit codes.
+
+Volumes survive rebuilds (database + app-storage uploads; TLS lives in
+Apache/Virtualmin). Brief 502s while `app` is recreated self-heal
+within ~10s (nginx re-resolves via Docker DNS): that is why the
+updater polls container health boundedly instead of curling into
+startup; a 502 after every service reports healthy is a real failure,
+not a race. Deploys drop realtime sockets for seconds; browsers
+reconnect automatically (presence may flap once on the Online page).
 
 ## 13. Backup and restore
+
+`backup.sh` / `restore.sh` cover the DATABASE ONLY. Private uploads
+(research artifacts, presentation media, avatars, attachments,
+imports) live in the `app-storage` Docker volume and are NOT in the
+SQL dumps — back them up separately (below), or a volume loss keeps
+the database but loses every file it references.
 
 ```sh
 [root]# ./docker/backup/backup.sh --variant virtualmin
@@ -441,12 +491,56 @@ Off-site sync (object storage/second host) stays an operator step using
 any host tooling — the files are plain gzip dumps. Test restores on a
 scratch project (`--project`) before trusting them.
 
+Uploads backup (volume tarball; safe to run while live for disaster
+recovery — but a file uploaded during those exact seconds may restore
+truncated, so re-upload strays afterwards. For a guaranteed-consistent
+snapshot, stop the writers first with the same `stop app queue
+analysis-coordinator` command the restore runbook uses):
+
+```sh
+[root]# cd /srv/rev2square
+[root]# TS=$(date -u +%Y%m%dT%H%M%SZ)
+[root]# docker run --rm -v rev2square-virtualmin_app-storage:/data:ro \
+  -v "$PWD/backups:/out" alpine \
+  tar -czf "/out/app-storage-$TS.tar.gz" -C /data .
+[root]# sha256sum "backups/app-storage-$TS.tar.gz"
+[root]# ls -lh backups/   # watch growth: uploads tarballs are full copies, size KEEP accordingly
+```
+
+Schedule weekly (uploads change slower than the database; tighten if
+artifact volume warrants it):
+
+```
+0 4 * * 0 cd /srv/rev2square && TS=$(date -u +\%Y\%m\%dT\%H\%M\%SZ) && docker run --rm -v rev2square-virtualmin_app-storage:/data:ro -v /srv/rev2square/backups:/out alpine tar -czf /out/app-storage-$TS.tar.gz -C /data . >> /var/log/rev2square-backup.log 2>&1
+```
+
+Uploads restore (DESTRUCTIVE to current uploads; database untouched):
+
+```sh
+[root]# cd /srv/rev2square
+# 1. Safety backup of the CURRENT volume first (same command as above).
+# 2. Stop writers so nothing uploads mid-restore:
+[root]# docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin stop app queue analysis-coordinator
+# 3. Clear + extract (tar preserves the www-data uid; verify the file
+#    list with tar -tzf first on an untrusted archive):
+[root]# docker run --rm -v rev2square-virtualmin_app-storage:/data \
+  -v "$PWD/backups:/in:ro" alpine \
+  sh -c 'rm -rf /data/* /data/.[!.]* && tar -xzf "/in/app-storage-<ts>.tar.gz" -C /data && ls /data'
+[root]# docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin up -d app queue analysis-coordinator
+[root]# ./docker/ops/status.sh --variant virtualmin
+```
+
+Spot-check a tarball WITHOUT restoring: `tar -tzvf
+backups/app-storage-<ts>.tar.gz | head` lists contents; extraction to
+a temp dir verifies integrity end to end.
+
 ## 14. Health checks
 
 ```sh
 [root]# ./docker/ops/status.sh --variant virtualmin
-# containers (5, no proxy) + /up + queue depth + failed jobs + recent
-# errors + disk + DB size. Exit 1 on any FAIL.
+# containers (7: app nginx db queue scheduler reverb
+# analysis-coordinator, no proxy) + /up + queue depth + failed jobs +
+# recent errors + disk + DB size. Exit 1 on any FAIL.
 
 [root]# curl -fsS https://<domain>/up          # through Apache (proves the full chain)
 [root]# curl -fsS http://127.0.0.1:8081/up     # loopback direct (proves Compose without Apache)
@@ -455,10 +549,33 @@ scratch project (`--project`) before trusting them.
 If the loopback check passes but the public one fails, the fault is in
 the Apache/Virtualmin layer (section 17), not the containers.
 
+Realtime is verified SEPARATELY from HTTP (a green `/up` says nothing
+about sockets). Both must return 101 (`<KEY>` = `REVERB_APP_KEY`):
+
+```sh
+[root]# curl -s -o /dev/null -w '%{http_code}\n' --max-time 10 \
+  -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
+  -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
+  http://127.0.0.1:8081/app/<KEY>     # loopback: nginx -> reverb
+[root]# curl -s -o /dev/null -w '%{http_code}\n' --max-time 15 \
+  -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
+  -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
+  https://<domain>/app/<KEY>          # public: Apache -> nginx -> reverb
+```
+
+Loopback 101 + public non-101 means the containers are fine and the
+Apache `/app/` upgrade rule is missing or broken (section 7). Loopback
+non-101 with a healthy reverb container means the nginx `/app/` proxy
+is missing (stale nginx image — 404) or not reaching reverb (502).
+A baked-frontend-key/server-key mismatch still returns 101 and then
+drops every socket instantly with console error 4001 "Application
+does not exist"; fix by redeploying via `update_prod.sh` (rebuilds
+assets from the current key), never by restarting containers alone.
+
 ## 15. Log inspection
 
 ```sh
-[root]# docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin logs -f --tail=100 app queue
+[root]# docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin logs -f --tail=100 app queue reverb
 [root]# docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin exec -T app tail -n 100 storage/logs/laravel.log
 [root]# docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin exec -T app php artisan queue:failed
 ```
@@ -474,11 +591,8 @@ from git, always reproducible):
 
 ```sh
 [root]# cd /srv/rev2square
-[root]# ./docker/backup/backup.sh --variant virtualmin
 [root]# git checkout <previous-release-sha>
-[root]# docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin build && \
-  docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin up -d
-[root]# docker compose -f compose.virtualmin.yaml --env-file /etc/rev2square/.env.virtualmin exec -T app php artisan migrate --force
+[root]# ./docker/ops/update_prod.sh   # same backup/drain/build/migrate/verify flow
 [root]# ./docker/ops/status.sh --variant virtualmin
 ```
 
@@ -519,6 +633,20 @@ dump. Migrations are additive; production never runs `migrate:rollback`.
 - Queue backlog: `queue:monitor` / `queue:failed`; workers exit hourly
   by design and auto-restart. `Exited` for minutes = crash loop, read
   `logs queue`.
+- Chat/presence dead but HTTP fine: realtime fails independently of
+  `/up`. Run the two section 14 wss probes. Loopback 101 + public
+  non-101: Apache `/app/` rule missing/broken (`httpd -M` must list
+  `proxy_wstunnel`, httpd 2.4.47+, snippet re-pasted, `systemctl reload
+  httpd`). Loopback non-101 with healthy reverb: stale nginx image —
+  redeploy with `update_prod.sh`. Sockets connect then drop instantly
+  with console error 4001 "Application does not exist": the baked
+  frontend key differs from the server key — redeploy with
+  `update_prod.sh` (rebuilds), never restart alone. Both 101 and
+  sockets stay up but no live messages: the `queue` worker delivers
+  broadcasts (`BROADCAST_CONNECTION=reverb` + worker running?).
+- Realtime takes ~10s to settle after every deploy (socket drop +
+  client reconnect); presence may flap once on the Online page. Only
+  investigate when sockets stay down past a minute.
 - Out of disk: `docker system df`; safe reclaims are `docker image
   prune -a` (keeps volumes) and old `./backups/` rotation. Never
   `prune --volumes` without a verified backup.
@@ -547,10 +675,13 @@ load (16k-token response + queue job + fpm children), allow headroom to
 MariaDB, and other tenants — but confirm with section 2 checks and keep
 an eye on `docker stats` plus host `free -m` during the demo.
 
-No Redis or extra services. No per-container memory limits (an
-OOM-killed analysis job is worse than a slow one). Log rotation is
-configured (10 MB x 3 per container); application logs stay in the
-default single file — rotate host-side if the demo generates volume.
+No Redis. Reverb is one more single `php artisan` process from the
+same image as the queue worker (measure it with `docker stats`; it is
+not itemized in the table above, neither are the analysis services).
+No per-container memory limits (an OOM-killed analysis job is worse
+than a slow one). Log rotation is configured (10 MB x 3 per
+container); application logs stay in the default single file — rotate
+host-side if the demo generates volume.
 
 Watch: `docker stats --no-stream`, `./docker/ops/status.sh --variant
 virtualmin` (disk + DB size), host `free -m`, `./backups/` growth.
