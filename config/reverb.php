@@ -1,5 +1,37 @@
 <?php
 
+// Normalize REVERB_ALLOWED_ORIGINS to the hostname patterns Reverb
+// actually compares (v1.12 Protocols/Pusher/Server.php verifyOrigin:
+// parse_url(Origin, PHP_URL_HOST) matched with Str::is, case
+// sensitively, '*' wildcards allowed). Accepts bare hostnames,
+// full URLs (scheme/port/path stripped), and wildcards; unparseable
+// entries are dropped. Unset/blank keeps the wide-open development
+// default, but a present-yet-unparseable value fails CLOSED (deny all:
+// loud 4009s) instead of silently opening. Plain statements only (no
+// closures): config:cache must stay serializable.
+$reverbAllowedOrigins = ['*'];
+$reverbRawOrigins = trim((string) env('REVERB_ALLOWED_ORIGINS', ''));
+if ($reverbRawOrigins !== '') {
+    $reverbAllowedOrigins = [];
+    foreach (explode(',', $reverbRawOrigins) as $reverbEntry) {
+        $reverbEntry = strtolower(trim($reverbEntry));
+        if ($reverbEntry === '') {
+            continue;
+        }
+        if ($reverbEntry === '*') {
+            $reverbAllowedOrigins[] = '*';
+            continue;
+        }
+        $reverbHost = parse_url(
+            str_contains($reverbEntry, '://') ? $reverbEntry : 'https://'.$reverbEntry,
+            PHP_URL_HOST
+        );
+        if (is_string($reverbHost) && $reverbHost !== '') {
+            $reverbAllowedOrigins[] = $reverbHost;
+        }
+    }
+}
+
 return [
 
     /*
@@ -82,13 +114,10 @@ return [
                     'scheme' => env('REVERB_SCHEME', 'https'),
                     'useTLS' => env('REVERB_SCHEME', 'https') === 'https',
                 ],
-                // Comma-separated Origin allowlist (e.g. "https://rev2square.eu").
-                // Unset or blank keeps the '*' development default; pin the
-                // public origin in production (REVERB_ALLOWED_ORIGINS).
-                'allowed_origins' => array_values(array_filter(array_map(
-                    'trim',
-                    explode(',', (string) env('REVERB_ALLOWED_ORIGINS', '*'))
-                ))) ?: ['*'],
+                // Hostname allowlist, normalized above from
+                // REVERB_ALLOWED_ORIGINS. Pin the public hostname in
+                // production (see .env.virtualmin.example).
+                'allowed_origins' => $reverbAllowedOrigins,
                 'ping_interval' => env('REVERB_APP_PING_INTERVAL', 60),
                 'activity_timeout' => env('REVERB_APP_ACTIVITY_TIMEOUT', 30),
                 'max_connections' => env('REVERB_APP_MAX_CONNECTIONS'),

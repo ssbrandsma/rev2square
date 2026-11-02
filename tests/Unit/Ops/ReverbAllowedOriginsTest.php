@@ -39,24 +39,52 @@ class ReverbAllowedOriginsTest extends TestCase
         $this->assertSame(['*'], $this->parsedOrigins(null));
     }
 
-    public function test_single_origin_is_pinned(): void
+    public function test_single_hostname_is_pinned(): void
     {
         $this->assertSame(
-            ['https://rev2square.example.com'],
-            $this->parsedOrigins('https://rev2square.example.com')
+            ['rev2square.example.com'],
+            $this->parsedOrigins('rev2square.example.com')
         );
     }
 
-    public function test_comma_list_is_split_and_trimmed(): void
+    public function test_full_url_is_normalized_to_hostname(): void
     {
+        // Reverb v1.12 compares parse_url(Origin, HOST) against the
+        // entries, so full URLs must be reduced to hostnames (a literal
+        // 'https://...' entry could never match and would lock everyone
+        // out). Ports, paths, and case are normalized away the same way.
         $this->assertSame(
-            ['https://a.example.com', 'https://b.example.com'],
-            $this->parsedOrigins('https://a.example.com,  https://b.example.com ,')
+            ['rev2square.example.com'],
+            $this->parsedOrigins('https://rev2square.example.com')
+        );
+        $this->assertSame(
+            ['a.example.com', 'b.example.com'],
+            $this->parsedOrigins('https://A.example.com:8443/x,  b.example.com ')
+        );
+    }
+
+    public function test_wildcard_entries_survive_normalization(): void
+    {
+        $this->assertSame(['*'], $this->parsedOrigins('*'));
+        $this->assertSame(
+            ['*.example.com'],
+            $this->parsedOrigins('https://*.example.com')
         );
     }
 
     public function test_empty_value_falls_back_to_wildcard(): void
     {
         $this->assertSame(['*'], $this->parsedOrigins(''));
+    }
+
+    public function test_unparseable_value_fails_closed(): void
+    {
+        // Present-but-invalid is misconfiguration, not "not configured":
+        // deny all (loud 4009s) instead of silently opening to '*'.
+        $this->assertSame([], $this->parsedOrigins('http:///no-host-here'));
+        $this->assertSame(
+            ['ok.example.com'],
+            $this->parsedOrigins('http:///no-host-here, ok.example.com')
+        );
     }
 }
