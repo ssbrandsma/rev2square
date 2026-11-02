@@ -265,6 +265,10 @@ class ChatTest extends TestCase
             ->get(route('projects.chat.show', $project))->assertOk()->getContent();
         $this->assertStringContainsString('data-room-kind="project"', $manager);
         $this->assertStringContainsString('data-can-moderate="1"', $manager);
+        $this->assertStringContainsString(
+            'data-channels-url="'.route('realtime.channels', ['room' => 'project:'.$project->id]).'"',
+            $manager
+        );
 
         $member = $this->actingAs(User::factory()->create())
             ->get(route('projects.chat.show', $project))->assertOk()->getContent();
@@ -275,5 +279,9 @@ class ChatTest extends TestCase
             ->get(route('lounge'))->assertOk()->getContent();
         $this->assertStringContainsString('data-room-kind="lounge"', $lounge);
         $this->assertStringNotContainsString('data-can-moderate="1"', $lounge);
+        $this->assertStringContainsString(
+            'data-channels-url="'.route('realtime.channels', ['room' => 'lounge']).'"',
+            $lounge
+        );
     }
 }

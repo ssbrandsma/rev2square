@@ -5,6 +5,7 @@ namespace App\Services\Realtime;
 use App\Events\ChatChannelRotated;
 use App\Models\Project;
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 
 /**
  * Channel rotation: when access changes, the affected channels get new
@@ -12,30 +13,42 @@ use Illuminate\Support\Collection;
  * rejoin. Rejoin re-runs channel auth, so clients that lost access are
  * stranded on a dead channel and receive nothing further. No client
  * cooperation is needed for the security property (P1-2).
+ *
+ * Bumps are locked reads, so two callers holding stale models still
+ * advance distinct successive epochs. Bumps join the caller's ambient
+ * transaction when there is one; announcements always run after commit.
  */
 class ChannelRotation
 {
     /**
-     * Rotate one project's chat + roster channels after a project-level
-     * access change (visibility, membership, ownership). Broadcasts
-     * immediately after the bump commits; callers inside their own
-     * transaction must call this after it commits.
+     * Atomically advance one project's epoch. Returns the committed (or
+     * ambient-transaction pending) transition; the caller announces it
+     * after commit via announceProjectRotation().
+     *
+     * @return array{old: int, new: int}
      */
-    public static function rotateProject(Project $project): void
+    public static function bumpProjectEpoch(Project $project): array
+    {
+        $bumped = DB::transaction(function () use ($project): array {
+            $fresh = Project::whereKey($project->getKey())->lockForUpdate()->firstOrFail();
+            $old = (int) $fresh->channel_epoch;
+            $fresh->forceFill(['channel_epoch' => $old + 1])->save();
+
+            return ['old' => $old, 'new' => $old + 1];
+        });
+
+        // Sync the caller's (possibly stale) instance to the bump it caused.
+        $project->forceFill(['channel_epoch' => $bumped['new']]);
+
+        return $bumped;
+    }
+
+    public static function announceProjectRotation(int $projectId, int $old, int $new): void
     {
         $global = RealtimeEpoch::current();
 
-        $oldChat = ChannelNames::projectChat($project, $global);
-        $oldRoster = ChannelNames::projectRoster($project, $global);
-
-        $project->forceFill(['channel_epoch' => $project->channel_epoch + 1])->save();
-        $project->refresh();
-
-        $newChat = ChannelNames::projectChat($project, $global);
-        $newRoster = ChannelNames::projectRoster($project, $global);
-
-        broadcast(new ChatChannelRotated($oldChat, $newChat, false));
-        broadcast(new ChatChannelRotated($oldRoster, $newRoster, true));
+        broadcast(new ChatChannelRotated("chat.project.{$projectId}.{$old}.{$global}", "chat.project.{$projectId}.{$new}.{$global}", false));
+        broadcast(new ChatChannelRotated("roster.project.{$projectId}.{$old}.{$global}", "roster.project.{$projectId}.{$new}.{$global}", true));
     }
 
     /** @param Collection<int, Project> $projects */

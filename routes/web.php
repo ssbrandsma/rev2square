@@ -31,6 +31,7 @@ use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\ProjectController;
 use App\Http\Controllers\PromotionController;
 use App\Http\Controllers\PublicProfileController;
+use App\Http\Controllers\RealtimeController;
 use App\Http\Controllers\ReportController;
 use App\Http\Controllers\ReviewController;
 use App\Http\Controllers\SavedProjectController;
@@ -225,8 +226,11 @@ Route::get('/users/{user}', [PublicProfileController::class, 'show'])->name('use
 
 Route::get('/lounge', [ChatController::class, 'lounge'])->name('lounge');
 Route::get('/lounge/history', [ChatController::class, 'loungeHistory'])->name('lounge.history');
+Route::get('/realtime/channels', [RealtimeController::class, 'channels'])
+    ->middleware('auth')->name('realtime.channels');
 Route::get('/online', fn () => view('online', [
     'channel' => ChannelNames::online(RealtimeEpoch::current()),
+    'channelsUrl' => route('realtime.channels', ['room' => 'online']),
 ]))->name('online');
 Route::get('/projects/{project}/chat', [ChatController::class, 'show'])->name('projects.chat.show');
 

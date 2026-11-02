@@ -46,9 +46,16 @@ class RealtimeEpoch
      *
      * @return array{old: int, new: int}
      */
-    public static function rotate(): array
+    /**
+     * Atomically advance the global epoch. Joins the caller's ambient
+     * transaction when there is one; the caller announces the returned
+     * transition after commit via announce().
+     *
+     * @return array{old: int, new: int}
+     */
+    public static function bump(): array
     {
-        $bumped = DB::transaction(function (): array {
+        return DB::transaction(function (): array {
             $row = AppSetting::where('key', self::SETTING_KEY)->lockForUpdate()->first();
 
             $old = $row === null ? 0 : max(0, (int) $row->value);
@@ -63,13 +70,15 @@ class RealtimeEpoch
 
             return ['old' => $old, 'new' => $new];
         });
+    }
 
-        // Announce only after the bump commits, so rejoining clients find
-        // the new epoch when they re-auth. Callers inside their own
-        // transaction must call rotate() after it commits.
+    /**
+     * Announce a committed global transition on every old channel name.
+     * Project rows are read fresh so the fan-out matches committed state.
+     */
+    public static function announce(int $old, int $new): void
+    {
         $projects = Project::query()->select(['id', 'channel_epoch'])->get();
-        ChannelRotation::announceGlobal($bumped['old'], $bumped['new'], $projects);
-
-        return $bumped;
+        ChannelRotation::announceGlobal($old, $new, $projects);
     }
 }

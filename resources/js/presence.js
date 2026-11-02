@@ -11,8 +11,11 @@
 
 /**
  * @param {Document} doc
- * @param {{ join: (name: string) => { listen: (event: string, cb: (payload: object) => void) => void },
- *   leave: (name: string) => void, track: (name: string) => void, untrack: (name: string) => void }} ports
+ * @param {{ join: (name: string) => { listen: (event: string, cb: (payload: object) => void) => void,
+ *     onError: (cb: () => void) => void },
+ *   leave: (name: string) => void, track: (name: string) => void, untrack: (name: string) => void,
+ *   resolve: (url: string) => Promise<string|null> }} ports resolve() returns
+ *   the current presence name, or null when denied or unresolvable.
  * @returns {string[]} Joined channel names (canonical, prefix stripped).
  */
 export function registerGlobalPresence(doc, ports) {
@@ -42,6 +45,20 @@ export function registerGlobalPresence(doc, ports) {
             if (event && typeof event.channel === 'string' && event.channel !== name) {
                 subscribe(element, event.channel);
             }
+        });
+
+        // Missed a rotation while offline: the stale name fails auth, so
+        // re-resolve the current one instead of staying unregistered.
+        channel.onError(() => {
+            const url = element.getAttribute('data-channels-url');
+            if (!url) {
+                return;
+            }
+            ports.resolve(url).then((current) => {
+                if (current && current !== element.getAttribute('data-joined')) {
+                    subscribe(element, current);
+                }
+            });
         });
     }
 

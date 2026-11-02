@@ -16,6 +16,7 @@ use App\Services\Media\StoryDocument;
 use App\Services\Realtime\ChannelRotation;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Str;
 use Illuminate\View\View;
@@ -132,19 +133,25 @@ class ProjectController extends Controller
         // realtime channels so earlier subscribers stop receiving (P1-2).
         $visibilityChanged = $project->isDirty('publication_status');
 
-        // Shelving a project closes new conversation by default; posting
-        // resumes only when a maintainer deliberately reopens it. Ordinary
-        // edits never flip a deliberate reopen back.
-        if ($project->isDirty('activity')
-            && in_array($project->activity, [ProjectActivity::Archived, ProjectActivity::Paused], true)) {
-            $project->discussion_open = false;
-        }
+        // The save and the epoch bump commit together, so a visibility
+        // change can never land without invalidating earlier sockets.
+        $transition = DB::transaction(function () use ($project, $visibilityChanged): ?array {
+            // Shelving a project closes new conversation by default; posting
+            // resumes only when a maintainer deliberately reopens it. Ordinary
+            // edits never flip a deliberate reopen back.
+            if ($project->isDirty('activity')
+                && in_array($project->activity, [ProjectActivity::Archived, ProjectActivity::Paused], true)) {
+                $project->discussion_open = false;
+            }
 
-        $project->save();
+            $project->save();
+
+            return $visibilityChanged ? ChannelRotation::bumpProjectEpoch($project) : null;
+        });
         $this->syncDevice($project, $request->validated());
 
-        if ($visibilityChanged) {
-            ChannelRotation::rotateProject($project);
+        if ($transition !== null) {
+            ChannelRotation::announceProjectRotation($project->id, $transition['old'], $transition['new']);
         }
 
         if ($wasOpen && ! $project->discussion_open) {

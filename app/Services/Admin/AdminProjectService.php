@@ -43,7 +43,9 @@ final class AdminProjectService
         string $reason,
         int $expectedOwnerId,
     ): Project {
-        $project = DB::transaction(function () use ($actor, $projectId, $recipientId, $keepPreviousOwner, $reason, $expectedOwnerId): Project {
+        $rotation = null;
+
+        $project = DB::transaction(function () use ($actor, $projectId, $recipientId, $keepPreviousOwner, $reason, $expectedOwnerId, &$rotation): Project {
             $project = Project::whereKey($projectId)->lockForUpdate()->firstOrFail();
 
             if ($project->owner_id !== $expectedOwnerId) {
@@ -96,6 +98,9 @@ final class AdminProjectService
 
             $project->forceFill(['owner_id' => $recipient->id])->save();
 
+            // The ownership change and the epoch bump commit together.
+            $rotation = ChannelRotation::bumpProjectEpoch($project);
+
             $after = self::snapshot($project->fresh());
             $after['previous_owner_result'] = $previousOwnerResult;
             $after['recipient_membership_revoked'] = $retiredMembership !== null;
@@ -121,7 +126,7 @@ final class AdminProjectService
 
         // Management changed hands: strand sockets authorized under the
         // previous access set, announced after the transfer commits (P1-2).
-        ChannelRotation::rotateProject($project);
+        ChannelRotation::announceProjectRotation($project->id, $rotation['old'], $rotation['new']);
 
         return $project;
     }

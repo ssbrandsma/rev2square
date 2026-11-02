@@ -109,7 +109,7 @@
 </div>
 @auth
     @if(auth()->user()->show_presence)
-        <div data-presence-register data-channel="presence-{{ \App\Services\Realtime\ChannelNames::online(\App\Services\Realtime\RealtimeEpoch::current()) }}" class="hidden" aria-hidden="true"></div>
+        <div data-presence-register data-channel="presence-{{ \App\Services\Realtime\ChannelNames::online(\App\Services\Realtime\RealtimeEpoch::current()) }}" data-channels-url="{{ route('realtime.channels', ['room' => 'online']) }}" class="hidden" aria-hidden="true"></div>
     @endif
     <div data-chat-launcher data-unread-url="{{ route('chat.unread') }}" class="fixed bottom-24 right-4 z-40 sm:bottom-4">
         <div data-launcher-panel id="chat-rooms-panel" class="mb-2 hidden w-72 rounded-xl border border-zinc-200 bg-white p-2 shadow-xl">

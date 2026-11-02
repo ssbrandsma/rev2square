@@ -1,5 +1,6 @@
 import { realtime, trackPresenceChannel, untrackPresenceChannel } from '../echo.js';
 import { registerGlobalPresence } from '../presence.js';
+import { resolveChannels } from '../channel-refresh.js';
 
 // Presence roster: who is here right now. Members appear only when they
 // opted in (enforced by the channel auth callback, not just by this UI).
@@ -65,6 +66,7 @@ import { registerGlobalPresence } from '../presence.js';
         const members = new Map();
         let settled = false;
         let channelName = null;
+        let lastErrorChannel = null;
 
         const snapshot = () => [...members.values()];
 
@@ -121,8 +123,22 @@ import { registerGlobalPresence } from '../presence.js';
                 }
             });
 
+            // Auth failure after an offline rotation: re-resolve the
+            // current roster name before concluding anything.
             channel.error(() => {
-                setState(box, 'Presence is unavailable right now — this may mean you opted out, or the connection dropped.');
+                if (channelName === lastErrorChannel) {
+                    return;
+                }
+                lastErrorChannel = channelName;
+                resolveChannels(fetch, box.getAttribute('data-channels-url')).then((resolved) => {
+                    if (resolved.status === 'ok' && resolved.channels.presence && resolved.channels.presence !== channelName) {
+                        subscribe(resolved.channels.presence);
+                    } else if (resolved.status === 'denied') {
+                        setState(box, 'Presence is unavailable: you no longer have access here.');
+                    } else {
+                        setState(box, 'Presence is unavailable right now — this may mean you opted out, or the connection dropped.');
+                    }
+                });
             });
         }
 
@@ -141,10 +157,20 @@ import { registerGlobalPresence } from '../presence.js';
         const echo = realtime();
         if (echo) {
             registerGlobalPresence(document, {
-                join: (name) => echo.join(name),
+                join: (name) => {
+                    const channel = echo.join(name);
+                    return {
+                        listen: (event, cb) => channel.listen(event, cb),
+                        onError: (cb) => channel.error(cb),
+                    };
+                },
                 leave: (name) => echo.leave(name),
                 track: trackPresenceChannel,
                 untrack: untrackPresenceChannel,
+                resolve: async (url) => {
+                    const resolved = await resolveChannels(fetch, url);
+                    return resolved.status === 'ok' ? resolved.channels.presence : null;
+                },
             });
         }
     });

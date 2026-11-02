@@ -14,6 +14,7 @@ use App\Notifications\TeamInvitationNotification;
 use App\Services\Realtime\ChannelRotation;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Str;
 use Illuminate\View\View;
@@ -102,11 +103,16 @@ class TeamController extends Controller
 
         // The owner row lives on the project itself, never in members, so
         // revoking members can never strand a project without a manager.
-        $member->update(['status' => 'revoked']);
+        // The revocation and the epoch bump commit together, so the
+        // revoked member's sockets are always invalidated with the access
+        // change (P1-2).
+        $transition = DB::transaction(function () use ($member, $project): array {
+            $member->update(['status' => 'revoked']);
 
-        // The revoked member's sockets stay subscribed unless the
-        // channels rotate beneath them (P1-2).
-        ChannelRotation::rotateProject($project);
+            return ChannelRotation::bumpProjectEpoch($project);
+        });
+
+        ChannelRotation::announceProjectRotation($project->id, $transition['old'], $transition['new']);
 
         AuditEvent::record('team.revoked', request()->user(), $project, $member, [
             'revoked_user_id' => $member->user_id,

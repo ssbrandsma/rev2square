@@ -54,9 +54,9 @@ final class AdminUserService
 
     public static function suspend(User $actor, int $userId, string $reason): User
     {
-        $didSuspend = false;
+        $rotation = null;
 
-        $target = DB::transaction(function () use ($actor, $userId, $reason, &$didSuspend): User {
+        $target = DB::transaction(function () use ($actor, $userId, $reason, &$rotation): User {
             $target = User::where('id', $userId)->lockForUpdate()->firstOrFail();
 
             if (! $target->isSuspended()) {
@@ -69,19 +69,20 @@ final class AdminUserService
 
                 self::revokeSessions($target);
 
-                AdminAuditEvent::record('account.suspended', $actor, $target, $reason, $before, self::snapshot($target->fresh()));
+                // The suspension and the epoch bump commit together.
+                $rotation = RealtimeEpoch::bump();
 
-                $didSuspend = true;
+                AdminAuditEvent::record('account.suspended', $actor, $target, $reason, $before, self::snapshot($target->fresh()));
             }
 
             return $target->fresh();
         });
 
-        if ($didSuspend) {
+        if ($rotation !== null) {
             // Suspended accounts cannot re-auth, but their existing
             // sockets stay subscribed: rotate every channel, announced
             // only after the suspension commits (P1-2).
-            RealtimeEpoch::rotate();
+            RealtimeEpoch::announce($rotation['old'], $rotation['new']);
         }
 
         return $target;

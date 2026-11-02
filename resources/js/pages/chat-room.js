@@ -1,6 +1,7 @@
 import { currentUserId, realtime } from '../echo.js';
 import { buildMessageNode } from '../chat-render.js';
-import { createCatchUp } from '../chat-sync.js';
+import { createCatchUp, sortedIndex } from '../chat-sync.js';
+import { resolveChannels } from '../channel-refresh.js';
 import { clearDraft, loadDraft, saveDraft } from '../drafts.js';
 
 // Live chat room: server-rendered history upgraded with realtime delivery.
@@ -55,7 +56,7 @@ import { clearDraft, loadDraft, saveDraft } from '../drafts.js';
         return scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 120;
     }
 
-    function appendMessage(root, payload) {
+    function insertMessage(root, payload) {
         if (root.querySelector(`[data-chat-message][data-message-id="${payload.id}"]`)) {
             return;
         }
@@ -72,12 +73,18 @@ import { clearDraft, loadDraft, saveDraft } from '../drafts.js';
         // builder assigns them via textContent/setAttribute (P1-1). Viewer
         // context selects the same Retract/Report/Remove controls the
         // server renders, with authorization enforced on POST (P2-6).
-        scroll.appendChild(buildMessageNode(document, payload, {
+        const node = buildMessageNode(document, payload, {
             id: currentUserId(),
             csrf: csrf(),
             canModerate: root.getAttribute('data-can-moderate') === '1',
             roomKind: root.getAttribute('data-room-kind') === 'project' ? 'project' : 'lounge',
-        }));
+        });
+
+        // Ordered placement: retried gaps land in position even when newer
+        // live messages rendered first (follow-up fix 2).
+        const rendered = scroll.querySelectorAll('[data-chat-message]');
+        const ids = [...rendered].map((element) => Number(element.getAttribute('data-message-id')) || 0);
+        scroll.insertBefore(node, rendered[sortedIndex(ids, Number(payload.id))] ?? null);
 
         if (stick) {
             scrollToBottom(scroll);
@@ -122,7 +129,7 @@ import { clearDraft, loadDraft, saveDraft } from '../drafts.js';
             retry.disabled = true;
             try {
                 const data = await postJson(root.getAttribute('data-send-url'), { body, client_key: clientKey });
-                appendMessage(root, data.message);
+                insertMessage(root, data.message);
                 row.remove();
             } catch (error) {
                 retry.disabled = false;
@@ -133,13 +140,13 @@ import { clearDraft, loadDraft, saveDraft } from '../drafts.js';
         outbox.appendChild(row);
     }
 
-    function markRead(root) {
+    function markRead(root, upTo = null) {
         const url = root.getAttribute('data-read-url');
         if (!url || !currentUserId()) {
             return;
         }
 
-        postJson(url, { last_read_message_id: lastMessageId(root) }).catch(() => {});
+        postJson(url, { last_read_message_id: upTo ?? lastMessageId(root) }).catch(() => {});
     }
 
     function initRoom(root) {
@@ -201,7 +208,7 @@ import { clearDraft, loadDraft, saveDraft } from '../drafts.js';
                     return null;
                 }
             },
-            append: (message) => appendMessage(root, message),
+            append: (message) => insertMessage(root, message),
             isPresent: (id) => root.querySelector(`[data-chat-message][data-message-id="${id}"]`) !== null,
         });
 
@@ -210,7 +217,9 @@ import { clearDraft, loadDraft, saveDraft } from '../drafts.js';
             if (result.started && !result.exhausted && !result.failed) {
                 setStatus(root, 'warn', 'A very long backlog was truncated to recent messages. <a href="" class="font-semibold underline">Refresh</a> for the full history.');
             }
-            markRead(root);
+            // Read state follows the reconciled cursor, never buffered
+            // live ids past an unfilled gap (follow-up fix 2).
+            markRead(root, sync.getCursor() ?? lastMessageId(root));
         }
 
         // Typing state survives channel rotation: one shared roster, with
@@ -278,7 +287,7 @@ import { clearDraft, loadDraft, saveDraft } from '../drafts.js';
 
             channel.listen('.message.sent', (payload) => {
                 if (!sync.bufferLive(payload)) {
-                    appendMessage(root, payload);
+                    insertMessage(root, payload);
                     markRead(root);
                 }
             });
@@ -297,19 +306,60 @@ import { clearDraft, loadDraft, saveDraft } from '../drafts.js';
                 }
             });
 
+            // Auth failure means a stale epoch or lost access: resolve the
+            // current name before concluding anything. Consecutive failures
+            // on one name stop quietly instead of resolving in a loop.
             channel.error(() => {
-                form?.classList.add('hidden');
-                setStatus(root, 'error', 'You no longer have access to this conversation. <a href="" class="font-semibold underline">Refresh</a> to re-check.');
+                if (channelName === lastErrorChannel) {
+                    setStatus(root, 'warn', 'Live chat could not reconnect. <a href="" class="font-semibold underline">Refresh</a> to re-check.');
+                    return;
+                }
+                lastErrorChannel = channelName;
+                refreshSubscription().then((outcome) => {
+                    if (outcome === 'resubscribed') {
+                        catchUp();
+                    } else if (outcome !== 'failed') {
+                        // Denied, or the current name yet auth rejects:
+                        // genuinely no access.
+                        showNoAccess();
+                    }
+                });
             });
         }
+
+        function showNoAccess() {
+            form?.classList.add('hidden');
+            setStatus(root, 'error', 'You no longer have access to this conversation. <a href="" class="font-semibold underline">Refresh</a> to re-check.');
+        }
+
+        // Re-resolve the current channel after reconnect or auth failure.
+        // A client offline during a rotation rejoins under the new name;
+        // only genuine denial hides the composer (follow-up fix 3).
+        async function refreshSubscription() {
+            const resolved = await resolveChannels(fetch, root.getAttribute('data-channels-url'));
+            if (resolved.status === 'ok' && resolved.channels.chat) {
+                if (resolved.channels.chat !== channelName) {
+                    subscribe(resolved.channels.chat);
+                    return 'resubscribed';
+                }
+                return 'current';
+            }
+            return resolved.status;
+        }
+
+        let lastErrorChannel = null;
 
         subscribe(channelName);
 
         const pusher = echo.connector.pusher;
         if (pusher?.connection) {
             pusher.connection.bind('connecting', () => setStatus(root, 'warn', 'Connecting to live chat…'));
-            pusher.connection.bind('connected', () => {
+            pusher.connection.bind('connected', async () => {
                 setStatus(root, null);
+                if (await refreshSubscription() === 'denied') {
+                    showNoAccess();
+                    return;
+                }
                 catchUp();
             });
             pusher.connection.bind('unavailable', () => setStatus(
@@ -356,7 +406,7 @@ import { clearDraft, loadDraft, saveDraft } from '../drafts.js';
 
             try {
                 const data = await postJson(root.getAttribute('data-send-url'), { body, client_key: clientKey }, socketHeaders());
-                appendMessage(root, data.message);
+                insertMessage(root, data.message);
                 field.value = '';
                 clearDraft(window.localStorage, currentUserId(), draftKey);
                 markRead(root);

@@ -9,7 +9,7 @@
         @guest
             <p class="mb-4 rounded-xl border border-zinc-200 bg-white p-5 text-sm text-zinc-600"><a href="{{ route('login') }}" class="font-semibold text-emerald-700 hover:text-emerald-600">Sign in</a> to see who is around.</p>
         @endguest
-        <div class="rounded-xl border border-zinc-200 bg-white p-6" data-presence-roster data-channel="presence-{{ $channel }}">
+        <div class="rounded-xl border border-zinc-200 bg-white p-6" data-presence-roster data-channel="presence-{{ $channel }}" data-channels-url="{{ $channelsUrl }}">
             <div data-presence-list>
                 <p class="text-sm text-zinc-500" data-presence-state>Loading…</p>
             </div>

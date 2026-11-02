@@ -5,8 +5,8 @@ import assert from 'node:assert/strict';
 import { registerGlobalPresence } from '../../resources/js/presence.js';
 import { FakeDocument } from './fake-dom.mjs';
 
-function ports() {
-    const calls = { join: [], leave: [], track: [], untrack: [], listeners: {} };
+function ports(resolveTo = null) {
+    const calls = { join: [], leave: [], track: [], untrack: [], listeners: {}, errors: [], resolved: [] };
     return {
         calls,
         join: (name) => {
@@ -15,18 +15,26 @@ function ports() {
                 listen: (event, cb) => {
                     calls.listeners[event] = cb;
                 },
+                onError: (cb) => {
+                    calls.errors.push(cb);
+                },
             };
         },
         leave: (name) => calls.leave.push(name),
         track: (name) => calls.track.push(name),
         untrack: (name) => calls.untrack.push(name),
+        resolve: async (url) => {
+            calls.resolved.push(url);
+            return resolveTo;
+        },
     };
 }
 
-function registerElement(doc, channel) {
+function registerElement(doc, channel, channelsUrl = 'https://example.test/realtime/channels?room=online') {
     const element = doc.createElement('div');
     element.setAttribute('data-presence-register', '');
     element.setAttribute('data-channel', channel);
+    element.setAttribute('data-channels-url', channelsUrl);
     doc.appendRoot(element);
     return element;
 }
@@ -106,6 +114,41 @@ function rosterElement(doc, channel) {
     assert.deepEqual(echo.calls.join, ['online.0']);
     assert.deepEqual(echo.calls.leave, []);
     console.log('PASS same-name rotation is ignored');
+}
+
+// 6. A missed rotation while offline rejoins via discovery on auth error.
+{
+    const doc = new FakeDocument();
+    registerElement(doc, 'presence-online.0');
+    const echo = ports('online.1');
+
+    registerGlobalPresence(doc, echo);
+    assert.equal(echo.calls.errors.length, 1);
+
+    await echo.calls.errors[0]();
+    await Promise.resolve();
+
+    assert.deepEqual(echo.calls.resolved, ['https://example.test/realtime/channels?room=online']);
+    assert.deepEqual(echo.calls.leave, ['online.0']);
+    assert.deepEqual(echo.calls.join, ['online.0', 'online.1']);
+    console.log('PASS missed rotation rejoins via discovery');
+}
+
+// 7. Denied or unresolvable discovery leaves registration alone.
+{
+    for (const resolveTo of [null]) {
+        const doc = new FakeDocument();
+        registerElement(doc, 'presence-online.0');
+        const echo = ports(resolveTo);
+
+        registerGlobalPresence(doc, echo);
+        await echo.calls.errors[0]();
+        await Promise.resolve();
+
+        assert.deepEqual(echo.calls.join, ['online.0']);
+        assert.deepEqual(echo.calls.leave, []);
+    }
+    console.log('PASS denied discovery does not churn');
 }
 
 console.log('presence.test.mjs: all assertions passed');

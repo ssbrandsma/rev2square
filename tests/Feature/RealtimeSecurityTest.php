@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Enums\AccountStatus;
 use App\Enums\GlobalRole;
 use App\Enums\ProjectActivity;
 use App\Enums\ProjectPhase;
@@ -12,6 +13,7 @@ use App\Models\Project;
 use App\Models\ProjectMember;
 use App\Models\User;
 use App\Services\Admin\AdminUserService;
+use App\Services\Realtime\ChannelRotation;
 use App\Services\Realtime\RealtimeEpoch;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Event;
@@ -158,6 +160,68 @@ class RealtimeSecurityTest extends TestCase
         $this->assertStringContainsString("data-channel=\"presence-roster.project.{$project->id}.1.0\"", $html);
     }
 
+    public function test_stale_models_produce_distinct_successive_epochs(): void
+    {
+        // The lost-increment race: two requests load epoch 0 before
+        // either rotates. Locked bumps must still advance 0 → 1 → 2.
+        $project = Project::factory()->create();
+        $staleA = Project::find($project->id);
+        $staleB = Project::find($project->id);
+
+        $first = ChannelRotation::bumpProjectEpoch($staleA);
+        $second = ChannelRotation::bumpProjectEpoch($staleB);
+
+        $this->assertSame(['old' => 0, 'new' => 1], $first);
+        $this->assertSame(['old' => 1, 'new' => 2], $second);
+        $this->assertSame(2, $project->fresh()->channel_epoch);
+        $this->assertSame(1, $staleA->channel_epoch);
+        $this->assertSame(2, $staleB->channel_epoch);
+    }
+
+    public function test_successive_revocations_each_invalidate_the_previous_channel(): void
+    {
+        $project = Project::factory()->draft()->create();
+        $members = [];
+        foreach ([0, 1] as $i) {
+            $user = User::factory()->create();
+            $members[] = ProjectMember::factory()->create([
+                'project_id' => $project->id,
+                'user_id' => $user->id,
+                'role' => ProjectRole::Maintainer,
+                'status' => 'active',
+            ]);
+        }
+
+        Event::fake([ChatChannelRotated::class]);
+
+        $this->actingAs($project->owner)
+            ->patch(route('projects.team.members.revoke', [$project, $members[0]]))
+            ->assertRedirect();
+        $this->assertSame(1, $project->fresh()->channel_epoch);
+
+        $this->actingAs($project->owner)
+            ->patch(route('projects.team.members.revoke', [$project, $members[1]]))
+            ->assertRedirect();
+        $this->assertSame(2, $project->fresh()->channel_epoch);
+
+        $this->assertRotationAnnounced(
+            "chat.project.{$project->id}.0.0",
+            "chat.project.{$project->id}.1.0",
+            false,
+        );
+        $this->assertRotationAnnounced(
+            "chat.project.{$project->id}.1.0",
+            "chat.project.{$project->id}.2.0",
+            false,
+        );
+
+        // A subscriber that followed the first rotation onto epoch 1 is
+        // stranded again by the second: only epoch 2 authorizes.
+        $this->authRequest($project->owner, "private-chat.project.{$project->id}.0.0")->assertForbidden();
+        $this->authRequest($project->owner, "private-chat.project.{$project->id}.1.0")->assertForbidden();
+        $this->authRequest($project->owner, "private-chat.project.{$project->id}.2.0")->assertOk();
+    }
+
     public function test_ordinary_edits_do_not_rotate_channels(): void
     {
         $project = $this->publishedProject();
@@ -289,6 +353,60 @@ class RealtimeSecurityTest extends TestCase
         $this->authRequest($victim, "private-chat.project.{$project->id}.0.1")->assertForbidden();
     }
 
+    public function test_channel_discovery_returns_current_names(): void
+    {
+        $project = $this->publishedProject();
+        $member = User::factory()->create();
+
+        $this->actingAs($member)->getJson(route('realtime.channels', ['room' => 'lounge']))
+            ->assertOk()
+            ->assertExactJson(['chat' => 'chat.lounge.0', 'presence' => 'roster.lounge.0']);
+
+        $this->actingAs($member)->getJson(route('realtime.channels', ['room' => 'online']))
+            ->assertOk()
+            ->assertExactJson(['chat' => null, 'presence' => 'online.0']);
+
+        $this->actingAs($member)->getJson(route('realtime.channels', ['room' => 'project:'.$project->id]))
+            ->assertOk()
+            ->assertExactJson([
+                'chat' => "chat.project.{$project->id}.0.0",
+                'presence' => "roster.project.{$project->id}.0.0",
+            ]);
+
+        // Discovery tracks rotation: a client that missed it rejoins here.
+        ChannelRotation::bumpProjectEpoch($project);
+
+        $this->actingAs($member)->getJson(route('realtime.channels', ['room' => 'project:'.$project->id]))
+            ->assertOk()
+            ->assertExactJson([
+                'chat' => "chat.project.{$project->id}.1.0",
+                'presence' => "roster.project.{$project->id}.1.0",
+            ]);
+    }
+
+    public function test_channel_discovery_denies_lost_access_and_bad_rooms(): void
+    {
+        $draft = Project::factory()->draft()->create();
+        $outsider = User::factory()->create();
+        $suspended = User::factory()->create();
+        $suspended->forceFill(['account_status' => AccountStatus::Suspended])->save();
+
+        $this->actingAs($outsider)
+            ->getJson(route('realtime.channels', ['room' => 'project:'.$draft->id]))
+            ->assertForbidden();
+        $this->actingAs($suspended)
+            ->getJson(route('realtime.channels', ['room' => 'lounge']))
+            ->assertForbidden();
+        $this->get(route('realtime.channels', ['room' => 'lounge']))
+            ->assertRedirect(route('login'));
+        $this->actingAs($outsider)
+            ->getJson(route('realtime.channels', ['room' => 'nope']))
+            ->assertStatus(422);
+        $this->actingAs($outsider)
+            ->getJson(route('realtime.channels', ['room' => 'project:999999']))
+            ->assertNotFound();
+    }
+
     public function test_opt_out_preferences_emit_cross_tab_signal(): void
     {
         $user = User::factory()->create(['show_presence' => true]);
@@ -323,6 +441,12 @@ class RealtimeSecurityTest extends TestCase
         $this->assertStringContainsString('.channel.rotated', $roster);
         $this->assertStringContainsString('trackPresenceChannel', $roster);
 
+        // Follow-up fix 3: reconnect/auth failure re-resolves names.
+        $this->assertStringContainsString('resolveChannels', $room);
+        $this->assertStringContainsString('data-channels-url', $room);
+        $this->assertStringContainsString('resolveChannels', $roster);
+        $this->assertStringContainsString('data-channels-url', $roster);
+
         // P1-2: cross-tab logout and opt-out signals.
         $this->assertStringContainsString('rt:logout', $echo);
         $this->assertStringContainsString('rt:presence-optout', $echo);
@@ -339,5 +463,9 @@ class RealtimeSecurityTest extends TestCase
         // through author-name string interpolation.
         $this->assertStringContainsString('buildMessageNode', $room);
         $this->assertStringNotContainsString('aria-label="${', $room);
+
+        // Follow-up fix 2: ordered insertion plus a cursor-bounded read mark.
+        $this->assertStringContainsString('sortedIndex', $room);
+        $this->assertStringContainsString('sync.getCursor()', $room);
     }
 }

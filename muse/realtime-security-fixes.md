@@ -90,3 +90,25 @@ in `tests/js/chat-render.test.mjs`.
   the dev container before deploying.
 - Pint clean on all touched files (14 pre-existing findings elsewhere
   left alone); `artisan view:cache` compiles.
+
+## Follow-up review fixes
+
+1. Atomic rotation: epoch bumps are locked reads
+   (`bumpProjectEpoch`/`RealtimeEpoch::bump`), so stale caller models
+   still advance distinct successive epochs. Each access change and its
+   bump commit in one transaction (update, revoke, transfer, suspend);
+   announcements run after commit. Regression: the two-stale-models
+   repro plus successive revocations invalidating each prior channel.
+2. Honest catch-up cursor: the sync cursor advances only through
+   history pages and persists across runs; retries resume from it, not
+   from the rendered max. All rendering inserts by id order
+   (`sortedIndex`, shared by room and tests), and read marks follow the
+   cursor. Regression: the failed-page + live + retry repro, cap
+   continuation, reversed buffers, own-send-during-failure, overflow.
+3. Missed-rotation discovery: `GET /realtime/channels?room=…` returns
+   the current chat/presence names (403 = genuinely denied). Chat
+   rooms re-resolve on reconnect and auth failure, then resubscribe
+   and reconcile; rosters and sitewide registration do the same on
+   auth failure. Only genuine denial hides the composer. Regression:
+   endpoint auth matrix, discovery tracking rotation, resolver
+   outcome tests, and missed-rotation rejoin tests.
