@@ -243,12 +243,16 @@ Behavior contract (what each line is for):
 - `ProxyPreserveHost On` + `ProxyPass / http://127.0.0.1:8081/`:
   forward everything to the Compose nginx on loopback.
 - `ProxyPass /app/ ws://127.0.0.1:8081/app/ upgrade=websocket
-  timeout=86400`: realtime sockets (Reverb chat + presence). Longest
-  prefix wins over `/`, so only `/app/*` requests carrying WebSocket
-  Upgrade headers tunnel over ws (TLS still terminates here); plain
-  HTTP is unaffected. The 24h per-path timeout matches the nginx
-  `/app/` proxy: sockets are long-lived and Reverb pings every 60s,
-  so the global 120s `ProxyTimeout` must not apply here.
+  timeout=86400`, placed BEFORE `/`: realtime sockets (Reverb chat +
+  presence). Apache uses the FIRST matching rule in configuration
+  order (there is no longest-prefix rule), so this specific rule must
+  precede the catch-all or `/` swallows it and realtime breaks
+  (verified: wrong order yields HTTP 500 on the upgrade). Only
+  `/app/*` requests carrying WebSocket Upgrade headers tunnel over ws
+  (TLS still terminates here); plain HTTP is unaffected. The 24h
+  per-path timeout matches the nginx `/app/` proxy: sockets are
+  long-lived and Reverb pings every 60s, so the global 120s
+  `ProxyTimeout` must not apply here.
 - `RequestHeader unset X-Forwarded-*` / `Forwarded`: strip
   client-supplied forwarding headers FIRST, so a hostile client cannot
   inject a fake IP/host/proto that Laravel would believe.
@@ -267,7 +271,9 @@ proxying), and a `FilesMatch \.php$` host-FPM handler (harmless: app
 URLs never end in `.php`; literal `*.php` probes keep 404ing on the
 host). Our snippet adds no `RewriteRule` and no second `.well-known`
 exclusion, and the `/app/` prefix does not collide with any of the
-three, so it composes with all of them. Do NOT touch other vhosts.
+three, so it composes with all of them. Rule order matters on the
+host too: keep `/.well-known !` and our `/app/` rule above any
+catch-all `/`. Do NOT touch other vhosts.
 
 ```sh
 [root]# httpd -S 2>&1 | grep -A3 'port 443 namevhost <domain>'
@@ -284,16 +290,15 @@ Verify (as root, after `apachectl configtest && systemctl reload httpd`):
 [root]# curl -s -H 'Host: evil.example.com' https://<domain>/ -o /dev/null -w '%{http_code}\n'
 # expect: 400 (untrusted Host rejected; see section 19 if Apache itself
 # answers 404 first, which is equally safe)
-[root]# curl -s -o /dev/null -w '%{http_code}\n' --max-time 10 \
-  -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
-  -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
-  https://<domain>/app/<REVERB_APP_KEY>
-# expect: 101 (full wss chain Apache -> nginx -> Reverb accepted the
-# handshake; <REVERB_APP_KEY> is the public key from
-# /etc/rev2square/.env.virtualmin, NOT the secret). Any other code:
-# diagnose per the comment in the snippet (502/503 = reverb down,
-# 404 = old nginx image without /app/, anything else usually means
-# proxy_wstunnel is not loaded).
+[root]# cd /srv/rev2square && ./docker/ops/check-realtime.sh \
+  --url https://<domain>/app/<REVERB_APP_KEY> --origin https://<domain>
+# expect: PASS: protocol established (pusher:connection_established
+# seen). <REVERB_APP_KEY> is the PUBLIC key from
+# /etc/rev2square/.env.virtualmin, NOT the secret. A bare HTTP 101 is
+# NOT enough (rejected keys/origins also 101): only the established
+# frame counts as verified. On FAIL, read its DIAG line, then the
+# snippet comments (502/503 = reverb down, 404 = old nginx image,
+# 4009 = origin not pinned, 4001 = key mismatch, rule after / = 500).
 ```
 
 ## 8. Environment variables and secrets
@@ -315,7 +320,8 @@ stable id, e.g. `10001`), `REVERB_APP_KEY` (PUBLIC key, e.g.
 every browser as the `/app/<key>` URL path, by Pusher-protocol
 design), `REVERB_APP_SECRET` (`openssl rand -base64 32`, server-side
 only, never baked into assets), and `REVERB_ALLOWED_ORIGINS` (must
-match `APP_URL`, e.g. `https://<real domain>`).
+match the `APP_URL` host as a bare hostname, e.g. `<real domain>` —
+not a URL; full `https://...` entries are accepted and normalized).
 
 Fixed values (already in the template): `APP_ENV=production`,
 `APP_DEBUG=false`, `LOG_LEVEL=warning`, `SESSION_ENCRYPT=true`,
@@ -450,7 +456,8 @@ of killing a running analysis), app+nginx build (with the frontend
 key), migrations, a second drain check, graceful coordinator stop,
 recreate of app/nginx/queue/scheduler/reverb/analysis-coordinator,
 bounded readiness polling, loopback + public HTTP checks, and
-separate internal/public wss handshake checks. Runners are left alone
+separate internal/public realtime protocol checks (real browser
+Origin + required `pusher:connection_established`). Runners are left alone
 unless passed via `--runners` (comma-separated subset); `--force`
 skips the drain waits (kills a running analysis);
 `./docker/ops/update_prod.sh --help` documents exit codes.
@@ -550,27 +557,29 @@ If the loopback check passes but the public one fails, the fault is in
 the Apache/Virtualmin layer (section 17), not the containers.
 
 Realtime is verified SEPARATELY from HTTP (a green `/up` says nothing
-about sockets). Both must return 101 (`<KEY>` = `REVERB_APP_KEY`):
+about sockets), and at the PROTOCOL level (a bare 101 says nothing:
+rejected keys and origins also complete the handshake). Both probes
+must print `PASS: protocol established` (`<KEY>` = `REVERB_APP_KEY`):
 
 ```sh
-[root]# curl -s -o /dev/null -w '%{http_code}\n' --max-time 10 \
-  -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
-  -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
-  http://127.0.0.1:8081/app/<KEY>     # loopback: nginx -> reverb
-[root]# curl -s -o /dev/null -w '%{http_code}\n' --max-time 15 \
-  -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
-  -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
-  https://<domain>/app/<KEY>          # public: Apache -> nginx -> reverb
+[root]# cd /srv/rev2square
+[root]# ./docker/ops/check-realtime.sh \
+  --url http://127.0.0.1:8081/app/<KEY> --origin https://<domain>   # loopback: nginx -> reverb
+[root]# ./docker/ops/check-realtime.sh \
+  --url https://<domain>/app/<KEY> --origin https://<domain>        # public: Apache -> nginx -> reverb
 ```
 
-Loopback 101 + public non-101 means the containers are fine and the
-Apache `/app/` upgrade rule is missing or broken (section 7). Loopback
-non-101 with a healthy reverb container means the nginx `/app/` proxy
-is missing (stale nginx image — 404) or not reaching reverb (502).
-A baked-frontend-key/server-key mismatch still returns 101 and then
-drops every socket instantly with console error 4001 "Application
-does not exist"; fix by redeploying via `update_prod.sh` (rebuilds
-assets from the current key), never by restarting containers alone.
+Loopback PASS + public FAIL means the containers are fine and the
+Apache `/app/` upgrade rule is missing, misordered, or broken
+(section 7). Loopback FAIL with a healthy reverb container means the
+nginx `/app/` proxy is missing (stale nginx image) or not reaching
+reverb. The probe's DIAG line names protocol causes directly: 4001
+"Application does not exist" (baked frontend key differs from the
+server key — redeploy via `update_prod.sh`, which rebuilds, never
+restart alone) and 4009 "Origin not allowed" (the `Origin` hostname
+is not in `REVERB_ALLOWED_ORIGINS`). Only a public PASS counts the
+deployment as fully verified (the updater's final status line says
+so explicitly).
 
 ## 15. Log inspection
 
@@ -634,16 +643,20 @@ dump. Migrations are additive; production never runs `migrate:rollback`.
   by design and auto-restart. `Exited` for minutes = crash loop, read
   `logs queue`.
 - Chat/presence dead but HTTP fine: realtime fails independently of
-  `/up`. Run the two section 14 wss probes. Loopback 101 + public
-  non-101: Apache `/app/` rule missing/broken (`httpd -M` must list
-  `proxy_wstunnel`, httpd 2.4.47+, snippet re-pasted, `systemctl reload
-  httpd`). Loopback non-101 with healthy reverb: stale nginx image —
-  redeploy with `update_prod.sh`. Sockets connect then drop instantly
-  with console error 4001 "Application does not exist": the baked
-  frontend key differs from the server key — redeploy with
-  `update_prod.sh` (rebuilds), never restart alone. Both 101 and
-  sockets stay up but no live messages: the `queue` worker delivers
-  broadcasts (`BROADCAST_CONNECTION=reverb` + worker running?).
+  `/up`. Run the two section 14 `check-realtime.sh` probes (they send
+  the real browser Origin and require `pusher:connection_established`;
+  never trust a bare 101). Loopback PASS + public FAIL: Apache `/app/`
+  rule missing, misordered (must precede `/`), or broken (`httpd -M`
+  must list `proxy_wstunnel`, httpd 2.4.47+, snippet re-pasted,
+  `systemctl reload httpd`). Loopback FAIL with healthy reverb: stale
+  nginx image — redeploy with `update_prod.sh`. Probe reports 4001
+  "Application does not exist": the baked frontend key differs from
+  the server key — redeploy with `update_prod.sh` (rebuilds), never
+  restart alone. Probe reports 4009 "Origin not allowed": the
+  `Origin` hostname is not in `REVERB_ALLOWED_ORIGINS` (bare
+  hostname, must match the `APP_URL` host). Established on both but
+  no live messages: the `queue` worker delivers broadcasts
+  (`BROADCAST_CONNECTION=reverb` + worker running?).
 - Realtime takes ~10s to settle after every deploy (socket drop +
   client reconnect); presence may flap once on the Online page. Only
   investigate when sockets stay down past a minute.
