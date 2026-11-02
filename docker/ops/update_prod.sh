@@ -23,9 +23,11 @@
 # Realtime: the public-key build-arg bakes VITE_REVERB_APP_KEY into the
 # frontend assets (the key is public by Pusher-protocol design: every
 # browser receives it as the /app/<key> URL path). The app SECRET never
-# enters images. After the HTTP checks pass, the updater probes the wss
-# handshake separately through nginx (loopback) and through Apache
-# (public URL) so a failure pinpoints its layer.
+# enters images. After the HTTP checks pass, the updater probes the realtime
+# PROTOCOL separately through nginx (loopback) and through Apache
+# (public URL) via check-realtime.sh: each sends the real browser Origin
+# and requires pusher:connection_established, so a failure pinpoints
+# its layer AND its cause (a bare 101 would prove nothing).
 #
 # Usage (on the server, as root, from /srv/rev2square):
 #   git fetch origin && git checkout <new-release-sha>
@@ -44,9 +46,11 @@
 # as status.sh / wait-for-healthy.sh / backup.sh).
 #
 # Exit 0: stack updated, HTTP healthy. A WARN about the PUBLIC realtime
-# check still exits 0 (Apache WSS is an owner step that may follow the
-# container deploy; see docs/DEPLOYMENT_VIRTUALMIN_ARM64.md section 7).
-# Exit 1: deploy failed or the INTERNAL realtime path is broken.
+# probe still exits 0 (Apache WSS is an owner step that may follow the
+# container deploy; see docs/DEPLOYMENT_VIRTUALMIN_ARM64.md section 7),
+# but the final status line then reads NOT fully verified: only a public
+# PASS yields FULLY VERIFIED. Exit 1: deploy failed or the INTERNAL
+# realtime path is broken.
 # Exit 2: usage/env/preflight errors, or the drain bound expired (nothing
 # recreated; re-run later, or --force to override).
 
@@ -88,6 +92,7 @@ fi
 COMPOSE_FILE="$ROOT/compose.virtualmin.yaml"
 BACKUP_SH="$ROOT/docker/backup/backup.sh"
 WAIT_SH="$ROOT/docker/ops/wait-for-healthy.sh"
+CHECK_SH="$ROOT/docker/ops/check-realtime.sh"
 
 step() { echo "== $1 =="; }
 pass() { echo "PASS: $1"; }
@@ -103,7 +108,7 @@ if [ ! -f "$COMPOSE_FILE" ]; then
     echo "FAIL: compose file not found: $COMPOSE_FILE" >&2
     exit 2
 fi
-for HELPER in "$BACKUP_SH" "$WAIT_SH"; do
+for HELPER in "$BACKUP_SH" "$WAIT_SH" "$CHECK_SH"; do
     if [ ! -x "$HELPER" ]; then
         echo "FAIL: helper missing or not executable: $HELPER" >&2
         exit 2
@@ -300,32 +305,31 @@ else
     exit 1
 fi
 
-step "7/8 realtime checks (wss handshake; non-fatal for the public URL)"
-WS_CODE_LOOPBACK=$(curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
-    -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
-    -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
-    "http://127.0.0.1:$APP_LOOPBACK_PORT/app/$REVERB_APP_KEY" 2>/dev/null || true)
-if [ "$WS_CODE_LOOPBACK" = "101" ]; then
-    pass "internal wss handshake via nginx returned 101"
+step "7/8 realtime checks (protocol-level; public non-fatal)"
+# Both probes send the real browser Origin ($APP_URL) and require
+# pusher:connection_established -- a bare 101 proves nothing (rejected
+# keys/origins also complete the handshake).
+if "$CHECK_SH" --url "http://127.0.0.1:$APP_LOOPBACK_PORT/app/$REVERB_APP_KEY" --origin "$APP_URL"; then
+    pass "internal realtime fully verified (handshake + protocol via nginx)"
 else
-    echo "FAIL: internal wss handshake via nginx returned '${WS_CODE_LOOPBACK:-000}':" >&2
-    echo "reverb is healthy but unreachable through nginx /app/ (stale nginx" >&2
-    echo "image?). HTTP works; realtime does not." >&2
+    echo "FAIL: internal realtime path is broken (see probe output above):" >&2
+    echo "reverb is healthy but the nginx /app/ path does not deliver a" >&2
+    echo "working protocol session (stale nginx image? key mismatch?)." >&2
+    echo "HTTP works; realtime does not." >&2
     exit 1
 fi
-WS_CODE_PUBLIC=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 \
-    -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
-    -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
-    "$APP_URL/app/$REVERB_APP_KEY" 2>/dev/null || true)
-if [ "$WS_CODE_PUBLIC" = "101" ]; then
-    pass "public wss handshake via Apache returned 101"
+REALTIME_PUBLIC_OK=0
+if "$CHECK_SH" --url "$APP_URL/app/$REVERB_APP_KEY" --origin "$APP_URL"; then
+    pass "public realtime fully verified (handshake + protocol via Apache)"
+    REALTIME_PUBLIC_OK=1
 else
-    warn "public wss handshake returned '${WS_CODE_PUBLIC:-000}' (internal path OK)."
+    warn "public realtime NOT verified (internal path fully OK)."
     echo "  If Apache has no /app/ upgrade rule yet, add it per docs section 7" >&2
-    echo "  (proxy_wstunnel + ProxyPass upgrade=websocket), reload httpd, then" >&2
-    echo "  re-run just this probe (the curl line in" >&2
-    echo "  docker/virtualmin/apache-vhost-snippet.conf). If Apache already" >&2
-    echo "  has the rule, realtime REGRESSED: investigate before announcing." >&2
+    echo "  (proxy_wstunnel + ProxyPass upgrade=websocket BEFORE ProxyPass /)," >&2
+    echo "  reload httpd, then re-run just this probe:" >&2
+    echo "    ./docker/ops/check-realtime.sh --url \"\$APP_URL/app/\$REVERB_APP_KEY\" --origin \"\$APP_URL\"" >&2
+    echo "  (with the env file sourced for \$APP_URL/\$REVERB_APP_KEY). If Apache" >&2
+    echo "  already has the rule, realtime REGRESSED: investigate before announcing." >&2
 fi
 
 # --- 8. optional runners ---------------------------------------------------
@@ -360,6 +364,12 @@ fi
 
 # --- done ------------------------------------------------------------------
 echo "== update complete ($SHA) =="
+if [ "${REALTIME_PUBLIC_OK:-0}" -eq 1 ]; then
+    echo "Realtime: FULLY VERIFIED (internal + public protocol checks passed)"
+else
+    echo "Realtime: NOT fully verified (public probe failed): finish the Apache"
+    echo "/app/ step, then re-run check-realtime.sh before announcing realtime."
+fi
 # Audit trail of what is now live (best-effort; :latest tags move).
 docker images --digests rev2square/app 2>/dev/null | head -4 || true
 docker images --digests rev2square/nginx 2>/dev/null | head -4 || true
