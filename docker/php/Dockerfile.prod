@@ -46,6 +46,14 @@ COPY resources resources
 COPY vite.config.js ./
 COPY public public
 
+# Public Reverb app key baked into the frontend (ws URL path segment; sent
+# to every browser by design, like MAIL_FROM_ADDRESS). Provided by the
+# deploy flow as --build-arg VITE_REVERB_APP_KEY (derived from the
+# server env file's REVERB_APP_KEY). NEVER pass the app secret here:
+# anything baked into assets ships to browsers. Local `npm run build`
+# keeps working: Vite reads the key from .env instead.
+ARG VITE_REVERB_APP_KEY=""
+
 RUN npm run build
 
 # ------------------------------------------------------------------ Runtime
@@ -53,9 +61,10 @@ FROM php:8.4-fpm
 
 # Same extension set as docker/php/Dockerfile (dev): pdo_mysql (MariaDB),
 # mbstring, zip, exif, pcntl (queue/scheduler signals), bcmath, opcache,
-# curl, dom.
+# curl, dom. The curl binary serves the reverb container healthcheck (the
+# base image ships no HTTP client); the PHP curl extension is separate.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        git unzip libzip-dev libonig-dev libxml2-dev libcurl4-openssl-dev \
+        curl git unzip libzip-dev libonig-dev libxml2-dev libcurl4-openssl-dev \
     && docker-php-ext-install pdo_mysql mbstring zip exif pcntl bcmath opcache curl dom \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 

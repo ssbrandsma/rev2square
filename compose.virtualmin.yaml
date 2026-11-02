@@ -203,6 +203,58 @@ services:
       retries: 3
       start_period: 60s
 
+  # Reverb WebSocket server: chat + presence over the Pusher protocol.
+  # Internal only (no published ports): browsers reach it through Apache
+  # (wss) -> nginx /app/ proxy (see docker/nginx/default.prod.conf).
+  # Shares the app image; stateless, so no volumes (no uploads, no spool,
+  # no storage mount: nothing it does touches the filesystem beyond the
+  # container layer). Full env_file like app/queue/scheduler: reverb:start
+  # boots the framework and needs REVERB_APP_* plus the runtime env, and
+  # unlike analysis-coordinator it never shells out to untrusted binaries,
+  # so no allowlist. Exactly one instance; never scale this service
+  # (Reverb horizontal scaling needs Redis; scaling.enabled stays false).
+  reverb:
+    platform: ${DOCKER_PLATFORM:-linux/arm64}
+    image: rev2square/app:${APP_VERSION:-latest}
+    pull_policy: never
+    # No --host/--port/--hostname flags: the bind address and port come
+    # from REVERB_SERVER_HOST (default 0.0.0.0) / REVERB_SERVER_PORT
+    # (default 8080) through the config cache built at container start,
+    # so the env file stays the single source of truth. Keep 8080 in
+    # sync with the nginx /app/ proxy.
+    command: ["php", "artisan", "reverb:start"]
+    env_file:
+      - path: /etc/rev2square/.env.virtualmin
+        required: true
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    user: "www-data"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    deploy:
+      replicas: 1
+    healthcheck:
+      # Unauthenticated Pusher-API probe: a booted server rejects it with
+      # 401 ("Authentication signature invalid") in milliseconds. 401 =
+      # healthy (auth layer reached); refused/timeout = dead. No secrets
+      # involved. Ports/ids come from the container runtime env, so a
+      # REVERB_SERVER_PORT override needs no healthcheck edit (but does
+      # need the matching nginx /app/ proxy edit).
+      test: ["CMD-SHELL", "test \"$$(curl -s -o /dev/null -m 5 -w '%{http_code}' http://127.0.0.1:$${REVERB_SERVER_PORT:-8080}/apps/$${REVERB_APP_ID}/channels)\" = 401"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
   # Restricted analysis coordinator: serves ONLY the 'analysis' queue
   # on the 'analysis-database' connection. Shares the app image (no
   # secrets baked in) but takes NO env_file: its environment is an

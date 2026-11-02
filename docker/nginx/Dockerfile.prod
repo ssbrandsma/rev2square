@@ -16,6 +16,10 @@ COPY resources resources
 COPY vite.config.js ./
 COPY public public
 
+# Public Reverb app key baked into the served frontend (see
+# docker/php/Dockerfile.prod: same ARG, same value, never the secret).
+ARG VITE_REVERB_APP_KEY=""
+
 RUN npm run build
 
 FROM nginx:1.28
