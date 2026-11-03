@@ -2,12 +2,12 @@
 # Rev2Square production updater (Virtualmin variant).
 #
 # Reviewed replacement for the owner-managed untracked update_prod.sh.
-# Deploys the current checkout: backup -> drain analyses -> build ->
-# migrate -> recreate -> readiness -> HTTP checks -> realtime checks.
-# Prints no credentials.
+# Deploys the latest reviewed origin/main: sync -> backup -> drain
+# analyses -> build -> migrate -> recreate -> readiness -> HTTP checks
+# -> realtime checks. Prints no credentials.
 #
 # What it reconciles: app, nginx, queue, scheduler, reverb, and
-# analysis-coordinator are rebuilt/recreated from the current checkout.
+# analysis-coordinator are rebuilt/recreated from the synced checkout.
 # Explicitly untouched: db (data), and the analysis runners (rebuild
 # only via --runners; see below).
 #
@@ -29,10 +29,18 @@
 # and requires pusher:connection_established, so a failure pinpoints
 # its layer AND its cause (a bare 101 would prove nothing).
 #
+# The updater fetches origin and fast-forwards the checkout ITSELF via
+# sync-checkout.sh: a normal run deploys the tip of origin/main and
+# finishes on the local main branch tracking origin/main, so no manual
+# git checkout is needed. One deployment runs at a time (lock directory
+# $UPDATE_LOCK_DIR, default /tmp/rev2square-update.lock). The sync is
+# non-destructive: tracked local modifications are refused (never merged
+# over, never discarded), a detached checkout is adopted only when it is
+# an ancestor of origin/main, and history is never rewritten.
+#
 # Usage (on the server, as root, from /srv/rev2square):
-#   git fetch origin && git checkout <new-release-sha>
 #   ./docker/ops/update_prod.sh [--env-file FILE] [--project NAME]
-#       [--runners svc,...] [--drain-timeout SEC] [--force]
+#       [--runners svc,...] [--drain-timeout SEC] [--target REV] [--force]
 #
 # --runners rebuilds and recreates named analysis runners AFTER the main
 # stack verifies (comma-separated subset of: objdump-runner,
@@ -41,6 +49,9 @@
 # slow, especially ghidra).
 # --drain-timeout bounds each analysis-drain wait (default 900s: covers
 # one max-length 800s job plus margin).
+# --target pins one reviewed release instead of the origin/main tip
+# (rollback): the revision must already be merged in origin/main, and
+# the checkout is left detached at it until the next normal run.
 # --force skips both drain waits AND the graceful coordinator stop.
 # --env-file/--project override the variant defaults (same convention
 # as status.sh / wait-for-healthy.sh / backup.sh).
@@ -51,8 +62,8 @@
 # but the final status line then reads NOT fully verified: only a public
 # PASS yields FULLY VERIFIED. Exit 1: deploy failed or the INTERNAL
 # realtime path is broken.
-# Exit 2: usage/env/preflight errors, or the drain bound expired (nothing
-# recreated; re-run later, or --force to override).
+# Exit 2: usage/env/preflight/sync errors, or the drain bound expired
+# (nothing recreated; re-run later, or --force to override the drain).
 
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 umask 077
@@ -63,6 +74,7 @@ ENV_SET=0
 PROJECT=""
 RUNNERS=""
 DRAIN_TIMEOUT="900"
+TARGET=""
 FORCE=0
 
 while [ $# -gt 0 ]; do
@@ -71,10 +83,11 @@ while [ $# -gt 0 ]; do
         --project) PROJECT="$2"; shift 2 ;;
         --runners) RUNNERS="$2"; shift 2 ;;
         --drain-timeout) DRAIN_TIMEOUT="$2"; shift 2 ;;
+        --target) TARGET="$2"; shift 2 ;;
         --force) FORCE=1; shift ;;
         -h|--help)
             sed -n '2,/^$/p' "$0"
-            echo "Usage: $0 [--env-file FILE] [--project NAME] [--runners svc,...] [--drain-timeout SEC] [--force]"
+            echo "Usage: $0 [--env-file FILE] [--project NAME] [--runners svc,...] [--drain-timeout SEC] [--target REV] [--force]"
             exit 0
             ;;
         *) echo "Unknown argument: $1" >&2; exit 2 ;;
@@ -93,6 +106,19 @@ COMPOSE_FILE="$ROOT/compose.virtualmin.yaml"
 BACKUP_SH="$ROOT/docker/backup/backup.sh"
 WAIT_SH="$ROOT/docker/ops/wait-for-healthy.sh"
 CHECK_SH="$ROOT/docker/ops/check-realtime.sh"
+SYNC_SH="$ROOT/docker/ops/sync-checkout.sh"
+LOCK_SH="$ROOT/docker/ops/with-update-lock.sh"
+
+# Serialize deployments: re-exec under the lock exactly once (the
+# wrapper sets UPDATE_LOCK_HELD for the child). Help/usage errors exit
+# above, before any locking.
+if [ -z "${UPDATE_LOCK_HELD:-}" ]; then
+    if [ ! -x "$LOCK_SH" ]; then
+        echo "FAIL: helper missing or not executable: $LOCK_SH" >&2
+        exit 2
+    fi
+    exec "$LOCK_SH" -- "$0" "$@"
+fi
 
 step() { echo "== $1 =="; }
 pass() { echo "PASS: $1"; }
@@ -108,12 +134,10 @@ if [ ! -f "$COMPOSE_FILE" ]; then
     echo "FAIL: compose file not found: $COMPOSE_FILE" >&2
     exit 2
 fi
-for HELPER in "$BACKUP_SH" "$WAIT_SH" "$CHECK_SH"; do
-    if [ ! -x "$HELPER" ]; then
-        echo "FAIL: helper missing or not executable: $HELPER" >&2
-        exit 2
-    fi
-done
+if [ ! -x "$SYNC_SH" ]; then
+    echo "FAIL: helper missing or not executable: $SYNC_SH" >&2
+    exit 2
+fi
 
 # shellcheck disable=SC1090
 set -a; . "$ENV_FILE"; set +a
@@ -135,17 +159,42 @@ esac
 : "${APP_URL:?APP_URL missing from $ENV_FILE}"
 APP_LOOPBACK_PORT="${APP_LOOPBACK_PORT:-8081}"
 
-SHA="(unknown)"
-if git -C "$ROOT" rev-parse --short HEAD >/dev/null 2>&1; then
-    SHA=$(git -C "$ROOT" rev-parse --short HEAD)
-fi
-echo "== Rev2Square update ($SHA, $(date -u +%Y-%m-%dT%H:%M:%SZ)) =="
-
 # shellcheck disable=SC2086
 if ! $COMPOSE ps >/dev/null 2>&1; then
     echo "FAIL: 'compose ps' failed (daemon down or bad compose config)" >&2
     exit 2
 fi
+
+# --- 0. synchronize checkout to the reviewed target ----------------------
+step "0/8 synchronize checkout"
+# Safety of syncing mid-run: the shell holds THIS script's old inode
+# open, while git replaces worktree files with fresh inodes, so old and
+# new updater code cannot mix in this process; every helper below is
+# resolved fresh from the synced tree (the NEW code runs the deploy).
+if [ -n "$TARGET" ]; then
+    SYNC_OUT=$("$SYNC_SH" --root "$ROOT" --target "$TARGET") || exit 2
+else
+    SYNC_OUT=$("$SYNC_SH" --root "$ROOT") || exit 2
+fi
+START_SHA=$(echo "$SYNC_OUT" | grep '^START ' | cut -d' ' -f2)
+DEPLOYED_SHA=$(echo "$SYNC_OUT" | grep '^DEPLOYED ' | cut -d' ' -f2)
+if [ -z "$START_SHA" ] || [ -z "$DEPLOYED_SHA" ]; then
+    echo "FAIL: sync helper returned no SHAs; refusing to deploy blind" >&2
+    exit 2
+fi
+echo "start checkout:    $START_SHA"
+echo "deployed checkout: $DEPLOYED_SHA"
+SHA=$(echo "$DEPLOYED_SHA" | cut -c1-12)
+echo "== Rev2Square update ($SHA, $(date -u +%Y-%m-%dT%H:%M:%SZ)) =="
+
+# The remaining helpers are validated AFTER the sync, so exactly the
+# code that will run (post-sync versions) is checked.
+for HELPER in "$BACKUP_SH" "$WAIT_SH" "$CHECK_SH"; do
+    if [ ! -x "$HELPER" ]; then
+        echo "FAIL: helper missing or not executable after sync: $HELPER" >&2
+        exit 2
+    fi
+done
 
 service_running() {
     # service_running <service>: true when a container is in State=running.

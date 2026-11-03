@@ -15,6 +15,12 @@
 # Re-sorting them would proxy sockets as plain HTTP and silently
 # break realtime.
 #
+# Section 3 pins the live probe transport: the real curl invocation
+# must force --http1.1, because through Apache curl's HTTP/2
+# negotiation falsely reported HTTP 500 while HTTP/1.1 establishes
+# the protocol (verified in production). A stubbed curl proves the
+# verdict path works end to end with a healthy transcript.
+#
 # Requires: POSIX sh + grep only. No docker, no network, no stack.
 # Safe: temp files only; the working tree is untouched.
 #
@@ -103,6 +109,45 @@ if grep '^ProxyPass /app/' "$SNIPPET" | grep -q 'upgrade=websocket'; then
     pass "ProxyPass /app/ carries upgrade=websocket"
 else
     fail "ProxyPass /app/ must carry upgrade=websocket"
+fi
+
+echo "--- live probe transport ---"
+
+CURL_COUNT=$(grep -c '^curl ' "$PROBE")
+if [ "$CURL_COUNT" -eq 1 ]; then
+    pass "exactly one live curl invocation"
+else
+    fail "expected exactly one live curl invocation, found $CURL_COUNT"
+fi
+
+if grep '^curl ' "$PROBE" | grep -q -- '--http1.1'; then
+    pass "live curl forces --http1.1"
+else
+    fail "live curl must force --http1.1 (HTTP/2 negotiation falsely reported 500)"
+fi
+
+# Functional check: run the real live path with a stubbed curl that
+# records argv and replays a healthy transcript (no network involved).
+mkdir -p "$TMPD/bin"
+cat >"$TMPD/bin/curl" <<'STUB_EOF'
+#!/bin/sh
+echo "$@" >"${CURL_ARGV_FILE:?}"
+printf 'HTTP/1.1 101 Switching Protocols\r\n\r\n\x81{"event":"pusher:connection_established","data":"{}"}'
+exit 28
+STUB_EOF
+chmod +x "$TMPD/bin/curl"
+export CURL_ARGV_FILE="$TMPD/curl-argv.txt"
+OUT=$(PATH="$TMPD/bin:$PATH" "$PROBE" --url "http://127.0.0.1:9/app/key" --origin "http://example.invalid" --timeout 2 2>&1)
+CODE=$?
+if [ "$CODE" -eq 0 ]; then
+    pass "live path passes with stubbed healthy transport"
+else
+    fail "live path with stubbed transport: exit $CODE (output: $OUT)"
+fi
+if [ -f "$CURL_ARGV_FILE" ] && grep -q -- '--http1.1' "$CURL_ARGV_FILE"; then
+    pass "stubbed run proves argv carries --http1.1"
+else
+    fail "live probe argv must carry --http1.1 (argv: $(cat "$CURL_ARGV_FILE" 2>/dev/null))"
 fi
 
 if [ "$FAIL" -eq 0 ]; then

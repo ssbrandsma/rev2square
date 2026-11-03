@@ -359,7 +359,10 @@ coordinator has no `env_file` entry and receives only its interpolated
 # fails, fix network/GitHub access before continuing)
 [root]# git clone https://github.com/ssbrandsma/rev2square.git /srv/rev2square
 [root]# cd /srv/rev2square
-[root]# git checkout <release-sha-from-release-notes>   # never an unreviewed main
+[root]# git rev-parse HEAD   # must equal the reviewed release SHA from the release notes
+# (if the notes pin an OLDER release, check that out instead:
+#  git checkout <release-sha-from-release-notes> — detached; the first
+#  update_prod.sh run adopts it and returns the checkout to main)
 [root]# git rev-parse --short HEAD   # record in the release notes
 
 [root]# cp .env.virtualmin.example /etc/rev2square/.env.virtualmin
@@ -439,8 +442,6 @@ cannot fill the disk.
 
 ```sh
 [root]# cd /srv/rev2square
-[root]# git fetch origin
-[root]# git checkout <new-release-sha>   # never an unreviewed main
 # First upgrade carrying app-storage: run the section 18 storage
 # migration runbook BEFORE the updater below (inventory + back up
 # container-layer files first; a new empty volume would hide them).
@@ -450,17 +451,25 @@ cannot fill the disk.
 
 `update_prod.sh` (tracked in the repo; replaces the old untracked
 owner script — delete the old `/srv/rev2square/update_prod.sh` copy
-and use this path so `git pull` keeps it current) runs, in order:
-database safety backup, bounded analysis drain (aborts safely instead
-of killing a running analysis), app+nginx build (with the frontend
-key), migrations, a second drain check, graceful coordinator stop,
-recreate of app/nginx/queue/scheduler/reverb/analysis-coordinator,
-bounded readiness polling, loopback + public HTTP checks, and
-separate internal/public realtime protocol checks (real browser
-Origin + required `pusher:connection_established`). Runners are left alone
-unless passed via `--runners` (comma-separated subset); `--force`
-skips the drain waits (kills a running analysis);
-`./docker/ops/update_prod.sh --help` documents exit codes.
+and use this path) fetches origin and fast-forwards the checkout
+itself, then runs, in order: checkout sync to the origin/main tip
+(refuses tracked local modifications instead of touching them;
+finishes on the local main branch tracking origin/main; records the
+start and deployed SHAs), database safety backup, bounded analysis
+drain (aborts safely instead of killing a running analysis),
+app+nginx build (with the frontend key), migrations, a second drain
+check, graceful coordinator stop, recreate of
+app/nginx/queue/scheduler/reverb/analysis-coordinator, bounded
+readiness polling, loopback + public HTTP checks, and separate
+internal/public realtime protocol checks (real browser
+Origin + required `pusher:connection_established`). One deployment
+runs at a time (lock directory; a second concurrent run is refused).
+Runners are left alone unless passed via `--runners`
+(comma-separated subset); `--force` skips the drain waits (kills a
+running analysis); `--target <rev>` redeploys one older reviewed
+release (rollback, section 16);
+`./docker/ops/update_prod.sh --help` documents exit codes. No manual
+`git fetch`/`git checkout` is needed or wanted before a normal run.
 
 Volumes survive rebuilds (database + app-storage uploads; TLS lives in
 Apache/Virtualmin). Brief 502s while `app` is recreated self-heal
@@ -596,14 +605,21 @@ location and are the right place to diagnose TLS/ACME/proxy errors
 ## 16. Rollback
 
 Application rollback = redeploy the previous release (images rebuild
-from git, always reproducible):
+from git, always reproducible). Pass the previous release to the
+updater — no manual checkout; the same backup/drain/build/migrate/
+verify flow runs, and the checkout is left detached at the pinned
+release (local main untouched) until the next normal run returns it
+to the origin/main tip:
 
 ```sh
 [root]# cd /srv/rev2square
-[root]# git checkout <previous-release-sha>
-[root]# ./docker/ops/update_prod.sh   # same backup/drain/build/migrate/verify flow
+[root]# ./docker/ops/update_prod.sh --target <previous-release-sha>
 [root]# ./docker/ops/status.sh --variant virtualmin
 ```
+
+`--target` only accepts revisions already merged in origin/main, so a
+rollback can never deploy unreviewed code. A normal (flagless) run
+afterwards re-syncs to the tip and finishes on main.
 
 Full retreat (pre-cutover): plain `down` preserves the database volume
 for later inspection — prefer it over destroying anything:

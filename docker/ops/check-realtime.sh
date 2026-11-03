@@ -114,8 +114,11 @@ trap 'rm -f "$TMP"' EXIT INT TERM
 # Server-to-client frames are unmasked: the JSON stays greppable inside
 # the binary framing. curl exit 28 (timeout) with an established marker
 # is the normal healthy outcome: the socket stays open.
+# --http1.1 pins the transport: through Apache, curl's HTTP/2
+# negotiation falsely reported HTTP 500 while HTTP/1.1 establishes
+# the Pusher protocol fine (verified in production).
 CURL_EXIT=0
-curl -sS -N -m "$TIMEOUT" -D - \
+curl --http1.1 -sS -N -m "$TIMEOUT" -D - \
     -H 'Connection: Upgrade' -H 'Upgrade: websocket' \
     -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' \
     -H "Origin: $ORIGIN" \
