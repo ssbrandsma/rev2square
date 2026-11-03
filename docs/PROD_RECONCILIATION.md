@@ -23,6 +23,7 @@ does not match: do not improvise past a mismatch.
 [root]# git rev-parse HEAD; git symbolic-ref -q HEAD || echo DETACHED
 [root]# git status --short --untracked-files=no
 [root]# git diff --stat --untracked-files=no
+[root]# git diff --numstat -- docker/ops/check-realtime.sh
 [root]# git diff
 ```
 
@@ -30,6 +31,12 @@ Expected: the status shows EXACTLY one entry:
 
 ```text
  M docker/ops/check-realtime.sh
+```
+
+the numstat shows EXACTLY one added and one deleted line:
+
+```text
+1       1       docker/ops/check-realtime.sh
 ```
 
 and the diff shows EXACTLY the one-line hotfix:
@@ -52,12 +59,21 @@ them, and you must NOT delete them.
 [root]# git fetch origin
 [root]# TARGET=$(git rev-parse origin/main); echo "$TARGET"
 [root]# git show "$TARGET:docker/ops/check-realtime.sh" | grep -n '^curl '
+[root]# git diff HEAD "$TARGET" -- docker/ops/check-realtime.sh | grep -F '+curl --http1.1'
 ```
 
-Expected: the `$TARGET` value equals the pushed commit SHA from the
-release handoff, and the `grep` prints the live probe line carrying
-`--http1.1`. This proves the exact local fix exists in the commit you
-are about to move to — the local change is redundant, not lost.
+Expected: the `$TARGET` value equals the reviewed release SHA from the
+release handoff — character for character. If it differs, `origin/main`
+has advanced past the reviewed release: STOP for review instead of
+silently deploying additional changes. Do not proceed until a new
+review names the new tip.
+
+The `git show` must print the live probe line carrying `--http1.1`,
+and the release diff (base `HEAD` to `$TARGET`) must contain the
+identical `+curl --http1.1` line. Together with step 1, this proves
+the local change is EXACTLY the known hotfix and is present
+identically in the reviewed release — the local change is redundant,
+not lost.
 
 ## 3. Preserve a patch backup
 

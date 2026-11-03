@@ -81,15 +81,19 @@ if [ ! -f "$COMPOSE_FILE" ]; then
     exit 2
 fi
 
-if [ -n "$PROJECT" ]; then
-    COMPOSE="docker compose -f $COMPOSE_FILE --env-file $ENV_FILE -p $PROJECT"
-else
-    COMPOSE="docker compose -f $COMPOSE_FILE --env-file $ENV_FILE"
-fi
+# compose runs docker compose with the variant's fixed flags. A function,
+# not a string: quoted expansions keep paths containing spaces as
+# single arguments. No eval.
+compose() {
+    if [ -n "$PROJECT" ]; then
+        docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" -p "$PROJECT" "$@"
+    else
+        docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" "$@"
+    fi
+}
 
 # Preflight: a broken compose setup must fail now, not burn the timeout.
-# shellcheck disable=SC2086
-if ! PS_OUT=$($COMPOSE ps --format '{{.Service}} {{.State}} {{.Health}}' 2>&1); then
+if ! PS_OUT=$(compose ps --format '{{.Service}} {{.State}} {{.Health}}' 2>&1); then
     echo "FAIL: 'compose ps' failed (daemon down or bad compose config):" >&2
     echo "$PS_OUT" | head -10 >&2
     exit 2
@@ -103,14 +107,12 @@ service_field() {
 report_logs() {
     # report_logs <service>: bounded logs for one failed service.
     echo "--- logs: $1 (last 50 lines) ---"
-    # shellcheck disable=SC2086
-    $COMPOSE logs --tail=50 "$1" 2>&1 | tail -50
+    compose logs --tail=50 "$1" 2>&1 | tail -50
 }
 
 deadline=$(( $(date +%s) + TIMEOUT ))
 while :; do
-    # shellcheck disable=SC2086
-    PS_OUT=$($COMPOSE ps --format '{{.Service}} {{.State}} {{.Health}}' 2>&1) || PS_OUT=""
+    PS_OUT=$(compose ps --format '{{.Service}} {{.State}} {{.Health}}' 2>&1) || PS_OUT=""
     READY=0
     TOTAL=0
     UNREADY=""

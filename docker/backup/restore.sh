@@ -71,11 +71,16 @@ set -a; . "$ENV_FILE"; set +a
 : "${DB_DATABASE:?DB_DATABASE missing from $ENV_FILE}"
 : "${DB_ROOT_PASSWORD:?DB_ROOT_PASSWORD missing from $ENV_FILE}"
 
-if [ -n "$PROJECT" ]; then
-    COMPOSE="docker compose -f $COMPOSE_FILE --env-file $ENV_FILE -p $PROJECT"
-else
-    COMPOSE="docker compose -f $COMPOSE_FILE --env-file $ENV_FILE"
-fi
+# compose runs docker compose with the variant's fixed flags. A function,
+# not a string: quoted expansions keep paths containing spaces as
+# single arguments. No eval.
+compose() {
+    if [ -n "$PROJECT" ]; then
+        docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" -p "$PROJECT" "$@"
+    else
+        docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" "$@"
+    fi
+}
 
 gzip -t "$FILE" || { echo "FAIL: $FILE is not a valid gzip file" >&2; exit 2; }
 
@@ -99,20 +104,16 @@ if [ "$SAFETY_DUMP" -eq 1 ]; then
 fi
 
 echo "Restoring $FILE into '$DB_DATABASE' ..."
-# shellcheck disable=SC2086
-gunzip -c "$FILE" | $COMPOSE exec -T -e MYSQL_PWD="$DB_ROOT_PASSWORD" db mariadb -uroot
+gunzip -c "$FILE" | compose exec -T -e MYSQL_PWD="$DB_ROOT_PASSWORD" db mariadb -uroot
 
 echo "Aligning schema (migrations) ..."
-# shellcheck disable=SC2086
-$COMPOSE exec -T app php artisan migrate --force
+compose exec -T app php artisan migrate --force
 
 echo "Signalling workers to restart gracefully ..."
-# shellcheck disable=SC2086
-$COMPOSE exec -T app php artisan queue:restart || true
+compose exec -T app php artisan queue:restart || true
 
 echo "Verifying table count ..."
-# shellcheck disable=SC2086
-$COMPOSE exec -T -e MYSQL_PWD="$DB_ROOT_PASSWORD" db \
+compose exec -T -e MYSQL_PWD="$DB_ROOT_PASSWORD" db \
     mariadb -uroot -N -e "SELECT CONCAT(COUNT(*), ' tables in $DB_DATABASE') FROM information_schema.tables WHERE table_schema='$DB_DATABASE';"
 
 echo "Restore OK."

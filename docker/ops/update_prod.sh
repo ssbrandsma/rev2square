@@ -69,6 +69,33 @@ ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 umask 077
 set -eu
 
+usage() {
+    sed -n '2,/^$/p' "$0"
+    echo "Usage: $0 [--env-file FILE] [--project NAME] [--runners svc,...] [--drain-timeout SEC] [--target REV] [--force]"
+}
+
+# --help works even while a deployment holds the lock: prescan the
+# original argument list WITHOUT consuming it.
+for _ARG in "$@"; do
+    case "$_ARG" in
+        -h|--help) usage; exit 0 ;;
+    esac
+done
+unset _ARG
+
+# Serialize deployments BEFORE parsing: the parse loop below consumes
+# "$@" via shift, so re-execing after it would silently drop every
+# flag (a --target rollback would deploy origin/main instead). The
+# wrapper sets UPDATE_LOCK_HELD for the child: this runs exactly once.
+LOCK_SH="$ROOT/docker/ops/with-update-lock.sh"
+if [ -z "${UPDATE_LOCK_HELD:-}" ]; then
+    if [ ! -x "$LOCK_SH" ]; then
+        echo "FAIL: helper missing or not executable: $LOCK_SH" >&2
+        exit 2
+    fi
+    exec "$LOCK_SH" -- "$0" "$@"
+fi
+
 ENV_FILE="/etc/rev2square/.env.virtualmin"
 ENV_SET=0
 PROJECT=""
@@ -86,8 +113,7 @@ while [ $# -gt 0 ]; do
         --target) TARGET="$2"; shift 2 ;;
         --force) FORCE=1; shift ;;
         -h|--help)
-            sed -n '2,/^$/p' "$0"
-            echo "Usage: $0 [--env-file FILE] [--project NAME] [--runners svc,...] [--drain-timeout SEC] [--target REV] [--force]"
+            usage
             exit 0
             ;;
         *) echo "Unknown argument: $1" >&2; exit 2 ;;
@@ -107,18 +133,6 @@ BACKUP_SH="$ROOT/docker/backup/backup.sh"
 WAIT_SH="$ROOT/docker/ops/wait-for-healthy.sh"
 CHECK_SH="$ROOT/docker/ops/check-realtime.sh"
 SYNC_SH="$ROOT/docker/ops/sync-checkout.sh"
-LOCK_SH="$ROOT/docker/ops/with-update-lock.sh"
-
-# Serialize deployments: re-exec under the lock exactly once (the
-# wrapper sets UPDATE_LOCK_HELD for the child). Help/usage errors exit
-# above, before any locking.
-if [ -z "${UPDATE_LOCK_HELD:-}" ]; then
-    if [ ! -x "$LOCK_SH" ]; then
-        echo "FAIL: helper missing or not executable: $LOCK_SH" >&2
-        exit 2
-    fi
-    exec "$LOCK_SH" -- "$0" "$@"
-fi
 
 step() { echo "== $1 =="; }
 pass() { echo "PASS: $1"; }
@@ -142,11 +156,16 @@ fi
 # shellcheck disable=SC1090
 set -a; . "$ENV_FILE"; set +a
 
-if [ -n "$PROJECT" ]; then
-    COMPOSE="docker compose -f $COMPOSE_FILE --env-file $ENV_FILE -p $PROJECT"
-else
-    COMPOSE="docker compose -f $COMPOSE_FILE --env-file $ENV_FILE"
-fi
+# compose runs docker compose with the variant's fixed flags. A function,
+# not a string: quoted expansions keep paths containing spaces (env
+# file, compose file, project root) as single arguments. No eval.
+compose() {
+    if [ -n "$PROJECT" ]; then
+        docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" -p "$PROJECT" "$@"
+    else
+        docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" "$@"
+    fi
+}
 
 # The public key is baked into frontend assets at build time and probed
 # after deploy; an empty/placeholder key would ship broken realtime.
@@ -159,8 +178,7 @@ esac
 : "${APP_URL:?APP_URL missing from $ENV_FILE}"
 APP_LOOPBACK_PORT="${APP_LOOPBACK_PORT:-8081}"
 
-# shellcheck disable=SC2086
-if ! $COMPOSE ps >/dev/null 2>&1; then
+if ! compose ps >/dev/null 2>&1; then
     echo "FAIL: 'compose ps' failed (daemon down or bad compose config)" >&2
     exit 2
 fi
@@ -198,8 +216,7 @@ done
 
 service_running() {
     # service_running <service>: true when a container is in State=running.
-    # shellcheck disable=SC2086
-    $COMPOSE ps --format '{{.Service}} {{.State}}' 2>/dev/null | grep -q "^$1 running"
+    compose ps --format '{{.Service}} {{.State}}' 2>/dev/null | grep -q "^$1 running"
 }
 
 analysis_depth() {
@@ -211,8 +228,7 @@ analysis_depth() {
     : "${DB_DATABASE:?DB_DATABASE missing from $ENV_FILE}"
     : "${DB_ROOT_PASSWORD:?DB_ROOT_PASSWORD missing from $ENV_FILE}"
     TABLE="${DB_QUEUE_TABLE:-jobs}"
-    # shellcheck disable=SC2086
-    $COMPOSE exec -T -e MYSQL_PWD="$DB_ROOT_PASSWORD" db \
+    compose exec -T -e MYSQL_PWD="$DB_ROOT_PASSWORD" db \
         mariadb -uroot -N -e "SELECT COUNT(*) FROM \`$DB_DATABASE\`.\`$TABLE\` WHERE queue='analysis';" 2>/dev/null | tr -d '[:space:]'
 }
 
@@ -251,18 +267,25 @@ drain_analyses() {
     done
 }
 
-PASSTHRU=""
-if [ "$ENV_SET" -eq 1 ]; then
-    PASSTHRU="$PASSTHRU --env-file $ENV_FILE"
-fi
-if [ -n "$PROJECT" ]; then
-    PASSTHRU="$PASSTHRU --project $PROJECT"
-fi
+# call_helper runs a variant helper with the passthru flags. Explicit
+# quoted branches, not a string: a spaced --env-file path survives
+# intact (same idiom as restore.sh invoking backup.sh). No eval.
+call_helper() {
+    _HELPER="$1"; shift
+    if [ "$ENV_SET" -eq 1 ] && [ -n "$PROJECT" ]; then
+        "$_HELPER" --variant virtualmin --env-file "$ENV_FILE" --project "$PROJECT" "$@"
+    elif [ "$ENV_SET" -eq 1 ]; then
+        "$_HELPER" --variant virtualmin --env-file "$ENV_FILE" "$@"
+    elif [ -n "$PROJECT" ]; then
+        "$_HELPER" --variant virtualmin --project "$PROJECT" "$@"
+    else
+        "$_HELPER" --variant virtualmin "$@"
+    fi
+}
 
 # --- 1. safety backup (database only) ------------------------------------
 step "1/8 safety backup"
-# shellcheck disable=SC2086
-if ! $BACKUP_SH --variant virtualmin $PASSTHRU; then
+if ! call_helper "$BACKUP_SH"; then
     echo "FAIL: safety backup failed; refusing to deploy without one" >&2
     exit 1
 fi
@@ -280,8 +303,7 @@ fi
 
 # --- 3. build ------------------------------------------------------------
 step "3/8 build app+nginx"
-# shellcheck disable=SC2086
-if ! $COMPOSE build --build-arg "VITE_REVERB_APP_KEY=$REVERB_APP_KEY" app nginx; then
+if ! compose build --build-arg "VITE_REVERB_APP_KEY=$REVERB_APP_KEY" app nginx; then
     echo "FAIL: image build failed; nothing recreated" >&2
     exit 1
 fi
@@ -289,8 +311,7 @@ pass "app+nginx images built (frontend key baked from REVERB_APP_KEY)"
 
 # --- 4. migrate ----------------------------------------------------------
 step "4/8 migrate"
-# shellcheck disable=SC2086
-if ! $COMPOSE run --rm app php artisan migrate --force; then
+if ! compose run --rm app php artisan migrate --force; then
     echo "FAIL: migrations failed; old containers still running on the" >&2
     echo "previous schema state (re-run after fixing; migrate is idempotent)." >&2
     exit 1
@@ -315,16 +336,14 @@ if [ "$FORCE" -eq 0 ] && service_running analysis-coordinator; then
     # job; idle (drained) workers exit at once, so this is instant in
     # the common case and bounded (900s) in the rare race.
     echo "graceful coordinator stop first (up to 900s only if a job runs)..."
-    # shellcheck disable=SC2086
-    if ! $COMPOSE stop -t 900 analysis-coordinator; then
+    if ! compose stop -t 900 analysis-coordinator; then
         echo "FAIL: graceful coordinator stop failed; aborting before recreate" >&2
         exit 1
     fi
 fi
 # Explicit service list: db keeps its data; runners are rebuilt only
 # via --runners (step 8). Never bare `up -d` here.
-# shellcheck disable=SC2086
-if ! $COMPOSE up -d app nginx queue scheduler reverb analysis-coordinator; then
+if ! compose up -d app nginx queue scheduler reverb analysis-coordinator; then
     echo "FAIL: recreate failed; run wait-for-healthy.sh + status.sh to assess" >&2
     exit 1
 fi
@@ -332,8 +351,7 @@ pass "services recreated (db + runners untouched)"
 
 # --- 7. readiness + HTTP + realtime ---------------------------------------
 step "7/8 readiness"
-# shellcheck disable=SC2086
-if ! $WAIT_SH --variant virtualmin $PASSTHRU; then
+if ! call_helper "$WAIT_SH"; then
     echo "FAIL: services never became healthy; investigate before use" >&2
     exit 1
 fi
@@ -395,13 +413,11 @@ if [ -n "$RUNNERS" ]; then
             echo "FAIL: unknown runner '$R' (valid: $VALID)" >&2
             exit 2
         fi
-        # shellcheck disable=SC2086
-        if ! $COMPOSE build "$R"; then
+        if ! compose build "$R"; then
             echo "FAIL: runner build failed: $R (main stack already updated)" >&2
             exit 1
         fi
-        # shellcheck disable=SC2086
-        if ! $COMPOSE up -d "$R"; then
+        if ! compose up -d "$R"; then
             echo "FAIL: runner recreate failed: $R (main stack already updated)" >&2
             exit 1
         fi
@@ -422,7 +438,10 @@ fi
 # Audit trail of what is now live (best-effort; :latest tags move).
 docker images --digests rev2square/app 2>/dev/null | head -4 || true
 docker images --digests rev2square/nginx 2>/dev/null | head -4 || true
-# shellcheck disable=SC2086
-echo "Next: ./docker/ops/status.sh --variant virtualmin $PASSTHRU"
+# Suggestion only (quoted for copy-paste when paths hold spaces).
+NEXT="Next: ./docker/ops/status.sh --variant virtualmin"
+if [ "$ENV_SET" -eq 1 ]; then NEXT="$NEXT --env-file '$ENV_FILE'"; fi
+if [ -n "$PROJECT" ]; then NEXT="$NEXT --project '$PROJECT'"; fi
+echo "$NEXT"
 echo "Deploys drop realtime sockets for seconds; browsers reconnect"
 echo "automatically (presence may flap once on the Online page)."

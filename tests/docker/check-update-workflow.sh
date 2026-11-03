@@ -7,11 +7,20 @@
 # detached-foreign refusal, dirty-tree refusal, untracked-ignored,
 # diverged/ahead refusal, and --target rollback cases; then
 # with-update-lock.sh is proven to serialize (a second concurrent
-# holder is refused, the lock releases afterwards). Static pins assert
-# update_prod.sh actually calls both helpers and that the updater and
+# holder is refused, the lock releases afterwards). Then the REAL
+# updater is driven through its lock re-exec against a fixture copy
+# (stub docker/curl, REAL backup + readiness gate, scratch git
+# origin): every flag (--target, --env-file including spaces,
+# --project, --runners, --drain-timeout, --force) must arrive intact
+# on the other side. Spaced-path runs then prove an EXISTING env file
+# with spaces reaches docker as one argument end to end (updater,
+# backup, gate) and in direct backup/gate/status/restore runs.
+# Static pins assert update_prod.sh actually calls both helpers, that
+# the re-exec precedes argument parsing, and that the updater and
 # helpers contain no destructive git commands.
 #
-# Requires: POSIX sh + grep + git. Safe: temp dirs only.
+# Requires: POSIX sh + grep + git + gzip/sha256sum/du. Safe: temp
+# dirs only (restore runs fully stubbed: nothing real touched).
 #
 # Usage:
 #   tests/docker/check-update-workflow.sh
@@ -29,6 +38,9 @@ TMPD=$(mktemp -d) || { echo "FAIL: cannot create temp dir" >&2; exit 2; }
 trap 'rm -rf "$TMPD"' EXIT INT TERM
 
 command -v git >/dev/null 2>&1 || { echo "FAIL: git is required for this test" >&2; exit 2; }
+for TOOL in gzip sha256sum du; do
+    command -v "$TOOL" >/dev/null 2>&1 || { echo "FAIL: $TOOL is required for this test" >&2; exit 2; }
+done
 # Hermetic commits regardless of the invoking user's gitconfig.
 export GIT_AUTHOR_NAME="wf-test" GIT_AUTHOR_EMAIL="wf-test@invalid"
 export GIT_COMMITTER_NAME="wf-test" GIT_COMMITTER_EMAIL="wf-test@invalid"
@@ -62,6 +74,13 @@ clone_srv() {
 
 branch_of() {
     git -C "$1" symbolic-ref -q --short HEAD 2>/dev/null
+}
+
+argv_single() {
+    # argv_single <argv-file> <path>: <path> appears as one whole <arg>
+    # line, and its first whitespace-separated word never appears as
+    # its own line (any word-split would emit that word standalone).
+    grep -qF -- "<$2>" "$1" && ! grep -qF -- "<${2%% *}>" "$1"
 }
 
 echo "--- normal fast-forward ---"
@@ -208,6 +227,199 @@ for S in "$SYNC" "$LOCKWRAP" "$UPDATER"; do
         pass "no destructive git commands in $(basename "$S")"
     fi
 done
+
+echo "--- updater re-exec preserves arguments ---"
+
+# Fixture: a copy of the REAL updater + sync/lock helpers rooted in a
+# scratch git repo, with stub docker/curl/helpers so full runs need no
+# daemon, network, or stack. Every run goes through the actual lock
+# re-exec; a dropped flag fails its assertion (a dropped --target
+# would silently deploy the tip instead of the pinned release).
+F="$TMPD/fixture"
+mkdir -p "$F/docker/ops" "$F/docker/backup" "$F/bin"
+cp "$ROOT/docker/ops/update_prod.sh" "$ROOT/docker/ops/sync-checkout.sh" "$ROOT/docker/ops/with-update-lock.sh" "$F/docker/ops/"
+cp "$ROOT/docker/backup/backup.sh" "$F/docker/backup/"
+cp "$ROOT/docker/ops/wait-for-healthy.sh" "$F/docker/ops/"
+chmod +x "$F/docker/ops/update_prod.sh" "$F/docker/ops/sync-checkout.sh" "$F/docker/ops/with-update-lock.sh" "$F/docker/backup/backup.sh" "$F/docker/ops/wait-for-healthy.sh"
+# Real backup + readiness gate exercise the full deploy path; only the
+# realtime probe stays stubbed (it needs a network peer).
+for STUB in "$F/docker/ops/check-realtime.sh" "$F/bin/curl"; do
+    printf '#!/bin/sh\nexit 0\n' >"$STUB"
+    chmod +x "$STUB"
+done
+cat >"$F/bin/docker" <<'DOCKER_EOF'
+#!/bin/sh
+# One <arg> per line: a path with spaces is distinguishable from
+# split words.
+printf '<%s>\n' "$@" >>"${DOCKER_ARGV_FILE:?}"
+case " $* " in
+    *" ps --format "*)
+        for _s in ${DOCKER_HEALTHY:-}; do echo "$_s running healthy"; done
+        if [ -n "${DOCKER_BUSY:-}" ]; then echo "analysis-coordinator running"; fi
+        ;;
+    *" exec "*)
+        # Queue depth for drains (0 = idle); dump/query output is
+        # ignored by the other callers.
+        echo "${DOCKER_BUSY:-0}"
+        ;;
+esac
+exit 0
+DOCKER_EOF
+chmod +x "$F/bin/docker"
+: >"$F/compose.virtualmin.yaml"
+printf 'REVERB_APP_KEY=test-public-key\nAPP_URL=http://example.invalid\nDB_DATABASE=testdb\nDB_ROOT_PASSWORD=testpw\n' >"$F/fixture.env"
+git init -q "$F"
+git -C "$F" checkout -q -b main
+git -C "$F" add -A
+git -C "$F" commit -qm fixture
+git init -q --bare "$TMPD/fixture.git"
+git --git-dir="$TMPD/fixture.git" symbolic-ref HEAD refs/heads/main
+git -C "$F" remote add origin "$TMPD/fixture.git"
+git -C "$F" push -q -u origin main
+export UPDATE_LOCK_DIR="$TMPD/fixture.lock"
+export DOCKER_ARGV_FILE="$TMPD/docker-argv.log"
+export DOCKER_HEALTHY="app nginx db queue scheduler reverb analysis-coordinator"
+FIXUPD="$F/docker/ops/update_prod.sh"
+
+# A1: invalid drain timeout rejected by validation.
+PATH="$F/bin:$PATH" "$FIXUPD" --drain-timeout NOTANUMBER >"$TMPD/rA1.log" 2>&1; RA1_CODE=$?
+if [ "$RA1_CODE" -eq 2 ] && grep -q "must be a positive integer" "$TMPD/rA1.log"; then
+    pass "invalid drain timeout rejected"
+else
+    fail "invalid drain timeout rejected (exit $RA1_CODE: $(cat "$TMPD/rA1.log"))"
+fi
+
+# A2: drain timeout VALUE survives the re-exec: with a busy coordinator
+# stub (depth 1), the drain expires and the message must quote the
+# passed value (1s), not the 900s default. Costs one 15s drain sleep.
+DOCKER_BUSY=1 PATH="$F/bin:$PATH" "$FIXUPD" --env-file "$F/fixture.env" --drain-timeout 1 >"$TMPD/rA2.log" 2>&1; RA2_CODE=$?
+if [ "$RA2_CODE" -eq 2 ] && grep -q "after 1s; nothing recreated" "$TMPD/rA2.log"; then
+    pass "drain timeout value survives re-exec"
+else
+    fail "drain timeout value survives re-exec (exit $RA2_CODE: $(tail -3 "$TMPD/rA2.log"))"
+fi
+
+# B: env path with spaces survives byte-identical (no split, no glob).
+SPACED="$F/dir with spaces/missing.env"
+PATH="$F/bin:$PATH" "$FIXUPD" --env-file "$SPACED" >"$TMPD/rB.log" 2>&1; RB_CODE=$?
+if [ "$RB_CODE" -eq 2 ] && grep -qF -- "env file not found: $SPACED" "$TMPD/rB.log"; then
+    pass "env path with spaces survives re-exec"
+else
+    fail "env path with spaces survives re-exec (exit $RB_CODE: $(cat "$TMPD/rB.log"))"
+fi
+
+# C: project survives into the compose invocation.
+: >"$DOCKER_ARGV_FILE"
+PATH="$F/bin:$PATH" "$FIXUPD" --env-file "$F/fixture.env" --project RecProj >"$TMPD/rC.log" 2>&1; RC_CODE=$?
+if [ "$RC_CODE" -eq 0 ] && grep -qF -- "<-p>" "$DOCKER_ARGV_FILE" && grep -qF -- "<RecProj>" "$DOCKER_ARGV_FILE"; then
+    pass "project survives re-exec"
+else
+    fail "project survives re-exec (exit $RC_CODE, argv: $(cat "$DOCKER_ARGV_FILE" 2>/dev/null))"
+fi
+
+# D: runner selection survives to step 8 validation.
+PATH="$F/bin:$PATH" "$FIXUPD" --env-file "$F/fixture.env" --runners 'bogus-runner' >"$TMPD/rD.log" 2>&1; RD_CODE=$?
+if [ "$RD_CODE" -eq 2 ] && grep -q "unknown runner 'bogus-runner'" "$TMPD/rD.log"; then
+    pass "runner selection survives re-exec"
+else
+    fail "runner selection survives re-exec (exit $RD_CODE: $(tail -2 "$TMPD/rD.log"))"
+fi
+
+# E: target survives (a rollback pin must never become a tip deploy).
+PATH="$F/bin:$PATH" "$FIXUPD" --env-file "$F/fixture.env" --target bogusrev123 >"$TMPD/rE.log" 2>&1; RE_CODE=$?
+if [ "$RE_CODE" -eq 2 ] && grep -q "resolves to no commit" "$TMPD/rE.log"; then
+    pass "target survives re-exec"
+else
+    fail "target survives re-exec (exit $RE_CODE: $(tail -2 "$TMPD/rE.log"))"
+fi
+
+# F: force survives (drain waits skipped with notice).
+PATH="$F/bin:$PATH" "$FIXUPD" --env-file "$F/fixture.env" --force >"$TMPD/rF.log" 2>&1; RF_CODE=$?
+if [ "$RF_CODE" -eq 0 ] && grep -q -- "--force: skipping pre-build drain" "$TMPD/rF.log"; then
+    pass "force survives re-exec"
+else
+    fail "force survives re-exec (exit $RF_CODE)"
+fi
+
+# G: several flags survive TOGETHER through one re-exec.
+: >"$DOCKER_ARGV_FILE"
+PATH="$F/bin:$PATH" "$FIXUPD" --env-file "$F/fixture.env" --project JointProj --runners 'bogus-runner' --drain-timeout 30 --force >"$TMPD/rG.log" 2>&1; RG_CODE=$?
+RG_OK=1
+[ "$RG_CODE" -eq 2 ] || RG_OK=0
+grep -q "unknown runner 'bogus-runner'" "$TMPD/rG.log" || RG_OK=0
+grep -qF -- "<-p>" "$DOCKER_ARGV_FILE" || RG_OK=0
+grep -qF -- "<JointProj>" "$DOCKER_ARGV_FILE" || RG_OK=0
+grep -q -- "--force: skipping pre-build drain" "$TMPD/rG.log" || RG_OK=0
+if [ "$RG_OK" -eq 1 ]; then
+    pass "combined flags survive one re-exec"
+else
+    fail "combined flags survive one re-exec (exit $RG_CODE)"
+fi
+
+echo "--- spaced paths stay single arguments ---"
+
+mkdir -p "$F/dir with spaces"
+cp "$F/fixture.env" "$F/dir with spaces/real.env"
+SPACED_EXISTING="$F/dir with spaces/real.env"
+
+# H: existing spaced env through the full updater run (real backup +
+# real readiness gate). Exit 0 proves intact passthru (a split path
+# fails the helpers' existence checks); >= 3 whole-arg sightings
+# proves updater, backup and gate each emitted it unsplit.
+: >"$DOCKER_ARGV_FILE"
+PATH="$F/bin:$PATH" "$FIXUPD" --env-file "$SPACED_EXISTING" >"$TMPD/rH.log" 2>&1; RH_CODE=$?
+RH_COUNT=$(grep -cF -- "<$SPACED_EXISTING>" "$DOCKER_ARGV_FILE")
+if [ "$RH_CODE" -eq 0 ] && [ "$RH_COUNT" -ge 3 ] && argv_single "$DOCKER_ARGV_FILE" "$SPACED_EXISTING"; then
+    pass "spaced env preserved end to end ($RH_COUNT docker sightings)"
+else
+    fail "spaced env preserved end to end (exit $RH_CODE, sightings $RH_COUNT)"
+fi
+
+# BK/WT: real backup and readiness gate invoked directly.
+: >"$DOCKER_ARGV_FILE"
+PATH="$F/bin:$PATH" "$ROOT/docker/backup/backup.sh" --variant virtualmin --env-file "$SPACED_EXISTING" --dir "$TMPD/bak" >"$TMPD/rBK.log" 2>&1; RBK_CODE=$?
+if [ "$RBK_CODE" -eq 0 ] && argv_single "$DOCKER_ARGV_FILE" "$SPACED_EXISTING"; then
+    pass "backup keeps spaced env whole"
+else
+    fail "backup keeps spaced env whole (exit $RBK_CODE: $(tail -2 "$TMPD/rBK.log"))"
+fi
+: >"$DOCKER_ARGV_FILE"
+PATH="$F/bin:$PATH" "$ROOT/docker/ops/wait-for-healthy.sh" --variant virtualmin --env-file "$SPACED_EXISTING" >"$TMPD/rWT.log" 2>&1; RWT_CODE=$?
+if [ "$RWT_CODE" -eq 0 ] && argv_single "$DOCKER_ARGV_FILE" "$SPACED_EXISTING"; then
+    pass "readiness gate keeps spaced env whole"
+else
+    fail "readiness gate keeps spaced env whole (exit $RWT_CODE: $(tail -2 "$TMPD/rWT.log"))"
+fi
+
+# ST: status check invoked directly (read-only overview).
+: >"$DOCKER_ARGV_FILE"
+PATH="$F/bin:$PATH" "$ROOT/docker/ops/status.sh" --variant virtualmin --env-file "$SPACED_EXISTING" >"$TMPD/rST.log" 2>&1; RST_CODE=$?
+if [ "$RST_CODE" -eq 0 ] && argv_single "$DOCKER_ARGV_FILE" "$SPACED_EXISTING"; then
+    pass "status keeps spaced env whole"
+else
+    fail "status keeps spaced env whole (exit $RST_CODE: $(tail -3 "$TMPD/rST.log"))"
+fi
+
+# RS: restore invoked directly (all docker stubbed: nothing real
+# touched; safety dump skipped, backup covered above).
+printf 'dump' | gzip >"$TMPD/dump.sql.gz"
+: >"$DOCKER_ARGV_FILE"
+PATH="$F/bin:$PATH" "$ROOT/docker/backup/restore.sh" --variant virtualmin --env-file "$SPACED_EXISTING" --yes --skip-safety-dump "$TMPD/dump.sql.gz" >"$TMPD/rRS.log" 2>&1; RRS_CODE=$?
+if [ "$RRS_CODE" -eq 0 ] && argv_single "$DOCKER_ARGV_FILE" "$SPACED_EXISTING"; then
+    pass "restore keeps spaced env whole"
+else
+    fail "restore keeps spaced env whole (exit $RRS_CODE: $(tail -2 "$TMPD/rRS.log"))"
+fi
+
+# Structural pin for the review finding: the lock re-exec must precede
+# the consuming parse loop, so "$@" is still intact at exec time.
+REEXEC_LINE=$(grep -n 'exec "$LOCK_SH"' "$UPDATER" | cut -d: -f1 | head -1)
+PARSE_LINE=$(grep -n 'while \[ \$# -gt 0 \]' "$UPDATER" | cut -d: -f1 | head -1)
+if [ -n "$REEXEC_LINE" ] && [ -n "$PARSE_LINE" ] && [ "$REEXEC_LINE" -lt "$PARSE_LINE" ]; then
+    pass "lock re-exec precedes argument parsing (lines $REEXEC_LINE < $PARSE_LINE)"
+else
+    fail "lock re-exec must precede argument parsing (re-exec: $REEXEC_LINE, parse: $PARSE_LINE)"
+fi
 
 if [ "$FAIL" -eq 0 ]; then
     echo "== all update workflow checks passed =="

@@ -64,11 +64,16 @@ fi
 # shellcheck disable=SC1090
 set -a; . "$ENV_FILE"; set +a
 
-if [ -n "$PROJECT" ]; then
-    COMPOSE="docker compose -f $COMPOSE_FILE --env-file $ENV_FILE -p $PROJECT"
-else
-    COMPOSE="docker compose -f $COMPOSE_FILE --env-file $ENV_FILE"
-fi
+# compose runs docker compose with the variant's fixed flags. A function,
+# not a string: quoted expansions keep paths containing spaces as
+# single arguments. No eval.
+compose() {
+    if [ -n "$PROJECT" ]; then
+        docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" -p "$PROJECT" "$@"
+    else
+        docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" "$@"
+    fi
+}
 
 FAIL=0
 pass() { echo "PASS: $1"; }
@@ -79,8 +84,7 @@ echo "== Rev2Square status ($(date -u +%Y-%m-%dT%H:%M:%SZ)) =="
 
 # 1. Container states.
 echo "--- containers ---"
-# shellcheck disable=SC2086
-PS_OUT=$($COMPOSE ps --format '{{.Service}} {{.State}}' 2>&1) || PS_OUT=""
+PS_OUT=$(compose ps --format '{{.Service}} {{.State}}' 2>&1) || PS_OUT=""
 if [ -z "$PS_OUT" ]; then
     fail "no containers reported (is the stack up?)"
 else
@@ -111,8 +115,7 @@ fi
 
 # 3. Queue depth (fails if the default queue holds more than 1000 jobs).
 echo "--- queue ---"
-# shellcheck disable=SC2086
-if QMON_OUT=$($COMPOSE exec -T app php artisan queue:monitor database:default --max=1000 2>&1); then
+if QMON_OUT=$(compose exec -T app php artisan queue:monitor database:default --max=1000 2>&1); then
     pass "queue depth within limits"
     echo "$QMON_OUT" | head -10
 else
@@ -122,8 +125,7 @@ fi
 
 # 4. Failed jobs (informational: any entry is a WARN, not a FAIL).
 echo "--- failed jobs ---"
-# shellcheck disable=SC2086
-QFAIL_OUT=$($COMPOSE exec -T app php artisan queue:failed 2>&1) || QFAIL_OUT=""
+QFAIL_OUT=$(compose exec -T app php artisan queue:failed 2>&1) || QFAIL_OUT=""
 if echo "$QFAIL_OUT" | grep -qi "no failed jobs\|no failed\|0 failed"; then
     pass "no failed jobs"
 else
@@ -133,8 +135,7 @@ fi
 
 # 5. Recent application errors (last 300 log lines).
 echo "--- application errors ---"
-# shellcheck disable=SC2086
-LOG_OUT=$($COMPOSE exec -T app sh -c 'tail -n 300 storage/logs/laravel.log 2>/dev/null' 2>&1) || LOG_OUT=""
+LOG_OUT=$(compose exec -T app sh -c 'tail -n 300 storage/logs/laravel.log 2>/dev/null' 2>&1) || LOG_OUT=""
 if [ -z "$LOG_OUT" ]; then
     warn "no application log yet (fresh deploy?)"
 else
@@ -156,8 +157,7 @@ docker system df 2>/dev/null | head -8 || warn "docker system df unavailable"
 echo "--- database ---"
 : "${DB_DATABASE:?DB_DATABASE missing from $ENV_FILE}"
 : "${DB_ROOT_PASSWORD:?DB_ROOT_PASSWORD missing from $ENV_FILE}"
-# shellcheck disable=SC2086
-if DB_OUT=$($COMPOSE exec -T -e MYSQL_PWD="$DB_ROOT_PASSWORD" db \
+if DB_OUT=$(compose exec -T -e MYSQL_PWD="$DB_ROOT_PASSWORD" db \
         mariadb -uroot -N -e "SELECT CONCAT(ROUND(SUM(data_length+index_length)/1024/1024,2), ' MB in ', COUNT(*), ' tables') FROM information_schema.tables WHERE table_schema='$DB_DATABASE';" 2>&1); then
     pass "database '$DB_DATABASE' reachable: $DB_OUT"
 else
