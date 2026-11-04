@@ -2,7 +2,10 @@
     <form wire:submit="import" class="rounded-xl border border-zinc-200 bg-white p-6">
         <label for="repo-url" class="block text-sm font-semibold">Public GitHub repository URL</label>
         <div class="mt-2 flex flex-col gap-3 sm:flex-row">
-            <input id="repo-url" type="url" wire:model="url" placeholder="https://github.com/owner/repository" required maxlength="500"
+            {{-- wire:ignore: the 3s status poll must never rebuild this
+                control while someone types a URL; the deferred model
+                still syncs on every poll/submit, so nothing is lost. --}}
+            <input id="repo-url" type="url" wire:model="url" wire:ignore placeholder="https://github.com/owner/repository" required maxlength="500"
                 class="block w-full rounded-lg border-zinc-300 shadow-sm focus:border-emerald-500 focus:ring-emerald-500">
             <button type="submit" wire:loading.attr="disabled" @disabled($repository?->isImporting()) class="shrink-0 rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-emerald-500 disabled:opacity-50">
                 <span wire:loading.remove>{{ $repository ? 'Re-import' : 'Import' }}</span>

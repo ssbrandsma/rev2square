@@ -54,7 +54,7 @@
             @endif
 
             @if($isMaintainer && $offer->status->value === 'pending')
-                <form method="POST" action="{{ route('projects.offers.accept', [$project, $offer]) }}" class="mt-4 border-t border-zinc-100 pt-4">
+                <form method="POST" action="{{ route('projects.offers.accept', [$project, $offer]) }}" class="mt-4 border-t border-zinc-100 pt-4" data-draft-key="offer-decision-{{ $offer->id }}">
                     @csrf
                     <label for="decision_reason" class="block text-sm font-semibold">Decision note <span class="font-normal text-zinc-500">(optional, visible to the contributor)</span></label>
                     <input id="decision_reason" name="decision_reason" type="text" maxlength="2000" placeholder="Why this decision? What could help next time?"
@@ -108,7 +108,7 @@
                     @endforeach
                 </ol>
             @endif
-            <form method="POST" action="{{ route('projects.offers.message', [$project, $offer]) }}" class="mt-4">
+            <form method="POST" action="{{ route('projects.offers.message', [$project, $offer]) }}" class="mt-4" data-draft-key="offer-msg-{{ $offer->id }}">
                 @csrf
                 <label for="message-body" class="sr-only">Message</label>
                 <textarea id="message-body" name="body" rows="3" required maxlength="2000" placeholder="Write a follow-up…"

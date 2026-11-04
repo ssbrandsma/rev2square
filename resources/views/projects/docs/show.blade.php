@@ -114,7 +114,7 @@
                             @php($statusActive = $findingStatusOpen === $finding['id'] || $statusBag->any())
                             <details class="mt-2 text-sm"{{ $editActive ? ' open' : '' }}>
                                 <summary class="cursor-pointer font-semibold text-zinc-700">Edit finding</summary>
-                                <form method="POST" action="{{ route('projects.docs.findings.update', [$project, $page, $finding['id']]) }}" class="mt-2 space-y-2">
+                                <form method="POST" action="{{ route('projects.docs.findings.update', [$project, $page, $finding['id']]) }}" class="mt-2 space-y-2" data-draft-key="finding-edit-{{ $finding['id'] }}">
                                     @csrf
                                     @method('PUT')
                                     @foreach($editBag->all() as $message)
@@ -132,7 +132,7 @@
                             </details>
                             <details class="mt-2 text-sm"{{ $statusActive ? ' open' : '' }}>
                                 <summary class="cursor-pointer font-semibold text-zinc-700">Change status</summary>
-                                <form method="POST" action="{{ route('projects.docs.findings.status', [$project, $page, $finding['id']]) }}" class="mt-2 space-y-2">
+                                <form method="POST" action="{{ route('projects.docs.findings.status', [$project, $page, $finding['id']]) }}" class="mt-2 space-y-2" data-draft-key="finding-status-{{ $finding['id'] }}">
                                     @csrf
                                     @method('PATCH')
                                     @foreach($statusBag->all() as $message)
@@ -156,7 +156,7 @@
                                     <p class="text-xs text-zinc-500">Verified needs measurement notes or corroborating references.</p>
                                     <button type="submit" class="rounded-lg border border-zinc-300 px-3 py-1.5 text-xs font-semibold text-zinc-700 hover:bg-zinc-50">Update status</button>
                                 </form>
-                                <form method="POST" action="{{ route('projects.docs.findings.destroy', [$project, $page, $finding['id']]) }}" class="mt-2 space-y-2" onsubmit="return confirm('Remove this finding? Pinned citations keep it.');">
+                                <form method="POST" action="{{ route('projects.docs.findings.destroy', [$project, $page, $finding['id']]) }}" class="mt-2 space-y-2" onsubmit="return confirm('Remove this finding? Pinned citations keep it.');" data-draft-key="finding-remove-{{ $finding['id'] }}">
                                     @csrf
                                     @method('DELETE')
                                     <label class="block text-xs font-semibold text-zinc-500">Reason (optional)
@@ -177,7 +177,7 @@
                 @php($createActive = $findingCreateOpen || $createBag->any())
                 <details class="mt-4 rounded-xl border border-zinc-200 bg-white p-4"{{ $createActive ? ' open' : '' }}>
                     <summary class="cursor-pointer text-sm font-semibold">Add a finding</summary>
-                    <form method="POST" action="{{ route('projects.docs.findings.store', [$project, $page]) }}" class="mt-3 space-y-3">
+                    <form method="POST" action="{{ route('projects.docs.findings.store', [$project, $page]) }}" class="mt-3 space-y-3" data-draft-key="finding-add-{{ $page->id }}">
                         @csrf
                         @foreach($createBag->all() as $message)
                             <p class="text-sm text-red-600">{{ $message }}</p>

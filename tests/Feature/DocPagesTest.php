@@ -1078,4 +1078,157 @@ class DocPagesTest extends TestCase
         $response->assertSee('<textarea name="statement" rows="2" required maxlength="2000" class="mt-1 block w-full rounded-lg border-zinc-300 shadow-sm focus:border-emerald-500 focus:ring-emerald-500"></textarea>', false);
         $this->assertSame(1, substr_count($response->getContent(), '<details class="mt-2 text-sm" open>'));
     }
+
+    private function jpegBytes(int $w = 60, int $h = 40): string
+    {
+        $img = imagecreatetruecolor($w, $h);
+        imagefill($img, 0, 0, imagecolorallocate($img, 10, 120, 60));
+        ob_start();
+        imagejpeg($img);
+        $bytes = (string) ob_get_clean();
+        imagedestroy($img);
+
+        return $bytes;
+    }
+
+    public function test_eleven_photo_selection_fails_with_visible_batching_feedback(): void
+    {
+        [$project, $owner] = $this->seedProject();
+        $draft = json_encode(['version' => 1, 'blocks' => [['type' => 'paragraph', 'text' => 'Unsaved words.']]]);
+        $files = [];
+        for ($i = 0; $i < 11; $i++) {
+            $files[] = UploadedFile::fake()->create("board-{$i}.jpg", 100);
+        }
+
+        // No session assertions before the follow-up GET: reading
+        // flashed bags mid-test consumes them for that GET in this
+        // same-process harness. The rendered page below proves the
+        // named-bag placement end to end.
+        $this->actingAs($owner)
+            ->post(route('projects.media.store-image', $project), [
+                'images' => $files,
+                'expected_count' => 11,
+                'title' => 'Unsaved title',
+                'doc_document' => $draft,
+            ])
+            ->assertRedirect();
+
+        $this->assertSame(0, ProjectMedia::where('project_id', $project->id)->count());
+
+        $response = $this->actingAs($owner)->get(route('projects.docs.create', $project));
+        $response->assertSee('You sent 11 photos. Upload up to 10 photos at a time.', false);
+        $response->assertSee('value="Unsaved title"', false);
+        $response->assertSee(e($draft), false);
+    }
+
+    public function test_truncated_23_photo_selection_reports_mismatch_and_stores_nothing(): void
+    {
+        [$project, $owner] = $this->seedProject();
+        // PHP max_file_uploads truncates the 23 selected files to 20
+        // before Laravel runs; the browser-reported count exposes it.
+        $files = [];
+        for ($i = 0; $i < 20; $i++) {
+            $files[] = UploadedFile::fake()->create("board-{$i}.jpg", 100);
+        }
+
+        $this->actingAs($owner)
+            ->post(route('projects.media.store-image', $project), [
+                'images' => $files,
+                'expected_count' => 23,
+                'title' => 'Unsaved title',
+            ])
+            ->assertRedirect();
+
+        $this->assertSame(0, ProjectMedia::where('project_id', $project->id)->count());
+
+        $response = $this->actingAs($owner)->get(route('projects.docs.create', $project));
+        $response->assertSee('You selected 23 photos but the server received 20.', false);
+        $response->assertSee('Nothing was stored from this request.', false);
+        $response->assertSee('value="Unsaved title"', false);
+    }
+
+    public function test_oversized_photo_error_names_the_file_and_limit(): void
+    {
+        [$project, $owner] = $this->seedProject();
+
+        $this->actingAs($owner)
+            ->post(route('projects.media.store-image', $project), [
+                'images' => [
+                    UploadedFile::fake()->createWithContent('board.jpg', $this->jpegBytes()),
+                    UploadedFile::fake()->create('huge.jpg', 13000),
+                ],
+                'expected_count' => 2,
+            ])
+            ->assertRedirect();
+
+        $response = $this->actingAs($owner)->get(route('projects.docs.create', $project));
+        $response->assertSee('huge.jpg is too large — the limit is 12 MB per photo.', false);
+    }
+
+    public function test_overlong_paragraph_save_shows_specific_message_and_keeps_draft(): void
+    {
+        [$project, $owner] = $this->seedProject();
+        $page = DocPage::factory()->create(['project_id' => $project->id, 'current_rev' => 1]);
+        $long = str_repeat('a', 5001);
+        $draft = json_encode(['version' => 1, 'blocks' => [['type' => 'paragraph', 'text' => $long]]]);
+
+        $this->actingAs($owner)
+            ->patch(route('projects.docs.update', [$project, $page]), $this->docPayload([
+                'title' => 'Unsaved title',
+                'doc_version' => 1,
+                'doc_document' => $draft,
+            ]))
+            ->assertRedirect();
+
+        $this->assertSame(1, $page->fresh()->current_rev);
+
+        $response = $this->actingAs($owner)->get(route('projects.docs.edit', [$project, $page]));
+        $response->assertSee('Block 1 — Paragraph contains 5,001 characters. The limit is 5,000 per block. Split this text into multiple paragraph or step blocks.', false);
+        $response->assertSee('Could not save the page', false);
+        $response->assertSee('value="Unsaved title"', false);
+        // The oversized text itself survives for correction.
+        $response->assertSee(e($long), false);
+    }
+
+    public function test_failed_save_preserves_original_version_token(): void
+    {
+        [$project, $owner] = $this->seedProject();
+        $page = DocPage::factory()->create(['project_id' => $project->id, 'current_rev' => 4]);
+
+        $this->actingAs($owner)
+            ->patch(route('projects.docs.update', [$project, $page]), $this->docPayload([
+                'doc_version' => 4,
+                'rev_note' => 'Unsaved note',
+                'doc_document' => json_encode(['version' => 1, 'blocks' => [['type' => 'table']]]),
+            ]))
+            ->assertSessionHasInput('doc_version', 4)
+            ->assertSessionHasInput('rev_note', 'Unsaved note');
+    }
+
+    public function test_json_upload_returns_structured_results(): void
+    {
+        [$project, $owner] = $this->seedProject();
+
+        $response = $this->actingAs($owner)
+            ->postJson(route('projects.media.store-image', $project), [
+                'images' => [UploadedFile::fake()->createWithContent('board.jpg', $this->jpegBytes())],
+                'expected_count' => 1,
+            ]);
+
+        $response->assertOk();
+        $response->assertJsonPath('ok', true);
+        $response->assertJsonPath('counts.uploaded', 1);
+        $response->assertJsonPath('counts.rejected', 0);
+        $response->assertJsonStructure(['uploaded' => [['id', 'title', 'thumb_url', 'card_url', 'wide_url', 'status']]]);
+
+        $failed = $this->actingAs($owner)
+            ->postJson(route('projects.media.store-image', $project), [
+                'images' => [UploadedFile::fake()->create('huge.jpg', 13000)],
+                'expected_count' => 1,
+            ]);
+
+        $failed->assertStatus(422);
+        $failed->assertJsonPath('ok', false);
+        $failed->assertJsonFragment(['huge.jpg is too large — the limit is 12 MB per photo.']);
+    }
 }

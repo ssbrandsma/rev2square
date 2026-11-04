@@ -24,7 +24,7 @@
                             <p class="mt-1 text-sm text-gray-600">Everything here is visible to anyone, including anonymous visitors. Your email address never appears on your public profile. <a href="{{ $user->profileUrl() }}" class="font-semibold text-emerald-700 hover:text-emerald-600">Preview public profile</a></p>
                         </header>
 
-                        <form method="post" action="{{ route('profile.public.update') }}" class="mt-6 space-y-6">
+                        <form method="post" action="{{ route('profile.public.update') }}" class="mt-6 space-y-6" data-draft-key="profile-public">
                             @csrf
                             @method('patch')
 

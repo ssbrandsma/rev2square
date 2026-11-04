@@ -9,7 +9,7 @@
     @include('projects._nav', ['project' => $project, 'active' => 'tasks'])
 
     <div class="mx-auto max-w-2xl px-4 py-10 sm:px-6">
-        <form method="POST" action="{{ route('projects.tasks.update', [$project, $task]) }}" class="rounded-xl border border-zinc-200 bg-white p-6 sm:p-8">
+        <form method="POST" action="{{ route('projects.tasks.update', [$project, $task]) }}" class="rounded-xl border border-zinc-200 bg-white p-6 sm:p-8" data-draft-key="task-{{ $task->id }}">
             @csrf
             @method('PATCH')
             @include('projects.tasks._form', ['task' => $task])

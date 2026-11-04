@@ -23,6 +23,31 @@ final class MediaUploadService
 
     public const MAX_FILE_BYTES = 25 * 1024 * 1024;
 
+    public const MAX_IMAGES_PER_REQUEST = 10;
+
+    /** Limits the upload forms display and pre-validate against. */
+    public static function uploadLimits(): array
+    {
+        return [
+            'max_files' => self::MAX_IMAGES_PER_REQUEST,
+            'max_bytes' => self::MAX_IMAGE_BYTES,
+            'total_bytes' => self::postMaxBytes(),
+            'extensions' => ['jpg', 'jpeg', 'png', 'webp'],
+            'type_label' => 'JPEG, PNG, or WebP',
+        ];
+    }
+
+    private static function postMaxBytes(): int
+    {
+        $raw = trim((string) ini_get('post_max_size'));
+        if (! preg_match('/^(\d+)\s*([KMG])?$/i', $raw, $match)) {
+            return 0;
+        }
+        $mult = ['K' => 1024, 'M' => 1048576, 'G' => 1073741824][strtoupper($match[2] ?? '')] ?? 1;
+
+        return ((int) $match[1]) * $mult;
+    }
+
     public const MAX_DIMENSION = 8000;
 
     // Pixels cap against decompression bombs (before GD allocates).
@@ -99,7 +124,15 @@ final class MediaUploadService
     private static function precheck(Project $project, UploadedFile $file, int $maxBytes): ?array
     {
         if (! $file->isValid()) {
-            return ['ok' => false, 'error' => 'The upload did not complete. Try again with a smaller file.'];
+            $code = $file->getError();
+            if ($code === UPLOAD_ERR_INI_SIZE || $code === UPLOAD_ERR_FORM_SIZE) {
+                return ['ok' => false, 'error' => 'This file exceeds the server upload size limit.'];
+            }
+            if ($code === UPLOAD_ERR_PARTIAL) {
+                return ['ok' => false, 'error' => 'The upload was interrupted before it completed. Try again.'];
+            }
+
+            return ['ok' => false, 'error' => 'The upload did not complete. Try again.'];
         }
 
         $size = $file->getSize() ?? 0;

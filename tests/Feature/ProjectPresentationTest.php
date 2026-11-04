@@ -191,6 +191,22 @@ class ProjectPresentationTest extends TestCase
         $this->assertFalse($project->fresh()->hasRichStory());
     }
 
+    public function test_overlong_story_text_reports_block_and_limit(): void
+    {
+        [$project, $owner] = $this->seedProject();
+
+        $bad = ['version' => 1, 'blocks' => [['type' => 'paragraph', 'text' => str_repeat('a', 5001)]]];
+        $this->actingAs($owner)->patch(route('projects.story.update', $project), [
+            'story_document' => json_encode($bad),
+            'presentation_version' => 0,
+        ])->assertSessionHas('error', 'Block 1 — Paragraph contains 5,001 characters. The limit is 5,000 per block. Split this text into multiple paragraphs.');
+
+        // The plain-string flash survives the follow-up GET (unlike
+        // error bags, it is untouched by session marshaling).
+        $edit = $this->actingAs($owner)->get(route('projects.edit', $project));
+        $edit->assertSee('Block 1 — Paragraph contains 5,001 characters.', false);
+    }
+
     public function test_gallery_reorder_persists_display_order(): void
     {
         [$project, $owner] = $this->seedProject();

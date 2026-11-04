@@ -35,7 +35,11 @@
         }
 
         const list = root.querySelector('[data-launcher-rooms]');
-        if (list) {
+        const panel = root.querySelector('[data-launcher-panel]');
+        const panelOpen = panel && !panel.classList.contains('hidden');
+        // Never swap click targets under an open panel; the dot above
+        // still updates, and opening refreshes the list explicitly.
+        if (list && !panelOpen) {
             list.innerHTML = rooms.map((room) => `
                 <li>
                     <a href="${escapeHtml(room.url)}" class="flex items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-zinc-100">

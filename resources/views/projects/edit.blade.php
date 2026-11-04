@@ -8,7 +8,7 @@
 
     @include('projects._nav', ['project' => $project, 'active' => 'overview'])
 
-    <div class="mx-auto max-w-3xl px-4 py-10 sm:px-6">
+    <div class="mx-auto w-full max-w-[1500px] px-4 py-10 sm:px-6 lg:px-8">
         @if(session('status'))
             <p class="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-medium text-emerald-800">{{ session('status') }}</p>
         @endif
@@ -24,7 +24,7 @@
 
         <section id="basics" aria-label="Basics" class="scroll-mt-24 rounded-xl border border-zinc-200 bg-white p-6 sm:p-8">
             <h2 class="font-semibold">Basics</h2>
-            <form method="POST" action="{{ route('projects.update', $project) }}" class="mt-4 space-y-5">
+            <form method="POST" action="{{ route('projects.update', $project) }}" class="mt-4 space-y-5" data-draft-key="project-edit-{{ $project->id }}">
                 @csrf
                 @method('PUT')
                 @include('projects._form-identity', ['project' => $project])
@@ -73,11 +73,29 @@
             @else
                 <p class="mt-3 text-sm text-zinc-500">No cover yet. Upload an image below, then choose it as the cover.</p>
             @endif
-            <form method="POST" action="{{ route('projects.media.store-image', $project) }}" enctype="multipart/form-data" class="mt-4 border-t border-zinc-100 pt-4">
+            <form method="POST" action="{{ route('projects.media.store-image', $project) }}" enctype="multipart/form-data" data-upload-feedback
+                data-max-files="{{ $uploadLimits['max_files'] }}"
+                data-max-bytes="{{ $uploadLimits['max_bytes'] }}"
+                data-total-bytes="{{ $uploadLimits['total_bytes'] }}"
+                data-extensions="{{ implode(',', $uploadLimits['extensions']) }}"
+                data-type-label="{{ $uploadLimits['type_label'] }}"
+                class="mt-4 border-t border-zinc-100 pt-4">
                 @csrf
                 <label for="cover-upload" class="text-sm font-semibold">Upload images</label>
+                <p class="mt-1 text-sm text-zinc-500">Up to {{ $uploadLimits['max_files'] }} photos per upload · max {{ number_format($uploadLimits['max_bytes'] / 1048576, 0) }} MB each · {{ $uploadLimits['type_label'] }}.</p>
+                <input type="hidden" name="expected_count" data-expected-count value="0" />
                 <input id="cover-upload" name="images[]" type="file" multiple required accept=".jpg,.jpeg,.png,.webp" class="mt-1 block w-full text-sm text-zinc-700 file:mr-3 file:rounded-lg file:border file:border-zinc-300 file:bg-zinc-50 file:px-3 file:py-2 file:text-sm file:font-semibold" />
-                <button type="submit" class="mt-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500">Upload</button>
+                <button type="submit" data-disable-on-submit class="mt-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500">Upload</button>
+                <div data-upload-errors role="alert" class="mt-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-900 {{ $errors->upload->any() ? '' : 'hidden' }}">
+                    @if($errors->upload->any())
+                        <ul class="list-disc space-y-1 pl-5">
+                            @foreach($errors->upload->all() as $message)
+                                <li>{{ $message }}</li>
+                            @endforeach
+                        </ul>
+                    @endif
+                </div>
+                <div data-upload-result role="status" class="hidden"></div>
             </form>
         </section>
 

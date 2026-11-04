@@ -14,6 +14,7 @@ use App\Models\Project;
 use App\Models\ProjectMedia;
 use App\Services\Community\ProjectActionPolicy;
 use App\Services\Docs\DocDocument;
+use App\Services\Media\MediaUploadService;
 use App\Services\Media\StoryDocument;
 use App\Services\Realtime\ChannelRotation;
 use Illuminate\Http\RedirectResponse;
@@ -119,6 +120,7 @@ class ProjectController extends Controller
             'storyMediaIds' => $storyIds,
             'docsMediaIds' => $docsMediaIds,
             'linkedVariant' => $linkedVariant,
+            'uploadLimits' => MediaUploadService::uploadLimits(),
         ]);
     }
 

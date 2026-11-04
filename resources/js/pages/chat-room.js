@@ -106,7 +106,9 @@ import { clearDraft, loadDraft, saveDraft } from '../drafts.js';
         const data = await response.json().catch(() => ({}));
 
         if (!response.ok) {
-            throw new Error(data.message || `Request failed (${response.status})`);
+            const error = new Error(data.message || `Request failed (${response.status})`);
+            error.status = response.status;
+            throw error;
         }
 
         return data;
@@ -412,7 +414,11 @@ import { clearDraft, loadDraft, saveDraft } from '../drafts.js';
                 markRead(root);
             } catch (error) {
                 queueOutbox(root, body, clientKey);
-                setStatus(root, 'error', `Could not send: ${escapeHtml(error.message)} The message is kept above with a Retry button.`);
+                if (error.status === 419) {
+                    setStatus(root, 'error', 'Your session expired, so this message was not sent. It is kept above with a Retry button — sign in again in another tab, then press Retry. Your composer draft is preserved.');
+                } else {
+                    setStatus(root, 'error', `Could not send: ${escapeHtml(error.message)} The message is kept above with a Retry button.`);
+                }
             } finally {
                 button.disabled = false;
             }

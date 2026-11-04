@@ -11,7 +11,7 @@
     @include('projects._nav', ['project' => $project, 'active' => $post->thread()->type === \App\Enums\DiscussionType::Update ? 'updates' : 'discussion'])
 
     <div class="mx-auto max-w-2xl px-4 py-10 sm:px-6">
-        <form method="POST" action="{{ route('projects.discussion.update', [$project, $post]) }}" class="rounded-xl border border-zinc-200 bg-white p-6 sm:p-8">
+        <form method="POST" action="{{ route('projects.discussion.update', [$project, $post]) }}" class="rounded-xl border border-zinc-200 bg-white p-6 sm:p-8" data-draft-key="post-edit-{{ $post->id }}">
             @csrf
             @method('PATCH')
             @if($post->parent_id === null && $post->type === \App\Enums\DiscussionType::Update)

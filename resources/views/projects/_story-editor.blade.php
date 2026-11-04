@@ -5,8 +5,9 @@
 <p class="mt-1 text-sm text-zinc-500">Text supports <span class="font-mono">**bold**</span>, <span class="font-mono">*italic*</span>, <span class="font-mono">`code`</span>, and <span class="font-mono">[text](https://…)</span>. Images come from this project's library only.</p>
 <input type="hidden" name="presentation_version" value="{{ $project->presentation_version }}" />
 <div data-story-editor
+    data-draft-key="editor-story-{{ $project->id }}"
     data-initial="{{ old('story_document', json_encode($project->hasRichStory() ? $project->story_document : ['version' => 1, 'blocks' => array_map(fn ($p) => ['type' => 'paragraph', 'text' => $p], preg_split('/\n\s*\n/', trim($project->body ?? '')) ?: [])])) }}"
-    data-images="{{ json_encode($images->map(fn ($m) => ['id' => $m->id, 'title' => $m->displayTitle(), 'alt' => $m->altText(), 'caption' => $m->caption, 'thumb_url' => $m->isReady() ? route('projects.media.show', [$project, $m, 'variant' => 'thumb']) : null])->values()) }}">
+    data-images="{{ json_encode($images->map(fn ($m) => ['id' => $m->id, 'title' => $m->displayTitle(), 'alt' => $m->altText(), 'caption' => $m->caption, 'thumb_url' => $m->isReady() ? route('projects.media.show', [$project, $m, 'variant' => 'thumb']) : null, 'card_url' => $m->isReady() ? route('projects.media.show', [$project, $m, 'variant' => 'card']) : null, 'wide_url' => $m->isReady() ? route('projects.media.show', [$project, $m, 'variant' => 'wide']) : null, 'status' => $m->processing_status])->values()) }}">
     <input type="hidden" name="story_document" value="" />
     <div class="flex flex-wrap items-center gap-2">
         <button type="button" data-undo class="rounded-lg border border-zinc-300 px-2 py-1 text-xs font-semibold text-zinc-700 hover:bg-zinc-50">Undo</button>
@@ -30,9 +31,9 @@
     <div data-image-picker hidden class="mt-3 rounded-xl border border-zinc-200 bg-zinc-50 p-4">
         <p class="text-sm font-semibold">Choose a project image</p>
         @if($images->isEmpty())
-            <p class="mt-1 text-sm text-zinc-500">No images yet — upload one in the Cover section first.</p>
+            <p data-picker-empty class="mt-1 text-sm text-zinc-500">No images yet — upload one in the Cover section first.</p>
         @else
-            <ul class="mt-2 grid grid-cols-3 gap-2 sm:grid-cols-4">
+            <ul class="mt-2 grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-6">
                 @foreach($images as $image)
                     <li>
                         <button type="button" data-pick="{{ $image->id }}" class="block w-full overflow-hidden rounded-lg border border-zinc-200 bg-white hover:border-emerald-500" @disabled(! $image->isReady())>

@@ -9,10 +9,14 @@ use App\Services\Docs\DocMediaUsage;
 use App\Services\Media\ImageProcessor;
 use App\Services\Media\MediaUploadService;
 use App\Services\Media\StoryDocument;
+use Illuminate\Contracts\Validation\Validator as ValidatorContract;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\MessageBag;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
@@ -24,26 +28,63 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
  */
 class MediaController extends Controller
 {
-    public function storeImage(Request $request, Project $project): RedirectResponse
+    public function storeImage(Request $request, Project $project): RedirectResponse|JsonResponse
     {
         Gate::authorize('update', $project);
 
-        $data = $request->validate([
-            'images' => 'required|array|min:1|max:10',
-            'images.*' => 'required|file|max:'.(MediaUploadService::MAX_IMAGE_BYTES / 1024),
+        // Docs uploads ride along with the in-progress page draft so
+        // uploading mid-edit never loses unsaved work; other callers
+        // post none of these fields and are unaffected. The version
+        // token rides along too: without it, uploading from a stale
+        // editor would re-render the form with the current token and
+        // let the next save silently overwrite another editor.
+        $draft = $request->only(['title', 'summary', 'category', 'publication_status', 'sort_order', 'doc_document', 'doc_version', 'rev_note']);
+
+        // A request past post_max_size arrives with POST and FILES
+        // emptied by PHP: say so instead of "choose a photo".
+        if (count($request->request->all()) === 0 && count($request->files->all()) === 0
+            && (int) $request->server('CONTENT_LENGTH', 0) > 0) {
+            $message = 'The request was too large for the server to receive — nothing was stored. Split your selection into smaller batches and try again.';
+
+            return $this->uploadFailure($request, $draft, ['images' => [$message]], $message);
+        }
+
+        // The browser reports how many files it sent; PHP may have
+        // truncated the request (max_file_uploads) before Laravel saw
+        // it. Never claim every selected file was considered.
+        $received = $request->file('images', []);
+        $received = is_array($received) ? array_values($received) : [$received];
+        $expected = (int) $request->input('expected_count', 0);
+        if ($expected > 0 && count($received) !== $expected) {
+            $message = 'You selected '.$expected.' photos but the server received '.count($received).'. The request was truncated by a server limit — split your selection into smaller batches and try again. Nothing was stored from this request.';
+
+            return $this->uploadFailure($request, $draft, ['images' => [$message]], $message);
+        }
+
+        $validator = Validator::make($request->all(), [
+            'images' => ['required', 'array', 'min:1', 'max:'.MediaUploadService::MAX_IMAGES_PER_REQUEST],
+            'images.*' => ['required', 'file', 'max:'.(MediaUploadService::MAX_IMAGE_BYTES / 1024)],
         ]);
+        if ($validator->fails()) {
+            $messages = $this->uploadRuleMessages($validator, $received);
+
+            return $this->uploadFailure($request, $draft, $messages, (string) collect($messages)->flatten()->first());
+        }
 
         $stored = 0;
         $reused = 0;
         $reusedProcessing = 0;
         $reusedFailed = 0;
-        $errors = [];
+        $uploaded = [];
+        $reusedPayload = [];
+        $rejected = [];
 
-        foreach ($data['images'] as $file) {
+        foreach ($received as $file) {
             $result = MediaUploadService::storeImage($project, $request->user(), $file);
             if ($result['ok']) {
                 if ($result['reused']) {
                     $reused++;
+                    $reusedPayload[] = $this->imagePayload($project, $result['media']);
                     // A reused row schedules no new job: report its
                     // actual state instead of claiming background work.
                     $status = $result['media']->processing_status ?? null;
@@ -54,26 +95,91 @@ class MediaController extends Controller
                     }
                 } else {
                     $stored++;
+                    $uploaded[] = $this->imagePayload($project, $result['media']);
                 }
             } else {
-                $errors[] = ($file->getClientOriginalName() ?? 'file').': '.$result['error'];
+                $rejected[] = ['name' => $file->getClientOriginalName() ?? 'file', 'error' => $result['error']];
             }
         }
 
         $this->bumpVersion($project);
 
-        // Docs uploads ride along with the in-progress page draft so
-        // uploading mid-edit never loses unsaved work; other callers
-        // post none of these fields and are unaffected. The version
-        // token rides along too: without it, uploading from a stale
-        // editor would re-render the form with the current token and
-        // let the next save silently overwrite another editor.
-        $draft = $request->only(['title', 'summary', 'category', 'publication_status', 'sort_order', 'doc_document', 'doc_version', 'rev_note']);
+        $message = $this->uploadSummary($stored, $reused, $reusedProcessing, $reusedFailed, $rejected);
 
         if ($stored === 0 && $reused === 0) {
-            return back()->withInput($draft)->with('error', implode(' ', $errors));
+            return $this->uploadFailure($request, $draft, [], $message, $rejected);
         }
 
+        if ($request->wantsJson()) {
+            return response()->json([
+                'ok' => true, 'message' => $message,
+                'counts' => ['uploaded' => $stored, 'reused' => $reused, 'rejected' => count($rejected)],
+                'uploaded' => $uploaded, 'reused' => $reusedPayload, 'rejected' => $rejected,
+            ]);
+        }
+
+        return back()->withInput($draft)->with('status', $message);
+    }
+
+    /**
+     * Failed upload, both transports: the redirect carries the named
+     * bag the form renders beside itself (plus the preserved draft);
+     * the fetch path gets structured JSON. Neither claims storage.
+     */
+    private function uploadFailure(Request $request, array $draft, array $messages, string $message, array $rejected = []): RedirectResponse|JsonResponse
+    {
+        if ($request->wantsJson()) {
+            return response()->json([
+                'ok' => false, 'message' => $message,
+                'errors' => $messages, 'rejected' => $rejected,
+            ], 422);
+        }
+
+        if ($messages === []) {
+            return back()->withInput($draft)->with('error', $message);
+        }
+
+        return back()->withInput($draft)->withErrors(new MessageBag($messages), 'upload');
+    }
+
+    /** Per-rule upload messages with filenames where available. */
+    private function uploadRuleMessages(ValidatorContract $validator, array $files): array
+    {
+        $messages = [];
+        foreach ($validator->failed() as $key => $rules) {
+            foreach ($rules as $rule => $params) {
+                $messages[$key][] = $this->uploadRuleMessage($key, $rule, $files);
+            }
+        }
+
+        return $messages;
+    }
+
+    private function uploadRuleMessage(string $key, string $rule, array $files): string
+    {
+        if (preg_match('/^images\.(\d+)$/', $key, $match)) {
+            $name = ($files[(int) $match[1]] ?? null)?->getClientOriginalName() ?? 'file';
+            $limit = number_format(MediaUploadService::MAX_IMAGE_BYTES / 1048576, 0).' MB';
+
+            return match ($rule) {
+                'Max' => $name.' is too large — the limit is '.$limit.' per photo.',
+                'File' => $name.' did not arrive as a readable file. Try again.',
+                'Required' => $name.' did not arrive completely. Try again.',
+                default => $name.': this file cannot be used.',
+            };
+        }
+
+        $max = MediaUploadService::MAX_IMAGES_PER_REQUEST;
+
+        return match ($rule) {
+            'Max' => 'You sent '.count($files).' photos. Upload up to '.$max.' photos at a time. Split your selection into smaller batches.',
+            'Required', 'Array', 'Min' => 'Choose at least one photo to upload.',
+            default => 'The photo selection is invalid. Choose the photos again.',
+        };
+    }
+
+    private function uploadSummary(int $stored, int $reused, int $reusedProcessing, int $reusedFailed, array $rejected): string
+    {
         $message = "{$stored} new image(s), {$reused} reused.";
         if ($stored > 0) {
             $message .= ' Processing runs in the background; refresh shortly.';
@@ -84,11 +190,26 @@ class MediaController extends Controller
         if ($reusedFailed > 0) {
             $message .= " {$reusedFailed} reused image(s) failed processing — use “Retry processing” in the media library.";
         }
-        if ($errors !== []) {
-            $message .= ' Rejected: '.implode(' ', $errors);
+        if ($rejected !== []) {
+            $message .= ' Rejected: '.implode(' ', array_map(fn ($row) => ($row['name'] ?? 'file').': '.($row['error'] ?? 'rejected'), $rejected));
         }
 
-        return back()->withInput($draft)->with('status', trim($message));
+        return trim($message);
+    }
+
+    /** Picker-ready payload; derivative URLs only when ready. */
+    private function imagePayload(Project $project, ProjectMedia $media): array
+    {
+        $ready = $media->processing_status === ProjectMedia::STATUS_READY;
+
+        return [
+            'id' => $media->id,
+            'title' => $media->title,
+            'thumb_url' => $ready ? route('projects.media.show', [$project, $media, 'variant' => 'thumb']) : null,
+            'card_url' => $ready ? route('projects.media.show', [$project, $media, 'variant' => 'card']) : null,
+            'wide_url' => $ready ? route('projects.media.show', [$project, $media, 'variant' => 'wide']) : null,
+            'status' => $media->processing_status,
+        ];
     }
 
     /**

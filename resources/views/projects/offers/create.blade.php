@@ -13,7 +13,7 @@
             <p class="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">{{ $denial }}</p>
             <p class="mt-4"><a href="{{ route('projects.show', $project) }}" class="text-sm font-semibold text-emerald-700 hover:text-emerald-600">← Back to project</a></p>
         @else
-        <form method="POST" action="{{ route('projects.offers.store', $project) }}" class="rounded-xl border border-zinc-200 bg-white p-6 sm:p-8">
+        <form method="POST" action="{{ route('projects.offers.store', $project) }}" class="rounded-xl border border-zinc-200 bg-white p-6 sm:p-8" data-draft-key="offer-new-{{ $project->id }}">
             @csrf
             <div class="space-y-5">
                 <div>

@@ -24,7 +24,7 @@
         <section class="mt-6 rounded-xl border border-zinc-200 bg-zinc-50 p-5">
             <h2 class="text-sm font-semibold">Maintainer review</h2>
             @if($report->review_status->value === 'PENDING_REVIEW')
-                <form method="POST" action="{{ route('projects.reports.approve', [$project, $report]) }}" class="mt-3">
+                <form method="POST" action="{{ route('projects.reports.approve', [$project, $report]) }}" class="mt-3" data-draft-key="report-review-{{ $report->id }}">
                     @csrf
                     <label for="review_notes" class="block text-sm font-semibold">Review notes <span class="font-normal text-zinc-500">(stored separately; the AI JSON is never edited)</span></label>
                     <textarea id="review_notes" name="review_notes" rows="2" maxlength="5000" class="mt-1 block w-full rounded-lg border-zinc-300 shadow-sm focus:border-emerald-500 focus:ring-emerald-500">{{ old('review_notes', $report->review_notes) }}</textarea>

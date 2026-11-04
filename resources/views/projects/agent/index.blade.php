@@ -28,7 +28,7 @@
                     @endcan
                 @endif
             @else
-                <form method="POST" action="{{ route('projects.agent.store', $project) }}" class="mt-4">
+                <form method="POST" action="{{ route('projects.agent.store', $project) }}" class="mt-4" data-draft-key="agent-ask-{{ $project->id }}">
                     @csrf
                     <label for="agent-question" class="sr-only">Your question</label>
                     <textarea id="agent-question" name="question" rows="3" required minlength="2" maxlength="2000"
@@ -163,7 +163,7 @@
                 })();
             </script>
 
-            <form method="POST" action="{{ route('projects.agent.investigate', $project) }}" class="mt-4 border-t border-zinc-100 pt-4">
+            <form method="POST" action="{{ route('projects.agent.investigate', $project) }}" class="mt-4 border-t border-zinc-100 pt-4" data-draft-key="agent-investigate-{{ $project->id }}">
                 @csrf
                 <p class="text-sm font-semibold">2. Select processed files</p>
                 @if($artifacts->isEmpty())

@@ -243,7 +243,7 @@
                                 @auth
                                     <details class="text-sm">
                                         <summary class="cursor-pointer font-semibold text-emerald-700 hover:text-emerald-600">Propose correction</summary>
-                                        <form method="POST" action="{{ route('projects.observations.corrections.store', [$project, $observation]) }}" class="mt-2">
+                                        <form method="POST" action="{{ route('projects.observations.corrections.store', [$project, $observation]) }}" class="mt-2" data-draft-key="correction-{{ $observation->id }}">
                                             @csrf
                                             <label for="correction-{{ $observation->id }}" class="sr-only">Corrected text</label>
                                             <textarea id="correction-{{ $observation->id }}" name="body" rows="3" required maxlength="10000" placeholder="Write the corrected wording…"
@@ -272,7 +272,7 @@
                 @auth
                     <details class="mt-4 rounded-xl border border-zinc-200 bg-white p-5">
                         <summary class="cursor-pointer text-sm font-semibold text-emerald-700 hover:text-emerald-600">+ Share an observation</summary>
-                        <form method="POST" action="{{ route('projects.observations.store', $project) }}" class="mt-4 space-y-4">
+                        <form method="POST" action="{{ route('projects.observations.store', $project) }}" class="mt-4 space-y-4" data-draft-key="observation-new-{{ $project->id }}">
                             @csrf
                             <div>
                                 <label for="observation-title" class="block text-sm font-semibold">Title</label>

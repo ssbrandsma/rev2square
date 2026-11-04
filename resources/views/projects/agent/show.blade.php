@@ -137,7 +137,7 @@
 
         <section class="mt-6 rounded-xl border border-zinc-200 bg-white p-4 sm:p-6">
             <h2 class="text-sm font-semibold">Follow up</h2>
-            <form method="POST" action="{{ route('projects.agent.message', [$project, $conversation]) }}" class="mt-2">
+            <form method="POST" action="{{ route('projects.agent.message', [$project, $conversation]) }}" class="mt-2" data-draft-key="agent-followup-{{ $conversation->id }}">
                 @csrf
                 <label for="agent-followup" class="sr-only">Follow-up question</label>
                 <textarea id="agent-followup" name="question" rows="3" required minlength="2" maxlength="2000"

@@ -131,6 +131,22 @@
         position: static;
         transform: none;
     }
+
+    /* Block editors: textareas grow with content (see autoSize) and
+       stay manually resizable; the viewport-relative ceilings keep
+       very long text usable without swallowing the page. */
+    .editor-textarea {
+        resize: vertical;
+        max-height: 75vh;
+    }
+    .editor-counter-warn {
+        color: var(--color-amber-600);
+        font-weight: 600;
+    }
+    .editor-counter-over {
+        color: var(--color-red-600);
+        font-weight: 700;
+    }
     .story-body .doc-legend {
         list-style: none;
         padding-left: 0;

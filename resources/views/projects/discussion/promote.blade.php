@@ -16,7 +16,7 @@
             <p class="mt-1 whitespace-pre-line text-zinc-800">{{ \Illuminate\Support\Str::limit($post->body, 600) }}</p>
         </div>
 
-        <form method="POST" action="{{ route('projects.discussion.promote.store', [$project, $post]) }}" class="rounded-xl border border-zinc-200 bg-white p-6 sm:p-8">
+        <form method="POST" action="{{ route('projects.discussion.promote.store', [$project, $post]) }}" class="rounded-xl border border-zinc-200 bg-white p-6 sm:p-8" data-draft-key="post-promote-{{ $post->id }}">
             @csrf
             <div class="space-y-5">
                 <div>

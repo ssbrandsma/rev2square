@@ -2,8 +2,9 @@
 <p class="mt-1 text-sm text-zinc-500">Text supports <span class="font-mono">**bold**</span>, <span class="font-mono">*italic*</span>, <span class="font-mono">`code`</span>, and <span class="font-mono">[text](https://…)</span>. Images come from this project's library only.</p>
 <div data-story-editor data-doc-editor data-markers="1"
     data-json-field="doc_document"
+    data-draft-key="editor-doc-{{ $project->id }}-{{ $page?->id ?? 'new' }}"
     data-initial="{{ old('doc_document', json_encode($page?->body ?? ['version' => 1, 'blocks' => [['type' => 'paragraph', 'text' => '']] ])) }}"
-    data-images="{{ json_encode($images->map(fn ($m) => ['id' => $m->id, 'title' => $m->displayTitle(), 'alt' => $m->altText(), 'caption' => $m->caption, 'thumb_url' => $m->isReady() ? route('projects.media.show', [$project, $m, 'variant' => 'thumb']) : null])->values()) }}"
+    data-images="{{ json_encode($images->map(fn ($m) => ['id' => $m->id, 'title' => $m->displayTitle(), 'alt' => $m->altText(), 'caption' => $m->caption, 'thumb_url' => $m->isReady() ? route('projects.media.show', [$project, $m, 'variant' => 'thumb']) : null, 'card_url' => $m->isReady() ? route('projects.media.show', [$project, $m, 'variant' => 'card']) : null, 'wide_url' => $m->isReady() ? route('projects.media.show', [$project, $m, 'variant' => 'wide']) : null, 'status' => $m->processing_status])->values()) }}"
     data-docs="{{ json_encode($pages->map(fn ($p) => ['id' => $p->id, 'title' => $p->title, 'category' => $p->category->label()])->values()) }}">
     <input type="hidden" name="doc_document" value="" />
     <div class="flex flex-wrap items-center gap-2">
@@ -28,9 +29,9 @@
     <div data-image-picker hidden class="mt-3 rounded-xl border border-zinc-200 bg-zinc-50 p-4">
         <p class="text-sm font-semibold">Choose a project image</p>
         @if($images->isEmpty())
-            <p class="mt-1 text-sm text-zinc-500">No images yet — upload one below first.</p>
+            <p data-picker-empty class="mt-1 text-sm text-zinc-500">No images yet — upload one below first.</p>
         @else
-            <ul class="mt-2 grid grid-cols-3 gap-2 sm:grid-cols-4">
+            <ul class="mt-2 grid grid-cols-3 gap-2 sm:grid-cols-4 lg:grid-cols-6">
                 @foreach($images as $image)
                     <li>
                         <button type="button" data-pick="{{ $image->id }}" class="block w-full overflow-hidden rounded-lg border border-zinc-200 bg-white hover:border-emerald-500" @disabled(! $image->isReady())>

@@ -17,6 +17,7 @@ use App\Models\ProjectMedia;
 use App\Models\User;
 use App\Services\Docs\DocDocument;
 use App\Services\Docs\DocRenderer;
+use App\Services\Media\MediaUploadService;
 use App\Services\Media\StoryRenderer;
 use App\Support\Like;
 use App\Support\UniqueTitle;
@@ -76,6 +77,7 @@ class DocController extends Controller
             'page' => null,
             'images' => $this->libraryImages($project),
             'pages' => $this->linkTargets($project, null),
+            'uploadLimits' => MediaUploadService::uploadLimits(),
         ]);
     }
 
@@ -84,10 +86,11 @@ class DocController extends Controller
         Gate::authorize('update', $project);
 
         $data = $this->validatePage($request);
-        $document = $this->validateDocument($request, $project, $data['doc_document']);
-        if ($document === null) {
-            return back()->withInput()->withErrors(['doc_document' => 'The page contains an unsupported block.']);
+        $checked = $this->validateDocument($request, $project, $data['doc_document']);
+        if (! $checked['ok']) {
+            return back()->withInput()->withErrors(['doc_document' => $checked['error']]);
         }
+        $document = $checked['document'];
 
         UniqueTitle::abortIfDuplicate(
             $project->docPages()->where('category', $data['category']),
@@ -235,6 +238,7 @@ class DocController extends Controller
             'page' => $page,
             'images' => $this->libraryImages($project),
             'pages' => $this->linkTargets($project, $page->id),
+            'uploadLimits' => MediaUploadService::uploadLimits(),
         ]);
     }
 
@@ -243,10 +247,11 @@ class DocController extends Controller
         Gate::authorize('update', $project);
 
         $data = $this->validatePage($request, true);
-        $document = $this->validateDocument($request, $project, $data['doc_document'], $doc);
-        if ($document === null) {
-            return back()->withInput()->withErrors(['doc_document' => 'The page contains an unsupported block.']);
+        $checked = $this->validateDocument($request, $project, $data['doc_document'], $doc);
+        if (! $checked['ok']) {
+            return back()->withInput()->withErrors(['doc_document' => $checked['error']]);
         }
+        $document = $checked['document'];
 
         // Version check, page save, and revision insert commit
         // together under a row lock: two simultaneous saves cannot
@@ -743,13 +748,16 @@ class DocController extends Controller
         return $request->validate($rules);
     }
 
-    /** @return array<string, mixed>|null cleaned document */
-    private function validateDocument(Request $request, Project $project, string $json, ?int $ignoreDocId = null): ?array
+    /**
+     * @return array{ok: bool, document?: array<string, mixed>, error?: string}
+     *                                                                          The validator result verbatim: failures carry the specific
+     *                                                                          block/limit/recovery message, never a generic fallback.
+     */
+    private function validateDocument(Request $request, Project $project, string $json, ?int $ignoreDocId = null): array
     {
         $decoded = json_decode($json, true);
-        $result = DocDocument::validate($decoded, $project, $ignoreDocId);
 
-        return $result['ok'] ? $result['document'] : null;
+        return DocDocument::validate($decoded, $project, $ignoreDocId);
     }
 
     private function resolve(Project $project, int $doc, bool $withTrashed = false): DocPage
