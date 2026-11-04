@@ -9,6 +9,7 @@ use App\Services\AI\AIRateLimitedException;
 use App\Services\AI\AITimeoutException;
 use App\Services\Revival\AnalysisRunRepository;
 use App\Services\Revival\RevivalAnalysisService;
+use App\Support\RateLimit;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Throwable;
@@ -49,7 +50,7 @@ class AnalyzeProjectJob implements ShouldQueue
             $service->analyze($run);
         } catch (AIRateLimitedException $e) {
             if ($this->attempts() < $this->tries) {
-                $this->release(self::rateLimitDelay($e->resetsAt));
+                $this->release(RateLimit::delay($e->resetsAt));
             } else {
                 $runs->markFailed($run, AnalysisStatus::FailedModel, 'RATE_LIMITED', $e->getMessage());
                 $this->fail($e);
@@ -74,14 +75,5 @@ class AnalyzeProjectJob implements ShouldQueue
                 'Analysis failed: '.substr($e?->getMessage() ?? 'unknown error', 0, 300)
             );
         }
-    }
-
-    public static function rateLimitDelay(?int $resetsAt): int
-    {
-        if ($resetsAt === null) {
-            return 300;
-        }
-
-        return min(max($resetsAt - time() + 5, 60), 3600);
     }
 }

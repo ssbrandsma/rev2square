@@ -3,20 +3,21 @@
 namespace App\Http\Controllers;
 
 use App\Enums\CorrectionStatus;
+use App\Http\Controllers\Concerns\ManagesEvidence;
 use App\Models\AuditEvent;
-use App\Models\DeviceVariant;
 use App\Models\Observation;
 use App\Models\ObservationCorrection;
 use App\Models\Project;
 use App\Notifications\CorrectionReviewedNotification;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\View\View;
 
 class ObservationController extends Controller
 {
+    use ManagesEvidence;
+
     public function store(Request $request, Project $project): RedirectResponse
     {
         Gate::authorize('view', $project);
@@ -35,7 +36,7 @@ class ObservationController extends Controller
     public function edit(Project $project, Observation $observation): View
     {
         Gate::authorize('view', $project);
-        abort_unless($observation->project_id === $project->id, 404);
+        $this->assertBelongsToProject($project, $observation);
         abort_unless($this->canEdit($project, $observation, auth()->user()), 403);
 
         return view('projects.observations.edit', [
@@ -49,7 +50,7 @@ class ObservationController extends Controller
     public function update(Request $request, Project $project, Observation $observation): RedirectResponse
     {
         Gate::authorize('view', $project);
-        abort_unless($observation->project_id === $project->id, 404);
+        $this->assertBelongsToProject($project, $observation);
         abort_unless($this->canEdit($project, $observation, $request->user()), 403);
 
         $wasVerified = $observation->isVerified();
@@ -72,7 +73,7 @@ class ObservationController extends Controller
     public function verify(Request $request, Project $project, Observation $observation): RedirectResponse
     {
         Gate::authorize('update', $project);
-        abort_unless($observation->project_id === $project->id, 404);
+        $this->assertBelongsToProject($project, $observation);
 
         $data = $request->validate(['verified' => ['required', 'boolean']]);
 
@@ -97,7 +98,7 @@ class ObservationController extends Controller
     public function storeCorrection(Request $request, Project $project, Observation $observation): RedirectResponse
     {
         Gate::authorize('view', $project);
-        abort_unless($observation->project_id === $project->id, 404);
+        $this->assertBelongsToProject($project, $observation);
 
         $data = $request->validate(['body' => ['required', 'string', 'max:10000']]);
 
@@ -116,7 +117,7 @@ class ObservationController extends Controller
     public function reviewCorrection(Request $request, Project $project, Observation $observation, ObservationCorrection $correction): RedirectResponse
     {
         Gate::authorize('update', $project);
-        abort_unless($observation->project_id === $project->id, 404);
+        $this->assertBelongsToProject($project, $observation);
         abort_unless($correction->observation_id === $observation->id, 404);
         abort_unless($correction->status === CorrectionStatus::Pending, 422, 'This correction was already reviewed.');
 
@@ -160,13 +161,7 @@ class ObservationController extends Controller
             'device_variant_id' => ['nullable', 'integer', 'exists:device_variants,id'],
         ]);
 
-        if (($data['contributor_task_id'] ?? null) !== null) {
-            abort_unless(
-                $project->tasks()->whereKey($data['contributor_task_id'])->exists(),
-                422,
-                'Task does not belong to this project.'
-            );
-        }
+        $this->assertTaskBelongsToProject($project, $data['contributor_task_id'] ?? null);
 
         if (($data['device_variant_id'] ?? null) !== null) {
             abort_unless(
@@ -183,25 +178,5 @@ class ObservationController extends Controller
             'contributor_task_id' => $data['contributor_task_id'] ?? null,
             'device_variant_id' => $data['device_variant_id'] ?? null,
         ];
-    }
-
-    private function variantBelongsToProject(Project $project, int $variantId): bool
-    {
-        return DeviceVariant::whereKey($variantId)
-            ->whereIn('device_id', $project->devices()->pluck('devices.id'))
-            ->exists();
-    }
-
-    /** @return Collection<int, DeviceVariant> */
-    private function variants(Project $project)
-    {
-        return DeviceVariant::with('device')
-            ->whereIn('device_id', $project->devices()->pluck('devices.id'))
-            ->get();
-    }
-
-    private function canEdit(Project $project, Observation $observation, mixed $user): bool
-    {
-        return $observation->user_id === $user?->id || $project->managedBy($user);
     }
 }

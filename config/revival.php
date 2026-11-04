@@ -5,6 +5,8 @@ return [
     'github' => [
         // Outbound requests are restricted to this host; redirects elsewhere are rejected.
         'host' => 'api.github.com',
+        // Source archives download from this host, not the API host above.
+        'download_host' => env('GITHUB_DOWNLOAD_HOST', 'github.com'),
         'timeout' => (int) env('GITHUB_TIMEOUT', 15),
         // Optional token to raise the rate limit (60/hr anonymous). Never logged.
         'token' => env('GITHUB_TOKEN'),

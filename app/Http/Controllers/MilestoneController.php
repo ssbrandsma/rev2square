@@ -7,6 +7,7 @@ use App\Enums\MilestoneStatus;
 use App\Models\AuditEvent;
 use App\Models\Milestone;
 use App\Models\Project;
+use App\Support\UniqueTitle;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
@@ -44,7 +45,7 @@ class MilestoneController extends Controller
     public function edit(Project $project, Milestone $milestone): View
     {
         Gate::authorize('update', $project);
-        abort_unless($milestone->project_id === $project->id, 404);
+        $this->assertBelongsToProject($project, $milestone);
 
         return view('projects.milestones.edit', [
             'project' => $project,
@@ -55,7 +56,7 @@ class MilestoneController extends Controller
     public function update(Request $request, Project $project, Milestone $milestone): RedirectResponse
     {
         Gate::authorize('update', $project);
-        abort_unless($milestone->project_id === $project->id, 404);
+        $this->assertBelongsToProject($project, $milestone);
 
         $data = $this->validatedData($request, $project, $milestone);
 
@@ -74,7 +75,7 @@ class MilestoneController extends Controller
     public function retire(Request $request, Project $project, Milestone $milestone): RedirectResponse
     {
         Gate::authorize('update', $project);
-        abort_unless($milestone->project_id === $project->id, 404);
+        $this->assertBelongsToProject($project, $milestone);
 
         $milestone->update(['retired_at' => now()]);
 
@@ -87,7 +88,7 @@ class MilestoneController extends Controller
     public function restore(Request $request, Project $project, Milestone $milestone): RedirectResponse
     {
         Gate::authorize('update', $project);
-        abort_unless($milestone->project_id === $project->id, 404);
+        $this->assertBelongsToProject($project, $milestone);
 
         $milestone->update(['retired_at' => null]);
 
@@ -113,14 +114,7 @@ class MilestoneController extends Controller
         $status = MilestoneStatus::tryFrom($data['status'] ?? MilestoneStatus::Planned->value)
             ?? MilestoneStatus::Planned;
 
-        $duplicate = $project->milestones()->active()
-            ->whereRaw('LOWER(title) = ?', [mb_strtolower(trim($data['title']))])
-            ->when($ignore, fn ($query) => $query->whereKeyNot($ignore->id))
-            ->exists();
-
-        if ($duplicate) {
-            abort(422, 'A milestone with this title already exists on this project.');
-        }
+        UniqueTitle::abortIfDuplicate($project->milestones()->active(), $data['title'], $ignore, 'A milestone with this title already exists on this project.');
 
         return [
             'title' => trim($data['title']),

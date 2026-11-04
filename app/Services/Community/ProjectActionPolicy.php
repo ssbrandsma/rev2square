@@ -55,6 +55,25 @@ class ProjectActionPolicy
     }
 
     /**
+     * Null when the user may attach evidence files on this project,
+     * otherwise a human-readable reason. Unlike offers, evidence stays
+     * open on drafts (managers build it there); archived and paused
+     * projects accept no new uploads.
+     */
+    public static function evidenceDenial(Project $project, ?User $user): ?string
+    {
+        if ($project->activity === ProjectActivity::Archived) {
+            return 'This project is archived and no longer accepts new uploads. Existing records stay visible.';
+        }
+
+        if ($project->activity === ProjectActivity::Paused) {
+            return 'This project is paused. Uploads reopen when the maintainers reactivate it.';
+        }
+
+        return null;
+    }
+
+    /**
      * Null when the user may post/reply/chat on this project, otherwise a
      * human-readable reason. Draft visibility is enforced by the view gate;
      * this covers the conversation lifecycle on visible projects.

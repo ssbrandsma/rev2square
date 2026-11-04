@@ -102,7 +102,7 @@ class ChatController extends Controller
     public function destroy(Request $request, Project $project, ChatMessage $message): RedirectResponse
     {
         Gate::authorize('view', $project);
-        abort_unless($message->project_id === $project->id, 404);
+        $this->assertBelongsToProject($project, $message);
 
         $user = $request->user();
         $isAuthor = $message->user_id === $user->id;

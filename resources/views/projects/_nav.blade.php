@@ -12,6 +12,9 @@
         <a href="{{ route('projects.updates.index', $project) }}"
             @if($active === 'updates') aria-current="page" @endif
             class="whitespace-nowrap border-b-2 px-3 py-3 text-sm font-semibold {{ $active === 'updates' ? 'border-emerald-600 text-zinc-900' : 'border-transparent text-zinc-500 hover:text-zinc-900' }}">Updates @if($updatesCount > 0)<span class="ml-1 rounded-full bg-zinc-100 px-1.5 py-0.5 text-[11px] text-zinc-700">{{ $updatesCount }}</span>@endif</a>
+        <a href="{{ route('projects.docs.index', $project) }}"
+            @if($active === 'docs') aria-current="page" @endif
+            class="whitespace-nowrap border-b-2 px-3 py-3 text-sm font-semibold {{ $active === 'docs' ? 'border-emerald-600 text-zinc-900' : 'border-transparent text-zinc-500 hover:text-zinc-900' }}">Documentation</a>
         <a href="{{ route('projects.chat.show', $project) }}"
             @if($active === 'chat') aria-current="page" @endif
             class="whitespace-nowrap border-b-2 px-3 py-3 text-sm font-semibold {{ $active === 'chat' ? 'border-emerald-600 text-zinc-900' : 'border-transparent text-zinc-500 hover:text-zinc-900' }}">Chat</a>

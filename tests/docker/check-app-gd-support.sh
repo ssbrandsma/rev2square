@@ -1,11 +1,13 @@
 #!/bin/sh
-# Regression test: the production PHP image must ship GD with JPEG/PNG
-# support. The queue worker refuses image jobs without
+# Regression test: the production PHP image must ship GD with
+# JPEG/PNG/WebP support. The queue worker refuses image jobs without
 # imagecreatefromstring() (every cover upload then fails with "Image
-# processing is temporarily unavailable"), and avatar uploads 500.
-# Prod once lost GD while dev kept it, so this pins BOTH Dockerfiles
-# and then proves the REAL built image decodes/encodes as the
-# www-data runtime user (never root alone).
+# processing is temporarily unavailable"), avatar uploads 500, and any
+# advertised-but-uncompiled codec (WebP once was) fails every upload
+# of that format. Prod once lost GD while dev kept it, so this pins
+# BOTH Dockerfiles and then proves the REAL built image
+# decodes/encodes each format as the www-data runtime user (never
+# root alone).
 #
 # Requires: docker CLI + running daemon + network for the image build
 # (several minutes). Safe: temp tag only; the working tree and any
@@ -38,20 +40,22 @@ fail() { echo "FAIL: $1"; FAIL=1; }
 
 echo "--- Dockerfile pins ---"
 
-if grep -q -- 'docker-php-ext-configure gd --with-jpeg' "$PROD_DOCKERFILE" \
+if grep -q -- 'docker-php-ext-configure gd --with-jpeg --with-webp' "$PROD_DOCKERFILE" \
     && grep -q -- 'libpng-dev' "$PROD_DOCKERFILE" \
     && grep -q -- 'libjpeg-dev' "$PROD_DOCKERFILE" \
+    && grep -q -- 'libwebp-dev' "$PROD_DOCKERFILE" \
     && grep -q -- 'dom gd' "$PROD_DOCKERFILE"; then
-    pass "Dockerfile.prod installs gd with jpeg support"
+    pass "Dockerfile.prod installs gd with jpeg+webp support"
 else
-    fail "Dockerfile.prod must install gd with jpeg support (configure + libpng/libjpeg + gd)"
+    fail "Dockerfile.prod must install gd with jpeg+webp support (configure + libpng/libjpeg/libwebp + gd)"
 fi
 
-if grep -q -- 'docker-php-ext-configure gd --with-jpeg' "$DEV_DOCKERFILE" \
+if grep -q -- 'docker-php-ext-configure gd --with-jpeg --with-webp' "$DEV_DOCKERFILE" \
+    && grep -q -- 'libwebp-dev' "$DEV_DOCKERFILE" \
     && grep -q -- ' dom gd' "$DEV_DOCKERFILE"; then
-    pass "dev Dockerfile keeps gd (parity pin)"
+    pass "dev Dockerfile keeps gd with jpeg+webp (parity pin)"
 else
-    fail "dev Dockerfile must keep gd (parity pin)"
+    fail "dev Dockerfile must keep gd with jpeg+webp (parity pin)"
 fi
 
 if ! command -v docker >/dev/null 2>&1; then
@@ -109,8 +113,17 @@ else
     fail "PNG encode/decode roundtrip works"
 fi
 
-WEBP=$(docker run --rm --entrypoint php "$TAG" -r '$i = gd_info(); echo !empty($i["WebP Support"]) ? "yes" : "no";' 2>/dev/null)
-echo "INFO: image WebP Support=$WEBP (informational; image/webp is advertised but unsupported)"
+if docker run --rm --entrypoint php "$TAG" -r '$i = gd_info(); exit(!empty($i["WebP Support"]) ? 0 : 1);' >/dev/null 2>&1; then
+    pass "gd_info reports WebP support"
+else
+    fail "gd_info reports WebP support"
+fi
+
+if docker run --rm --entrypoint php "$TAG" -r '$c = imagecreatetruecolor(8, 8); ob_start(); $ok = imagewebp($c); $b = (string) ob_get_clean(); $d = ($ok && $b !== "") ? @imagecreatefromstring($b) : false; exit($d instanceof GdImage ? 0 : 1);' >/dev/null 2>&1; then
+    pass "WebP encode/decode roundtrip works"
+else
+    fail "WebP encode/decode roundtrip works"
+fi
 
 if [ "$FAIL" -eq 0 ]; then
     echo "== all app GD checks passed =="

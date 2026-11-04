@@ -17,6 +17,9 @@ return [
         'max_completion_tokens' => (int) env('META_MAX_TOKENS', 16000),
     ],
 
+    // Provider models the admin settings screen accepts for ai.model.
+    'supported_models' => ['muse-spark-1.3'],
+
     // Approximate input-token budget (chars/4) for evidence selection per analysis.
     'analysis_token_budget' => (int) env('AI_ANALYSIS_TOKEN_BUDGET', 60000),
 

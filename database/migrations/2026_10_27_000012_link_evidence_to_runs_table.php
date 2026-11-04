@@ -6,6 +6,9 @@ use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
 {
+    // Name note: despite the *_table suffix, this migration creates no
+    // table. It only adds a foreign key to the existing evidence_sources
+    // table linking it to analysis_runs.
     public function up(): void
     {
         Schema::table('evidence_sources', function (Blueprint $table) {

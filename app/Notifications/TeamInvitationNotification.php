@@ -3,22 +3,12 @@
 namespace App\Notifications;
 
 use App\Models\TeamInvitation;
-use Illuminate\Bus\Queueable;
-use Illuminate\Notifications\Notification;
 
-class TeamInvitationNotification extends Notification
+class TeamInvitationNotification extends DatabaseNotification
 {
-    use Queueable;
-
     public function __construct(
         private readonly TeamInvitation $invitation,
     ) {}
-
-    /** @return list<string> */
-    public function via(object $notifiable): array
-    {
-        return ['database'];
-    }
 
     /** @return array<string, mixed> */
     public function toArray(object $notifiable): array

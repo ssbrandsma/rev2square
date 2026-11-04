@@ -3,22 +3,12 @@
 namespace App\Notifications;
 
 use App\Models\OfferMessage;
-use Illuminate\Bus\Queueable;
-use Illuminate\Notifications\Notification;
 
-class OfferMessageNotification extends Notification
+class OfferMessageNotification extends DatabaseNotification
 {
-    use Queueable;
-
     public function __construct(
         private readonly OfferMessage $message,
     ) {}
-
-    /** @return list<string> */
-    public function via(object $notifiable): array
-    {
-        return ['database'];
-    }
 
     /** @return array<string, mixed> */
     public function toArray(object $notifiable): array

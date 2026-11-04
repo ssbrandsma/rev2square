@@ -1,4 +1,4 @@
-@props(['project' => null])
+@props(['project' => null, 'linkedVariant' => null])
 @php($editing = $project !== null)
 <div class="grid gap-5 sm:grid-cols-3">
     <div>
@@ -30,7 +30,6 @@
     </div>
 </div>
 @php($linkedDevice = $project?->devices->first())
-@php($linkedVariant = $linkedDevice?->pivot?->device_variant_id ? \App\Models\DeviceVariant::find($linkedDevice->pivot->device_variant_id) : null)
 <fieldset class="rounded-xl border border-zinc-200 p-4">
     <legend class="px-1 text-sm font-semibold">Device to revive</legend>
     <p class="text-xs text-zinc-500">Link the hardware this project revives.@if($editing) Clearing both fields unlinks the device.@endif</p>

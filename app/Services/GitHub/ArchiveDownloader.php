@@ -12,9 +12,10 @@ use Illuminate\Support\Str;
  * Downloads one official GitHub source archive per immutable revision and
  * caches it on the local (private) disk.
  *
- * - Source URL pattern: https://github.com/{owner}/{repo}/archive/{sha}.zip
+ * - Source URL pattern: https://{download host}/{owner}/{repo}/archive/{sha}.zip
  * - Redirects are followed manually, at most 3 hops, only onto the
- *   GitHub-owned hosts below (codeload serves the actual bytes).
+ *   download host and the GitHub-owned hosts below (codeload serves the
+ *   actual bytes).
  * - No Authorization header is sent: source archives are public and the
  *   download host does not accept API tokens.
  * - Bodies stream to disk (sink); an archive is never held fully in memory.
@@ -33,6 +34,7 @@ class ArchiveDownloader
         private readonly int $timeout,
         private readonly int $maxArchiveBytes,
         private readonly int $archiveCacheDays,
+        private readonly string $downloadHost = 'github.com',
     ) {}
 
     public static function fromConfig(): self
@@ -44,6 +46,7 @@ class ArchiveDownloader
             (int) $config['archive_timeout'],
             (int) $config['max_archive_bytes'],
             (int) $config['archive_cache_days'],
+            $config['download_host'] ?? 'github.com',
         );
     }
 
@@ -65,7 +68,7 @@ class ArchiveDownloader
             return $this->describeCached($key, $owner, $name, $sha);
         }
 
-        $url = "https://github.com/{$owner}/{$name}/archive/{$sha}.zip";
+        $url = "https://{$this->downloadHost}/{$owner}/{$name}/archive/{$sha}.zip";
         $tmp = 'import-archives/tmp/'.Str::random(40).'.zip';
         Storage::disk('local')->makeDirectory('import-archives/tmp');
 
@@ -138,7 +141,7 @@ class ArchiveDownloader
             'bytes' => (int) (filesize($absolute) ?: 0),
             'cached' => true,
             'downloaded_at' => $sidecar['downloaded_at'] ?? null,
-            'source_url' => "https://github.com/{$owner}/{$name}/archive/{$sha}.zip",
+            'source_url' => "https://{$this->downloadHost}/{$owner}/{$name}/archive/{$sha}.zip",
         ];
     }
 
@@ -200,12 +203,14 @@ class ArchiveDownloader
 
         if (str_starts_with($location, '/')) {
             $parts = parse_url($current);
-            $location = ($parts['scheme'] ?? 'https').'://'.($parts['host'] ?? 'github.com').$location;
+            $location = ($parts['scheme'] ?? 'https').'://'.($parts['host'] ?? $this->downloadHost).$location;
         }
 
         $parts = parse_url($location);
 
-        if (($parts['scheme'] ?? null) !== 'https' || ! in_array($parts['host'] ?? null, self::REDIRECT_HOSTS, true)) {
+        $allowed = array_unique(array_merge([$this->downloadHost], self::REDIRECT_HOSTS));
+
+        if (($parts['scheme'] ?? null) !== 'https' || ! in_array($parts['host'] ?? null, $allowed, true)) {
             throw new GitHubException('Archive redirect to untrusted destination rejected.');
         }
 

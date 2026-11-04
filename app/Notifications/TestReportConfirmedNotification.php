@@ -3,24 +3,14 @@
 namespace App\Notifications;
 
 use App\Models\TestReport;
-use Illuminate\Bus\Queueable;
-use Illuminate\Notifications\Notification;
 
-class TestReportConfirmedNotification extends Notification
+class TestReportConfirmedNotification extends DatabaseNotification
 {
-    use Queueable;
-
     public function __construct(
         private readonly TestReport $report,
         private readonly string $confirmerName,
         private readonly ?string $note = null,
     ) {}
-
-    /** @return list<string> */
-    public function via(object $notifiable): array
-    {
-        return ['database'];
-    }
 
     /** @return array<string, mixed> */
     public function toArray(object $notifiable): array

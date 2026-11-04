@@ -17,6 +17,7 @@ use App\Services\Discussion\Mentions;
 use Illuminate\Database\QueryException;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Str;
 use Illuminate\View\View;
@@ -122,8 +123,9 @@ class DiscussionController extends Controller
 
         AuditEvent::record($type === DiscussionType::Update ? 'discussion.update_published' : 'discussion.posted', $request->user(), $project, $post);
 
-        $this->notifyMentions($project, $post, $request->user());
-        $this->notifyNewThread($project, $post, $request->user());
+        $followers = $project->follows()->with('user')->get()->pluck('user')->filter();
+        $this->notifyMentions($project, $post, $request->user(), $followers);
+        $this->notifyNewThread($project, $post, $request->user(), $followers);
 
         return redirect()->route(
             $type === DiscussionType::Update ? 'projects.updates.show' : 'projects.discussion.show',
@@ -171,7 +173,7 @@ class DiscussionController extends Controller
     public function reply(Request $request, Project $project, DiscussionPost $post): RedirectResponse
     {
         Gate::authorize('view', $project);
-        abort_unless($post->project_id === $project->id, 404);
+        $this->assertBelongsToProject($project, $post);
         abort_unless($post->parent_id === null, 422, 'Replies attach to the thread, not to another reply.');
 
         if ($denial = ProjectActionPolicy::discussionDenial($project, $request->user())) {
@@ -207,8 +209,9 @@ class DiscussionController extends Controller
 
         AuditEvent::record('discussion.replied', $request->user(), $project, $reply);
 
+        $followers = $project->follows()->with('user')->get()->pluck('user')->filter();
         $this->notifyReply($project, $post, $reply, $request->user());
-        $this->notifyMentions($project, $reply, $request->user());
+        $this->notifyMentions($project, $reply, $request->user(), $followers);
 
         return redirect(route('projects.discussion.show', [$project, $post]).'#reply-'.$reply->id)
             ->with('status', 'Reply posted.');
@@ -217,7 +220,7 @@ class DiscussionController extends Controller
     public function edit(Project $project, DiscussionPost $post): View
     {
         Gate::authorize('view', $project);
-        abort_unless($post->project_id === $project->id, 404);
+        $this->assertBelongsToProject($project, $post);
         abort_unless($post->user_id === auth()->id(), 403, 'Only the author can edit this post.');
 
         return view('projects.discussion.edit', ['project' => $project, 'post' => $post]);
@@ -226,7 +229,7 @@ class DiscussionController extends Controller
     public function update(Request $request, Project $project, DiscussionPost $post): RedirectResponse
     {
         Gate::authorize('view', $project);
-        abort_unless($post->project_id === $project->id, 404);
+        $this->assertBelongsToProject($project, $post);
         abort_unless($post->user_id === $request->user()->id, 403, 'Only the author can edit this post.');
 
         $data = $request->validate([
@@ -250,11 +253,11 @@ class DiscussionController extends Controller
         )->with('status', 'Post updated.');
     }
 
-    public function destroy(Project $project, DiscussionPost $post): RedirectResponse
+    public function destroy(Request $request, Project $project, DiscussionPost $post): RedirectResponse
     {
         Gate::authorize('view', $project);
-        abort_unless($post->project_id === $project->id, 404);
-        abort_unless($post->user_id === request()->user()->id, 403, 'Only the author can remove this post.');
+        $this->assertBelongsToProject($project, $post);
+        abort_unless($post->user_id === $request->user()->id, 403, 'Only the author can remove this post.');
 
         $thread = $post->thread();
         $isThread = $post->is($thread);
@@ -265,13 +268,13 @@ class DiscussionController extends Controller
         // with replies stay as tombstones so context survives.
         if ($isThread && $post->replies()->exists()) {
             $post->delete();
-            AuditEvent::record('discussion.removed', request()->user(), $project, $post, ['tombstone' => true]);
+            AuditEvent::record('discussion.removed', $request->user(), $project, $post, ['tombstone' => true]);
 
             return redirect()->route($showRoute, [$project, $thread])
                 ->with('status', 'Post removed. Replies stay readable under a placeholder.');
         }
 
-        AuditEvent::record('discussion.removed', request()->user(), $project, $post);
+        AuditEvent::record('discussion.removed', $request->user(), $project, $post);
         $post->forceDelete();
 
         if ($isThread) {
@@ -284,7 +287,7 @@ class DiscussionController extends Controller
     public function moderate(Request $request, Project $project, DiscussionPost $post): RedirectResponse
     {
         Gate::authorize('update', $project);
-        abort_unless($post->project_id === $project->id, 404);
+        $this->assertBelongsToProject($project, $post);
 
         $data = $request->validate(['reason' => ['required', 'string', 'max:500']]);
 
@@ -316,28 +319,28 @@ class DiscussionController extends Controller
             : 'Discussion closed. Existing conversation stays readable.');
     }
 
-    public function mute(Project $project, DiscussionPost $post): RedirectResponse
+    public function mute(Request $request, Project $project, DiscussionPost $post): RedirectResponse
     {
         Gate::authorize('view', $project);
-        abort_unless($post->project_id === $project->id, 404);
+        $this->assertBelongsToProject($project, $post);
 
         $thread = $post->thread();
 
         DiscussionMute::firstOrCreate([
-            'user_id' => request()->user()->id,
+            'user_id' => $request->user()->id,
             'discussion_post_id' => $thread->id,
         ]);
 
         return back()->with('status', 'Thread muted. You will not be notified about new replies.');
     }
 
-    public function unmute(Project $project, DiscussionPost $post): RedirectResponse
+    public function unmute(Request $request, Project $project, DiscussionPost $post): RedirectResponse
     {
         Gate::authorize('view', $project);
-        abort_unless($post->project_id === $project->id, 404);
+        $this->assertBelongsToProject($project, $post);
 
         DiscussionMute::where([
-            'user_id' => request()->user()->id,
+            'user_id' => $request->user()->id,
             'discussion_post_id' => $post->thread()->id,
         ])->delete();
 
@@ -351,41 +354,43 @@ class DiscussionController extends Controller
      */
     private function notifyReply(Project $project, DiscussionPost $thread, DiscussionPost $reply, User $actor): void
     {
-        $recipients = collect([$thread->author])
+        $candidates = collect([$thread->author])
             ->concat($thread->follows()->with('user')->get()->pluck('user'))
             ->filter()
-            ->unique('id')
+            ->unique('id');
+
+        // One mute lookup for all candidates instead of one per recipient.
+        $mutedIds = DiscussionMute::where('discussion_post_id', $thread->id)
+            ->whereIn('user_id', $candidates->pluck('id')->all())
+            ->pluck('user_id')
+            ->all();
+
+        $recipients = $candidates
             ->reject(fn (User $user): bool => $user->id === $actor->id
                 || ! $user->wantsNotification('discussion_replies')
-                || DiscussionMute::where(['user_id' => $user->id, 'discussion_post_id' => $thread->id])->exists());
+                || in_array($user->id, $mutedIds, true));
 
         foreach ($recipients as $recipient) {
             $recipient->notify(new DiscussionReplyNotification($reply));
         }
     }
 
-    private function notifyNewThread(Project $project, DiscussionPost $thread, User $actor): void
+    /** @param Collection<int, User> $followers project followers, users loaded */
+    private function notifyNewThread(Project $project, DiscussionPost $thread, User $actor, Collection $followers): void
     {
-        if ($thread->type === DiscussionType::Update) {
-            $followers = $project->follows()->with('user')->get()->pluck('user')->filter()
-                ->reject(fn (User $user): bool => $user->id === $actor->id || ! $user->wantsNotification('project_updates'));
+        $isUpdate = $thread->type === DiscussionType::Update;
+        $preference = $isUpdate ? 'project_updates' : 'followed_posts';
 
-            foreach ($followers as $follower) {
-                $follower->notify(new ProjectUpdateNotification($thread));
-            }
+        $recipients = $followers
+            ->reject(fn (User $user): bool => $user->id === $actor->id || ! $user->wantsNotification($preference));
 
-            return;
-        }
-
-        $followers = $project->follows()->with('user')->get()->pluck('user')->filter()
-            ->reject(fn (User $user): bool => $user->id === $actor->id || ! $user->wantsNotification('followed_posts'));
-
-        foreach ($followers as $follower) {
-            $follower->notify(new FollowedPostNotification($thread));
+        foreach ($recipients as $recipient) {
+            $recipient->notify($isUpdate ? new ProjectUpdateNotification($thread) : new FollowedPostNotification($thread));
         }
     }
 
-    private function notifyMentions(Project $project, DiscussionPost $post, User $actor): void
+    /** @param Collection<int, User> $followers project followers, users loaded */
+    private function notifyMentions(Project $project, DiscussionPost $post, User $actor, Collection $followers): void
     {
         $candidates = $project->managers();
 
@@ -396,8 +401,6 @@ class DiscussionController extends Controller
             ->get()
             ->pluck('author')
             ->filter();
-
-        $followers = $project->follows()->with('user')->get()->pluck('user')->filter();
 
         $mentioned = Mentions::parse($post->body, $candidates->concat($participants)->concat($followers)->unique('id'))
             ->reject(fn (User $user): bool => $user->id === $actor->id || ! $user->wantsNotification('mentions'));

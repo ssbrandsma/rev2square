@@ -7,8 +7,14 @@
 // changes warning, draft preservation across validation failures (the
 // JSON round-trips through old input), and a client-side preview that
 // mirrors the server renderer (escape-first; the server re-validates).
+import { fromClient } from '../docs/markers.js';
+
 (function () {
     'use strict';
+
+    // True while a docs photo upload (which carries the editor draft
+    // along) is submitting, so the unsaved-changes warning stays quiet.
+    let uploadingDocDraft = false;
 
     function esc(s) {
         return String(s).replace(/[&<>"']/g, function (c) {
@@ -65,6 +71,9 @@
         const images = JSON.parse(root.getAttribute('data-images') || '[]');
         const imageById = {};
         images.forEach(function (img) { imageById[img.id] = img; });
+        const docsPages = JSON.parse(root.getAttribute('data-docs') || '[]');
+        const markersEnabled = root.getAttribute('data-markers') === '1';
+        const jsonFieldName = root.getAttribute('data-json-field') || 'story_document';
 
         let doc;
         try {
@@ -77,7 +86,7 @@
         }
 
         const list = root.querySelector('[data-blocks]');
-        const jsonField = root.querySelector('input[name="story_document"]');
+        const jsonField = root.querySelector('input[name="' + jsonFieldName + '"]');
         const saveButton = root.querySelector('[data-save]');
         const saveState = root.querySelector('[data-save-state]');
         const undoButton = root.querySelector('[data-undo]');
@@ -118,6 +127,7 @@
             const labels = {
                 paragraph: 'Paragraph', heading: 'Heading', list: 'List',
                 quote: 'Quote', code: 'Code', image: 'Image',
+                step: 'Step', doc_link: 'Page link',
             };
             return 'Block ' + (index + 1) + ': ' + (labels[block.type] || block.type);
         }
@@ -143,6 +153,197 @@
             button.className = 'rounded-lg border border-zinc-300 px-2 py-1 text-xs font-semibold text-zinc-700 hover:bg-zinc-50';
             button.addEventListener('click', onClick);
             return button;
+        }
+
+        function textLine(label, value, maxLength, onInput, placeholder) {
+            const wrap = document.createElement('label');
+            wrap.className = 'block text-xs text-zinc-500';
+            wrap.textContent = label;
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.className = 'mt-1 block w-full rounded-lg border-zinc-300 text-sm shadow-sm focus:border-emerald-500 focus:ring-emerald-500';
+            input.value = value || '';
+            if (maxLength) {
+                input.maxLength = maxLength;
+            }
+            if (placeholder) {
+                input.placeholder = placeholder;
+            }
+            input.addEventListener('input', function () { onInput(input.value); });
+            wrap.appendChild(input);
+            return wrap;
+        }
+
+        function numberField(label, value, min, max, onInput) {
+            const wrap = document.createElement('label');
+            wrap.className = 'block text-xs text-zinc-500';
+            wrap.textContent = label;
+            const input = document.createElement('input');
+            input.type = 'number';
+            input.min = String(min);
+            input.max = String(max);
+            input.className = 'mt-1 block w-full rounded-lg border-zinc-300 text-sm';
+            input.value = String(value);
+            input.addEventListener('change', function () {
+                let n = Number(input.value);
+                if (Number.isNaN(n)) {
+                    n = min;
+                }
+                n = Math.min(max, Math.max(min, n));
+                input.value = String(n);
+                onInput(n);
+            });
+            wrap.appendChild(input);
+            return wrap;
+        }
+
+        function renderMarkerEditor(block) {
+            if (!Array.isArray(block.markers)) {
+                block.markers = [];
+            }
+            const wrap = document.createElement('div');
+            wrap.className = 'space-y-2 rounded-lg border border-zinc-200 p-2';
+            const head = document.createElement('p');
+            head.className = 'text-xs font-semibold text-zinc-500';
+            head.textContent = 'Annotation markers (' + block.markers.length + '/20) — click the photo to place, or add below and set coordinates';
+            wrap.appendChild(head);
+
+            const info = imageById[block.media_id];
+            if (info && info.thumb_url) {
+                const placer = document.createElement('button');
+                placer.type = 'button';
+                placer.className = 'relative block overflow-hidden rounded-lg border border-zinc-200';
+                placer.title = 'Click to place a marker';
+                placer.setAttribute('aria-label', 'Place a marker on the photo');
+                const img = document.createElement('img');
+                img.src = info.thumb_url;
+                img.alt = '';
+                img.className = 'block max-h-48 w-auto';
+                img.draggable = false;
+                placer.appendChild(img);
+                block.markers.forEach(function (marker, n) {
+                    const dot = document.createElement('span');
+                    dot.className = 'doc-marker';
+                    dot.style.left = (marker.x * 100) + '%';
+                    dot.style.top = (marker.y * 100) + '%';
+                    dot.textContent = String(n + 1);
+                    dot.setAttribute('aria-hidden', 'true');
+                    placer.appendChild(dot);
+                });
+                placer.addEventListener('click', function (event) {
+                    if (block.markers.length >= 20) {
+                        return;
+                    }
+                    const at = fromClient(img.getBoundingClientRect(), event.clientX, event.clientY);
+                    if (at === null) {
+                        return;
+                    }
+                    block.markers.push({ x: at.x, y: at.y, label: '', note: '' });
+                    commit();
+                });
+                wrap.appendChild(placer);
+            }
+
+            block.markers.forEach(function (marker, n) {
+                const row = document.createElement('div');
+                row.className = 'grid grid-cols-[auto_1fr_1fr] items-end gap-2 rounded-lg bg-white p-2';
+                const badge = document.createElement('span');
+                badge.className = 'doc-marker doc-marker-static';
+                badge.textContent = String(n + 1);
+                badge.setAttribute('aria-hidden', 'true');
+                row.appendChild(badge);
+                const fields = document.createElement('div');
+                fields.className = 'col-span-2 grid gap-2 sm:grid-cols-2';
+                fields.appendChild(textLine('Label', marker.label || '', 80, function (v) { marker.label = v; touch(); }));
+                fields.appendChild(textLine('Note', marker.note || '', 500, function (v) { marker.note = v; touch(); }));
+                fields.appendChild(numberField('X %', Math.round(marker.x * 100), 0, 100, function (v) { marker.x = v / 100; commit(); }));
+                fields.appendChild(numberField('Y %', Math.round(marker.y * 100), 0, 100, function (v) { marker.y = v / 100; commit(); }));
+                row.appendChild(fields);
+                const remove = smallButton('Remove', 'Remove marker ' + (n + 1), function () {
+                    block.markers.splice(n, 1);
+                    commit();
+                });
+                row.appendChild(remove);
+                wrap.appendChild(row);
+            });
+
+            if (block.markers.length < 20) {
+                wrap.appendChild(smallButton('Add marker at center', 'Add a marker, then set its coordinates', function () {
+                    block.markers.push({ x: 0.5, y: 0.5, label: '', note: '' });
+                    commit();
+                }));
+            }
+            return wrap;
+        }
+
+        function renderStepPhotos(block) {
+            if (!Array.isArray(block.media_ids)) {
+                block.media_ids = [];
+            }
+            const wrap = document.createElement('div');
+            wrap.className = 'space-y-2';
+            const head = document.createElement('p');
+            head.className = 'text-xs text-zinc-500';
+            head.textContent = 'Photos (' + block.media_ids.length + '/4)';
+            wrap.appendChild(head);
+
+            const attached = document.createElement('div');
+            attached.className = 'flex flex-wrap gap-2';
+            block.media_ids.forEach(function (id) {
+                const info = imageById[id];
+                const chip = document.createElement('span');
+                chip.className = 'flex items-center gap-1 rounded-lg border border-zinc-200 bg-white p-1 text-xs';
+                if (info && info.thumb_url) {
+                    const thumb = document.createElement('img');
+                    thumb.src = info.thumb_url;
+                    thumb.alt = '';
+                    thumb.className = 'h-10 w-10 rounded object-cover';
+                    chip.appendChild(thumb);
+                }
+                const name = document.createElement('span');
+                name.textContent = info ? (info.title || 'untitled') : 'Image #' + id + ' (unavailable)';
+                chip.appendChild(name);
+                chip.appendChild(smallButton('×', 'Remove photo', function () {
+                    block.media_ids = block.media_ids.filter(function (kept) { return kept !== id; });
+                    commit();
+                }));
+                attached.appendChild(chip);
+            });
+            wrap.appendChild(attached);
+
+            const ready = images.filter(function (img) { return img.thumb_url && block.media_ids.indexOf(img.id) === -1; });
+            if (ready.length > 0 && block.media_ids.length < 4) {
+                const details = document.createElement('details');
+                const summary = document.createElement('summary');
+                summary.className = 'cursor-pointer text-xs font-semibold text-zinc-700';
+                summary.textContent = 'Attach a library photo';
+                details.appendChild(summary);
+                const grid = document.createElement('div');
+                grid.className = 'mt-2 grid grid-cols-4 gap-2 sm:grid-cols-6';
+                ready.forEach(function (img) {
+                    const pick = document.createElement('button');
+                    pick.type = 'button';
+                    pick.className = 'overflow-hidden rounded-lg border border-zinc-200 bg-white hover:border-emerald-500';
+                    pick.title = img.title || 'untitled';
+                    pick.setAttribute('aria-label', 'Attach ' + (img.title || 'untitled'));
+                    const thumb = document.createElement('img');
+                    thumb.src = img.thumb_url;
+                    thumb.alt = '';
+                    thumb.loading = 'lazy';
+                    thumb.className = 'aspect-square w-full object-cover';
+                    pick.appendChild(thumb);
+                    pick.addEventListener('click', function () {
+                        if (block.media_ids.length < 4) {
+                            block.media_ids.push(img.id);
+                            commit();
+                        }
+                    });
+                    grid.appendChild(pick);
+                });
+                details.appendChild(grid);
+                wrap.appendChild(details);
+            }
+            return wrap;
         }
 
         function render() {
@@ -238,6 +439,76 @@
                     layout.addEventListener('change', function () { block.layout = layout.value; commit(); });
                     layoutLabel.appendChild(layout);
                     body.appendChild(layoutLabel);
+                    if (markersEnabled) {
+                        body.appendChild(textLine('Caption override (optional, falls back to library caption)', block.caption || '', 500, function (v) {
+                            if (v.trim() === '') {
+                                delete block.caption;
+                            } else {
+                                block.caption = v;
+                            }
+                            touch();
+                        }));
+                        body.appendChild(textLine('Alt text override (optional, falls back to library text)', block.alt || '', 500, function (v) {
+                            if (v.trim() === '') {
+                                delete block.alt;
+                            } else {
+                                block.alt = v;
+                            }
+                            touch();
+                        }));
+                        body.appendChild(renderMarkerEditor(block));
+                    }
+                } else if (block.type === 'step') {
+                    const stepNo = doc.blocks.slice(0, index + 1).filter(function (b) { return b.type === 'step'; }).length;
+                    const num = document.createElement('p');
+                    num.className = 'text-xs font-semibold text-zinc-500';
+                    num.textContent = 'Step ' + stepNo + ' (numbered automatically)';
+                    body.appendChild(num);
+                    body.appendChild(textLine('Title (optional)', block.title || '', 200, function (v) {
+                        if (v.trim() === '') {
+                            delete block.title;
+                        } else {
+                            block.title = v;
+                        }
+                        touch();
+                    }));
+                    body.appendChild(textarea('Instructions', block.text || '', 3, function (v) {
+                        block.text = v;
+                        touch();
+                    }));
+                    body.appendChild(renderStepPhotos(block));
+                } else if (block.type === 'doc_link') {
+                    if (docsPages.length === 0) {
+                        const note = document.createElement('p');
+                        note.className = 'text-sm text-zinc-500';
+                        note.textContent = 'No other documentation pages exist yet.';
+                        body.appendChild(note);
+                    } else {
+                        const pickLabel = document.createElement('label');
+                        pickLabel.className = 'block text-xs text-zinc-500';
+                        pickLabel.textContent = 'Linked page';
+                        const pick = document.createElement('select');
+                        pick.className = 'mt-1 block w-full rounded-lg border-zinc-300 text-sm';
+                        docsPages.forEach(function (p) {
+                            const opt = document.createElement('option');
+                            opt.value = String(p.id);
+                            opt.textContent = '[' + p.category + '] ' + p.title;
+                            pick.appendChild(opt);
+                        });
+                        pick.value = String(block.doc_id || docsPages[0].id);
+                        block.doc_id = Number(pick.value);
+                        pick.addEventListener('change', function () { block.doc_id = Number(pick.value); commit(); });
+                        pickLabel.appendChild(pick);
+                        body.appendChild(pickLabel);
+                    }
+                    body.appendChild(textLine('Label (optional, falls back to page title)', block.label || '', 200, function (v) {
+                        if (v.trim() === '') {
+                            delete block.label;
+                        } else {
+                            block.label = v;
+                        }
+                        touch();
+                    }));
                 }
                 item.appendChild(body);
                 list.appendChild(item);
@@ -306,9 +577,29 @@
                     html += '<' + tag + '>' + (block.items || []).map(function (i) { return '<li>' + inlinePreview(i) + '</li>'; }).join('') + '</' + tag + '>';
                 } else if (block.type === 'image') {
                     const info = imageById[block.media_id];
+                    const caption = (block.caption || '').trim() !== '' ? block.caption : (info && info.caption ? info.caption : '');
+                    const alt = (block.alt || '').trim() !== '' ? block.alt : (info && info.alt ? info.alt : '');
                     html += info && info.thumb_url
-                        ? '<figure><img src="' + esc(info.thumb_url) + '" alt="' + esc(info.alt || '') + '" style="max-width:100%;border-radius:12px" />' + (info.caption ? '<figcaption>' + esc(info.caption) + '</figcaption>' : '') + '</figure>'
+                        ? '<figure><img src="' + esc(info.thumb_url) + '" alt="' + esc(alt) + '" style="max-width:100%;border-radius:12px" />' + (caption ? '<figcaption>' + esc(caption) + '</figcaption>' : '') + '</figure>'
                         : '<p><em>[Image unavailable]</em></p>';
+                    (block.markers || []).forEach(function (marker, n) {
+                        const label = ((marker.label || '') + ' ' + (marker.note || '')).trim();
+                        html += '<p><em>Marker ' + (n + 1) + (label ? ': ' + esc(label) : '') + '</em></p>';
+                    });
+                } else if (block.type === 'step') {
+                    const stepNo = doc.blocks.slice(0, doc.blocks.indexOf(block) + 1).filter(function (b) { return b.type === 'step'; }).length;
+                    html += '<h4>Step ' + stepNo + ((block.title || '').trim() !== '' ? ': ' + inlinePreview(block.title) : '') + '</h4>';
+                    html += '<p>' + inlinePreview(block.text || '') + '</p>';
+                    (block.media_ids || []).forEach(function (id) {
+                        const info = imageById[id];
+                        html += info && info.thumb_url
+                            ? '<figure><img src="' + esc(info.thumb_url) + '" alt="' + esc(info.alt || '') + '" style="max-width:100%;border-radius:12px" /></figure>'
+                            : '<p><em>[Image unavailable]</em></p>';
+                    });
+                } else if (block.type === 'doc_link') {
+                    const target = docsPages.filter(function (p) { return p.id === block.doc_id; })[0];
+                    const label = (block.label || '').trim() !== '' ? block.label : (target ? target.title : '');
+                    html += '<p><em>Page link: ' + esc(label || '(choose a page)') + '</em></p>';
                 }
             });
             previewPane.innerHTML = html || '<p><em>Nothing to preview yet.</em></p>';
@@ -332,6 +623,16 @@
                 }
                 if (type === 'code') {
                     block.text = '';
+                }
+                if (type === 'step') {
+                    block.title = '';
+                    block.text = '';
+                    block.media_ids = [];
+                }
+                if (type === 'doc_link') {
+                    delete block.text;
+                    block.doc_id = docsPages.length > 0 ? docsPages[0].id : null;
+                    block.label = '';
                 }
                 doc.blocks.push(block);
                 commit();
@@ -434,7 +735,7 @@
         }
 
         window.addEventListener('beforeunload', function (event) {
-            if (dirty && !saving) {
+            if (dirty && !saving && !uploadingDocDraft) {
                 event.preventDefault();
             }
         });
@@ -610,10 +911,29 @@
         });
     }
 
+    function initDocUpload(scope) {
+        scope.querySelectorAll('[data-doc-upload]').forEach(function (form) {
+            form.addEventListener('submit', function () {
+                const main = document.querySelector('form[action*="/docs"] input[name="doc_document"]');
+                form.querySelectorAll('[data-draft-field]').forEach(function (hidden) {
+                    const name = hidden.getAttribute('data-draft-field');
+                    if (name === 'doc_document') {
+                        hidden.value = main ? main.value : '';
+                        return;
+                    }
+                    const field = document.querySelector('form[action*="/docs"]:not([data-doc-upload]) [name="' + name + '"]');
+                    hidden.value = field ? field.value : '';
+                });
+                uploadingDocDraft = true;
+            });
+        });
+    }
+
     document.addEventListener('DOMContentLoaded', function () {
         document.querySelectorAll('[data-story-editor]').forEach(initEditor);
         document.querySelectorAll('[data-gallery-order]').forEach(initGalleryOrder);
         document.querySelectorAll('[data-focal]').forEach(initFocalPoint);
         initLightbox(document);
+        initDocUpload(document);
     });
 })();

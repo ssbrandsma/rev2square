@@ -4,7 +4,10 @@ namespace App\Http\Controllers;
 
 use App\Enums\DiscussionType;
 use App\Models\AuditEvent;
+use App\Models\DocFinding;
+use App\Models\DocPage;
 use App\Models\Project;
+use App\Services\Docs\DocRenderer;
 use App\Services\Media\StoryRenderer;
 use Illuminate\Support\Facades\Gate;
 use Symfony\Component\HttpFoundation\Response;
@@ -40,6 +43,9 @@ class ExportController extends Controller
         'discussion.posted',
         'discussion.update_published',
         'discussion.moderated',
+        'doc.created',
+        'doc.published',
+        'doc.finding_status',
     ];
 
     public function show(Project $project, string $format): Response
@@ -179,6 +185,28 @@ class ExportController extends Controller
             'updates' => $threads->where('update', true)->values()->all(),
             'discussion' => $threads->where('update', false)->values()->all(),
             'history' => $history,
+            // Published docs for every viewer; drafts only for
+            // managers. Markdown plus metadata — image binaries and
+            // storage paths never leave the export.
+            'docs' => $project->docPages()
+                ->readable($project, auth()->user())
+                ->with('findings')
+                ->orderBy('category')->orderBy('sort_order')->orderBy('id')
+                ->get()
+                ->map(fn (DocPage $page): array => [
+                    'title' => $page->title,
+                    'summary' => $page->summary,
+                    'category' => $page->category->label(),
+                    'status' => $page->publication_status->label(),
+                    'revision' => $page->current_rev,
+                    'updated_at' => $page->updated_at->toIso8601String(),
+                    'markdown' => DocRenderer::toMarkdown(is_array($page->body) ? $page->body : null, $project, auth()->user()),
+                    'findings' => $page->findings->map(fn (DocFinding $finding): array => [
+                        'status' => $finding->status->label(),
+                        'statement' => $finding->statement,
+                        'measurement_notes' => $finding->measurement_notes,
+                    ])->all(),
+                ])->all(),
         ];
 
         if ($format === 'json') {

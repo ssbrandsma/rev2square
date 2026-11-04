@@ -13,19 +13,13 @@ use App\Services\Artifacts\ArtifactStorage;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
+use Tests\Support\SeedsProjects;
 use Tests\TestCase;
 
 class ArtifactStorageSharingTest extends TestCase
 {
     use RefreshDatabase;
-
-    private function seedProject(): array
-    {
-        $owner = User::factory()->create();
-        $project = Project::factory()->draft()->create(['owner_id' => $owner->id]);
-
-        return [$project->fresh(), $owner];
-    }
+    use SeedsProjects;
 
     private function tinyElf(): string
     {

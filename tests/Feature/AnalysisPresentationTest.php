@@ -11,11 +11,11 @@ use App\Models\ProjectArtifact;
 use App\Models\Repository;
 use App\Models\User;
 use App\Services\Admin\AppSettings;
-use App\Services\Artifacts\ArtifactExtractor;
 use App\Support\WarningLabels;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Storage;
 use Tests\Support\BinaryFixtures;
+use Tests\Support\SeedsProjects;
 use Tests\TestCase;
 
 /**
@@ -26,32 +26,7 @@ use Tests\TestCase;
 class AnalysisPresentationTest extends TestCase
 {
     use RefreshDatabase;
-
-    private function seedProject(): array
-    {
-        $owner = User::factory()->create();
-        $project = Project::factory()->draft()->create(['owner_id' => $owner->id]);
-
-        return [$project->fresh(), $owner];
-    }
-
-    private function storeBytes(Project $project, User $uploader, string $bytes, string $name): ProjectArtifact
-    {
-        $artifact = ProjectArtifact::create([
-            'project_id' => $project->id,
-            'uploader_id' => $uploader->id,
-            'original_name' => $name,
-            'byte_size' => strlen($bytes),
-            'sha256' => hash('sha256', $bytes),
-            'storage_key' => str()->random(40),
-            'format' => ArtifactExtractor::detect($bytes, $name),
-            'state' => ProjectArtifact::STATE_QUEUED,
-        ]);
-        Storage::disk('artifacts')->put($artifact->rawPath(), $bytes);
-        ArtifactExtractor::extract($artifact->fresh());
-
-        return $artifact->fresh();
-    }
+    use SeedsProjects;
 
     private function putEvidence(ProjectArtifact $artifact, array $evidence): string
     {

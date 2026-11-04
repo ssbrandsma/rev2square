@@ -4,7 +4,6 @@ namespace App\Services\Binary\Adapters;
 
 use App\Models\BinaryAnalysis;
 use App\Models\WorkerCapability;
-use App\Services\Binary\Sandbox\EvidenceValidator;
 use App\Services\Binary\Sandbox\SpoolClient;
 use App\Services\Ops\DeployHints;
 

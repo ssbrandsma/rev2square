@@ -4,22 +4,12 @@ namespace App\Notifications;
 
 use App\Models\DiscussionPost;
 use App\Services\Discussion\Markup;
-use Illuminate\Bus\Queueable;
-use Illuminate\Notifications\Notification;
 
-class MentionNotification extends Notification
+class MentionNotification extends DatabaseNotification
 {
-    use Queueable;
-
     public function __construct(
         private readonly DiscussionPost $post,
     ) {}
-
-    /** @return list<string> */
-    public function via(object $notifiable): array
-    {
-        return ['database'];
-    }
 
     /** @return array<string, mixed> */
     public function toArray(object $notifiable): array

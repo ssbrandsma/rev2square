@@ -11,6 +11,7 @@ use App\Services\Admin\AdminUserService;
 use App\Services\Admin\AppSettings;
 use App\Services\Admin\AiBudgets;
 use App\Services\Admin\LastAdminException;
+use App\Support\Like;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
@@ -27,7 +28,7 @@ class UserController extends Controller
 
         $users = User::query()
             ->when($request->string('q')->toString() !== '', function ($query) use ($request): void {
-                $term = '%'.str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $request->string('q')->toString()).'%';
+                $term = Like::contains($request->string('q')->toString());
                 $query->where(fn ($q) => $q->where('name', 'like', $term)->orWhere('email', 'like', $term));
             })
             ->when($request->string('role')->toString() !== '', fn ($q) => $q->where('global_role', $request->string('role')->toString()))

@@ -37,7 +37,7 @@ class BinaryAnalysisController extends Controller
     public function store(Request $request, Project $project, ProjectArtifact $artifact): RedirectResponse
     {
         Gate::authorize('view', $project);
-        $this->authorizeArtifact($project, $artifact);
+        $this->assertBelongsToProject($project, $artifact);
 
         $data = $request->validate([
             'target' => 'nullable|string|max:64',
@@ -370,16 +370,9 @@ class BinaryAnalysisController extends Controller
         return $out;
     }
 
-    private function authorizeArtifact(Project $project, ProjectArtifact $artifact): void
-    {
-        if ($artifact->project_id !== $project->id) {
-            abort(404);
-        }
-    }
-
     private function authorizeAnalysis(Project $project, ProjectArtifact $artifact, BinaryAnalysis $analysis): void
     {
-        $this->authorizeArtifact($project, $artifact);
+        $this->assertBelongsToProject($project, $artifact);
         if ($analysis->project_artifact_id !== $artifact->id) {
             abort(404);
         }

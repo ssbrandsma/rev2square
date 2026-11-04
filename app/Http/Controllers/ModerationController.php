@@ -18,14 +18,14 @@ class ModerationController extends Controller
 {
     public function storePost(Request $request, Project $project, DiscussionPost $post): RedirectResponse
     {
-        abort_unless($post->project_id === $project->id, 404);
+        $this->assertBelongsToProject($project, $post);
 
         return $this->store($request, $project, $post);
     }
 
     public function storeMessage(Request $request, Project $project, ChatMessage $message): RedirectResponse
     {
-        abort_unless($message->project_id === $project->id, 404);
+        $this->assertBelongsToProject($project, $message);
 
         return $this->store($request, $project, $message);
     }
@@ -49,17 +49,11 @@ class ModerationController extends Controller
     {
         Gate::authorize('moderate', $project);
 
-        $postIds = $project->discussionPosts()->withTrashed()->pluck('id');
-        $messageIds = $project->chatMessages()->withTrashed()->pluck('id');
-
+        // Scope reports to this project's posts and messages in the
+        // database instead of plucking every id into PHP first.
         $reports = Report::with(['reporter', 'reportable'])
-            ->where(function ($query) use ($postIds, $messageIds): void {
-                $query->where(fn ($query) => $query
-                    ->where('reportable_type', DiscussionPost::class)
-                    ->whereIn('reportable_id', $postIds))
-                    ->orWhere(fn ($query) => $query
-                        ->where('reportable_type', ChatMessage::class)
-                        ->whereIn('reportable_id', $messageIds));
+            ->whereHasMorph('reportable', [DiscussionPost::class, ChatMessage::class], function ($query) use ($project): void {
+                $query->withTrashed()->where('project_id', $project->id);
             })
             ->orderByRaw("status = 'pending' DESC, id DESC")
             ->paginate(20);

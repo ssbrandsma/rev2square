@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Jobs\ProcessMediaJob;
 use App\Models\Project;
 use App\Models\ProjectMedia;
+use App\Services\Docs\DocMediaUsage;
 use App\Services\Media\ImageProcessor;
 use App\Services\Media\MediaUploadService;
 use App\Services\Media\StoryDocument;
@@ -61,8 +62,16 @@ class MediaController extends Controller
 
         $this->bumpVersion($project);
 
+        // Docs uploads ride along with the in-progress page draft so
+        // uploading mid-edit never loses unsaved work; other callers
+        // post none of these fields and are unaffected. The version
+        // token rides along too: without it, uploading from a stale
+        // editor would re-render the form with the current token and
+        // let the next save silently overwrite another editor.
+        $draft = $request->only(['title', 'summary', 'category', 'publication_status', 'sort_order', 'doc_document', 'doc_version', 'rev_note']);
+
         if ($stored === 0 && $reused === 0) {
-            return back()->with('error', implode(' ', $errors));
+            return back()->withInput($draft)->with('error', implode(' ', $errors));
         }
 
         $message = "{$stored} new image(s), {$reused} reused.";
@@ -79,7 +88,7 @@ class MediaController extends Controller
             $message .= ' Rejected: '.implode(' ', $errors);
         }
 
-        return back()->with('status', trim($message));
+        return back()->withInput($draft)->with('status', trim($message));
     }
 
     /**
@@ -91,7 +100,7 @@ class MediaController extends Controller
     public function retry(Project $project, ProjectMedia $media): RedirectResponse
     {
         Gate::authorize('update', $project);
-        $this->authorizeMedia($project, $media);
+        $this->assertBelongsToProject($project, $media);
 
         if (! $media->isImage()) {
             return back()->with('error', 'Only images can be reprocessed.');
@@ -165,7 +174,7 @@ class MediaController extends Controller
     public function update(Request $request, Project $project, ProjectMedia $media): RedirectResponse
     {
         Gate::authorize('update', $project);
-        $this->authorizeMedia($project, $media);
+        $this->assertBelongsToProject($project, $media);
 
         $data = $request->validate([
             'title' => 'nullable|string|max:255',
@@ -220,7 +229,7 @@ class MediaController extends Controller
     public function setCover(Request $request, Project $project, ProjectMedia $media): RedirectResponse
     {
         Gate::authorize('update', $project);
-        $this->authorizeMedia($project, $media);
+        $this->assertBelongsToProject($project, $media);
 
         if (! $media->isImage()) {
             return back()->with('error', 'Only images can be the cover.');
@@ -249,7 +258,7 @@ class MediaController extends Controller
     public function destroy(Project $project, ProjectMedia $media): RedirectResponse
     {
         Gate::authorize('update', $project);
-        $this->authorizeMedia($project, $media);
+        $this->assertBelongsToProject($project, $media);
 
         // Never silently break the story or cover: unlink explicitly.
         $unlinked = [];
@@ -260,6 +269,18 @@ class MediaController extends Controller
 
         if ($project->hasRichStory() && in_array($media->id, StoryDocument::mediaIds($project->story_document), true)) {
             return back()->with('error', 'This image is used in the project story. Remove it from the story first — deleting it would break the story.');
+        }
+
+        $docsPage = $project->docPages()->get()->first(fn ($page): bool => in_array($media->id, $page->mediaIds(), true));
+        if ($docsPage !== null) {
+            return back()->with('error', 'This image is used in the documentation page “'.$docsPage->title.'”. Remove it there first — deleting it would break the page.');
+        }
+
+        // Retained revisions and finding references pin historical
+        // evidence: deleting bytes they point at would silently
+        // destroy cited sources and break later restoration.
+        if (DocMediaUsage::inHistory($project->id, $media->id)) {
+            return back()->with('error', 'This image is pinned by documentation history or findings. Historical evidence keeps its media — the bytes cannot be removed while a revision or finding references them.');
         }
 
         $disk = Storage::disk('local');
@@ -285,7 +306,7 @@ class MediaController extends Controller
     public function show(Request $request, Project $project, ProjectMedia $media): BinaryFileResponse|StreamedResponse
     {
         Gate::authorize('view', $project);
-        $this->authorizeMedia($project, $media);
+        $this->assertBelongsToProject($project, $media);
         abort_unless($media->isImage(), 404);
 
         $variant = $request->query('variant', 'card');
@@ -318,7 +339,7 @@ class MediaController extends Controller
     public function download(Project $project, ProjectMedia $media): StreamedResponse
     {
         Gate::authorize('view', $project);
-        $this->authorizeMedia($project, $media);
+        $this->assertBelongsToProject($project, $media);
         abort_unless($media->kind === ProjectMedia::KIND_FILE, 404);
 
         return Storage::disk('local')->download(
@@ -326,13 +347,6 @@ class MediaController extends Controller
             $media->original_name,
             ['X-Content-Type-Options' => 'nosniff']
         );
-    }
-
-    private function authorizeMedia(Project $project, ProjectMedia $media): void
-    {
-        if ($media->project_id !== $project->id) {
-            abort(404);
-        }
     }
 
     private function bumpVersion(Project $project): void

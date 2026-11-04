@@ -15,6 +15,7 @@ use App\Models\User;
 use App\Services\AI\AIRateLimitedException;
 use App\Services\AI\AITimeoutException;
 use App\Services\Revival\RevivalAnalysisService;
+use App\Support\RateLimit;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Queue;
 use Livewire\Livewire;
@@ -173,9 +174,9 @@ class RevivalAnalysisTest extends TestCase
 
     public function test_rate_limit_delay_math(): void
     {
-        $this->assertSame(300, AnalyzeProjectJob::rateLimitDelay(null));
-        $this->assertSame(65, AnalyzeProjectJob::rateLimitDelay(time() + 60));
-        $this->assertSame(3600, AnalyzeProjectJob::rateLimitDelay(time() + 100000));
+        $this->assertSame(300, RateLimit::delay(null));
+        $this->assertSame(65, RateLimit::delay(time() + 60));
+        $this->assertSame(3600, RateLimit::delay(time() + 100000));
     }
 
     public function test_job_failed_hook_marks_run_failed(): void

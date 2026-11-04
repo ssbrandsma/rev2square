@@ -9,6 +9,7 @@ use App\Models\ContributorTask;
 use App\Models\Project;
 use App\Models\User;
 use App\Services\Community\TaskWorkflow;
+use App\Support\UniqueTitle;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
@@ -19,7 +20,7 @@ class TaskController extends Controller
     public function show(Project $project, ContributorTask $task): View
     {
         Gate::authorize('view', $project);
-        abort_unless($task->project_id === $project->id, 404);
+        $this->assertBelongsToProject($project, $task);
 
         $task->load(['milestone', 'assignee']);
 
@@ -33,7 +34,7 @@ class TaskController extends Controller
             ? TaskWorkflow::allowedTransitions($task, auth()->user())
             : [];
 
-        $candidates = $project->offers()->with('user')->get()->pluck('user')->filter()->unique('id')->values();
+        $candidates = User::whereHas('offers', fn ($query) => $query->where('project_id', $project->id))->get();
         if ($task->assignee && ! $candidates->contains('id', $task->assignee->id)) {
             $candidates->push($task->assignee);
         }
@@ -82,7 +83,7 @@ class TaskController extends Controller
     public function edit(Project $project, ContributorTask $task): View
     {
         Gate::authorize('update', $project);
-        abort_unless($task->project_id === $project->id, 404);
+        $this->assertBelongsToProject($project, $task);
 
         return view('projects.tasks.edit', [
             'project' => $project,
@@ -94,7 +95,7 @@ class TaskController extends Controller
     public function update(Request $request, Project $project, ContributorTask $task): RedirectResponse
     {
         Gate::authorize('update', $project);
-        abort_unless($task->project_id === $project->id, 404);
+        $this->assertBelongsToProject($project, $task);
 
         $task->update([
             ...$this->validatedData($request, $project, $task),
@@ -110,7 +111,7 @@ class TaskController extends Controller
     public function transition(Request $request, Project $project, ContributorTask $task): RedirectResponse
     {
         Gate::authorize('view', $project);
-        abort_unless($task->project_id === $project->id, 404);
+        $this->assertBelongsToProject($project, $task);
 
         $data = $request->validate([
             'status' => ['required', 'string'],
@@ -129,7 +130,7 @@ class TaskController extends Controller
     public function assign(Request $request, Project $project, ContributorTask $task): RedirectResponse
     {
         Gate::authorize('update', $project);
-        abort_unless($task->project_id === $project->id, 404);
+        $this->assertBelongsToProject($project, $task);
 
         $data = $request->validate([
             'assignee_id' => ['nullable', 'integer', 'exists:users,id'],
@@ -165,14 +166,7 @@ class TaskController extends Controller
             );
         }
 
-        $duplicate = $project->tasks()->active()
-            ->whereRaw('LOWER(title) = ?', [mb_strtolower(trim($data['title']))])
-            ->when($ignore, fn ($query) => $query->whereKeyNot($ignore->id))
-            ->exists();
-
-        if ($duplicate) {
-            abort(422, 'A task with this title already exists on this project.');
-        }
+        UniqueTitle::abortIfDuplicate($project->tasks()->active(), $data['title'], $ignore, 'A task with this title already exists on this project.');
 
         return [
             'title' => trim($data['title']),

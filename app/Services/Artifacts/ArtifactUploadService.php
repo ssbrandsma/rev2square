@@ -131,6 +131,85 @@ final class ArtifactUploadService
         return ['ok' => true, 'artifact' => $artifact, 'reused' => false];
     }
 
+    /**
+     * Store a batch of uploaded files, collecting per-file outcomes.
+     *
+     * @param  iterable<mixed>  $files
+     * @return array{stored: list<ProjectArtifact>, reused: int, errors: list<string>}
+     */
+    public static function storeBatch(Project $project, User $uploader, iterable $files, bool $asRaw = false): array
+    {
+        $maxBytes = (int) config('artifacts.max_upload_bytes');
+        $stored = [];
+        $reused = 0;
+        $errors = [];
+
+        foreach ($files as $file) {
+            if (! $file instanceof UploadedFile) {
+                $errors[] = 'One upload slot did not contain a file. Select the files again.';
+
+                continue;
+            }
+            $name = $file->getClientOriginalName() ?: 'file';
+            if (! $file->isValid()) {
+                $errors[] = $name.': '.self::uploadErrorMessage($file->getError(), $maxBytes);
+
+                continue;
+            }
+            if (($file->getSize() ?? 0) > $maxBytes) {
+                $errors[] = $name.': this file is '.self::humanBytes((int) $file->getSize())
+                    .'; the limit is '.self::humanBytes($maxBytes).'. Narrow the capture or split the input and try again.';
+
+                continue;
+            }
+
+            $result = self::store($project, $uploader, $file, $asRaw);
+
+            if ($result['ok']) {
+                if (! empty($result['reused'])) {
+                    $reused++;
+                } else {
+                    $stored[] = $result['artifact'];
+                }
+            } else {
+                $errors[] = $name.': '.$result['error'];
+            }
+        }
+
+        return ['stored' => $stored, 'reused' => $reused, 'errors' => $errors];
+    }
+
+    /**
+     * @param  list<ProjectArtifact>  $stored
+     * @param  list<string>  $errors
+     */
+    public static function resultMessage(array $stored, int $reused, array $errors): string
+    {
+        $parts = [];
+        if ($stored !== []) {
+            $parts[] = count($stored).' new ('.implode(', ', array_map(fn ($a) => $a->original_name, $stored)).' — extraction queued)';
+        }
+        if ($reused > 0) {
+            $parts[] = $reused.' duplicate'.($reused === 1 ? '' : 's').' reused without re-uploading';
+        }
+        if ($errors !== []) {
+            $parts[] = count($errors).' rejected: '.implode(' ', $errors);
+        }
+
+        return 'Upload result: '.implode('; ', $parts).'.';
+    }
+
+    /**
+     * The post_max_size limit in bytes when the request body exceeds it
+     * (PHP then empties the request), null otherwise.
+     */
+    public static function exceededPostLimit(int $contentLength): ?int
+    {
+        $postMax = self::phpBytes((string) ini_get('post_max_size'));
+
+        return $postMax > 0 && $contentLength > $postMax ? $postMax : null;
+    }
+
     public static function humanBytes(int $bytes): string
     {
         if ($bytes >= 1024 * 1024) {
@@ -142,5 +221,45 @@ final class ArtifactUploadService
         }
 
         return $bytes.' bytes';
+    }
+
+    /**
+     * Distinct, actionable message per PHP upload failure. Oversized
+     * files name the application limit; interruptions and server-side
+     * failures say so instead of blaming the file format.
+     */
+    private static function uploadErrorMessage(int $error, int $maxBytes): string
+    {
+        return match ($error) {
+            UPLOAD_ERR_INI_SIZE, UPLOAD_ERR_FORM_SIZE => 'exceeds the per-file limit of '
+                .self::humanBytes($maxBytes).'. Narrow the capture or split the input and try again.',
+            UPLOAD_ERR_PARTIAL => 'was interrupted during upload. Check the connection and try again.',
+            UPLOAD_ERR_NO_FILE => 'no file was received. Select the file again.',
+            UPLOAD_ERR_NO_TMP_DIR, UPLOAD_ERR_CANT_WRITE, UPLOAD_ERR_EXTENSION => 'could not be saved on the server. Try again later.',
+            default => 'did not complete. Try again.',
+        };
+    }
+
+    /**
+     * Parse a php.ini shorthand byte value (e.g. "80M", "1G", "512K").
+     * Returns 0 for unlimited/empty.
+     */
+    private static function phpBytes(string $value): int
+    {
+        $value = trim($value);
+        if ($value === '' || $value === '-1') {
+            return 0;
+        }
+        $last = strtolower(substr($value, -1));
+        if (ctype_digit($last)) {
+            return (int) $value;
+        }
+
+        return match ($last) {
+            'g' => (int) substr($value, 0, -1) * 1024 * 1024 * 1024,
+            'm' => (int) substr($value, 0, -1) * 1024 * 1024,
+            'k' => (int) substr($value, 0, -1) * 1024,
+            default => (int) $value,
+        };
     }
 }

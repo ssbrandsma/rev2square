@@ -7,6 +7,7 @@ use App\Services\GitHub\GitHubClient;
 use App\Services\GitHub\GitHubException;
 use App\Services\GitHub\GitHubTimeoutException;
 use App\Services\GitHub\RateLimitedException;
+use Illuminate\Support\Collection;
 
 /**
  * Orchestrates one bounded repository import in two stages:
@@ -54,8 +55,38 @@ class GitHubRepositoryImporter
     public function import(Repository $repository, ?string $branch = null): array
     {
         $config = config('revival.github');
-        $warnings = [];
+        $progress = new ImportProgress;
 
+        $defaultBranch = $this->syncMeta($repository);
+        $sha = $this->client->getBranchSha($repository->owner, $repository->name, $branch ?? $defaultBranch);
+
+        if (($upToDate = $this->upToDateResponse($repository, $sha, $config)) !== null) {
+            return $upToDate;
+        }
+
+        // Same-commit re-import (e.g. after a budget change): identical blobs,
+        // so stored bytes are reused without re-downloading and the stored
+        // set only grows. New commits start from an empty set.
+        $existingEvidence = $repository->last_commit_sha === $sha
+            ? $repository->currentEvidence()->get()->keyBy('path')
+            : collect();
+
+        // Legacy imports (evidence but no inventory rows) fall through to a
+        // full re-import so inventory and evidence stay consistent.
+        $built = $this->buildInventory($repository, $sha, $config, $progress);
+        $planned = $this->planQueue($repository, $sha, $built['inventory'], $built['scored'], $config, $existingEvidence, $progress);
+        $this->downloadQueued($repository, $sha, $planned['queue'], $planned['byPath'], $existingEvidence, $config, $progress);
+        $this->retainGrandfathered($existingEvidence, $planned['byPath'], $progress);
+
+        return $this->persistResult($repository, $sha, $built['inventory'], $built['scored'], $planned['byPath'], $config, $progress);
+    }
+
+    /**
+     * Refresh the repository's cached GitHub metadata. Returns the
+     * default branch for SHA resolution.
+     */
+    private function syncMeta(Repository $repository): string
+    {
         $meta = $this->client->getRepo($repository->owner, $repository->name);
         $defaultBranch = $meta['default_branch'] ?? 'main';
 
@@ -72,8 +103,15 @@ class GitHubRepositoryImporter
             ],
         ])->save();
 
-        $sha = $this->client->getBranchSha($repository->owner, $repository->name, $branch ?? $defaultBranch);
+        return $defaultBranch;
+    }
 
+    /**
+     * The no-op response when the same commit was already imported
+     * with identical budgets, or null to run a full import.
+     */
+    private function upToDateResponse(Repository $repository, string $sha, array $config): ?array
+    {
         if ($repository->last_commit_sha === $sha
             && $repository->currentEvidence()->exists()
             && $repository->currentInventory()->exists()
@@ -91,21 +129,23 @@ class GitHubRepositoryImporter
             ];
         }
 
-        // Same-commit re-import (e.g. after a budget change): identical blobs,
-        // so stored bytes are reused without re-downloading and the stored
-        // set only grows. New commits start from an empty set.
-        $existingEvidence = $repository->last_commit_sha === $sha
-            ? $repository->currentEvidence()->get()->keyBy('path')
-            : collect();
+        return null;
+    }
 
-        // Legacy imports (evidence but no inventory rows) fall through to a
-        // full re-import so inventory and evidence stay consistent.
-        $tree = $this->fetchTree($repository, $sha, $config, $warnings);
+    /**
+     * Stage 1 — inventory: fetch the tree, classify every blob,
+     * score the eligible rows.
+     *
+     * @return array{inventory: array<string, mixed>, scored: list<array<string, mixed>>}
+     */
+    private function buildInventory(Repository $repository, string $sha, array $config, ImportProgress $progress): array
+    {
+        $tree = $this->fetchTree($repository, $sha, $config, $progress->warnings);
 
         $inventory = InventoryBuilder::build($tree, $config);
 
         if ($inventory['capped']) {
-            $warnings[] = sprintf(
+            $progress->warnings[] = sprintf(
                 'Inventory capped at %d entries; %d further paths were not recorded.',
                 count($inventory['entries']),
                 $inventory['over_cap']
@@ -129,6 +169,18 @@ class GitHubRepositoryImporter
 
         $this->storeScores($repository, $sha, $scored);
 
+        return ['inventory' => $inventory, 'scored' => $scored];
+    }
+
+    /**
+     * Plan the download queue and seed the skip list. Stored evidence
+     * wins: a path already imported for this commit is never
+     * re-listed as an exclusion.
+     *
+     * @return array{queue: list<array<string, mixed>>, byPath: Collection<string, array<string, mixed>>}
+     */
+    private function planQueue(Repository $repository, string $sha, array $inventory, array $scored, array $config, Collection $existingEvidence, ImportProgress $progress): array
+    {
         ['queue' => $queue, 'skipped' => $plannedSkips] = EvidencePlanner::plan(
             array_map(fn ($s) => [
                 'path' => $s['path'],
@@ -141,24 +193,23 @@ class GitHubRepositoryImporter
         );
 
         $byPath = collect($scored)->keyBy('path');
-        $skipped = [];
-        $downloaded = 0;
+        $progress->downloaded = 0;
 
         foreach ($inventory['entries'] as $entry) {
             if (! $entry['eligible']) {
-                $skipped[] = ['path' => $entry['path'], 'reason' => $entry['skip_reason'] ?? 'unsupported format'];
+                $progress->skipped[] = ['path' => $entry['path'], 'reason' => $entry['skip_reason'] ?? 'unsupported format'];
             }
         }
 
         foreach ($plannedSkips as $skip) {
-            $skipped[] = $skip;
+            $progress->skipped[] = $skip;
         }
 
         // Stored evidence wins: a path already imported for this commit is
         // kept (reused below), never re-listed as an exclusion.
         if ($existingEvidence->isNotEmpty()) {
-            $skipped = array_values(array_filter(
-                $skipped,
+            $progress->skipped = array_values(array_filter(
+                $progress->skipped,
                 fn ($s) => ! $existingEvidence->has($s['path'])
             ));
         }
@@ -167,14 +218,22 @@ class GitHubRepositoryImporter
         $this->markInventory($repository, $sha, $queue, $plannedSkips);
 
         if ($queue === []) {
-            $warnings[] = 'No importable files found within the selection rules.';
+            $progress->warnings[] = 'No importable files found within the selection rules.';
         }
 
-        $files = [];
+        return ['queue' => $queue, 'byPath' => $byPath];
+    }
+
+    /**
+     * Stage 2 — evidence: download, validate, and extract every queued
+     * path into the progress file list. Stored blobs are reused
+     * without re-downloading.
+     */
+    private function downloadQueued(Repository $repository, string $sha, array $queue, Collection $byPath, Collection $existingEvidence, array $config, ImportProgress $progress): void
+    {
         $tokenBudget = (int) $config['token_budget'];
         $maxExtraction = (int) ($config['max_extraction_bytes'] ?? $config['max_file_bytes']);
         $maxChunk = (int) ($config['max_chunk_bytes'] ?? 20000);
-        $approxTokens = 0;
 
         foreach ($queue as $item) {
             $entry = $byPath[$item['path']];
@@ -185,8 +244,8 @@ class GitHubRepositoryImporter
                 // Identical blob: reuse stored bytes without another download.
                 // Always kept — a stored file is never budget-skipped twice —
                 // but still counted so later files face the true remainder.
-                $approxTokens += (int) ceil(strlen((string) $reused->content) / 4);
-                $files[] = $this->reuseFileArray($reused, $entry['score']);
+                $progress->approxTokens += (int) ceil(strlen((string) $reused->content) / 4);
+                $progress->files[] = $this->reuseFileArray($reused, $entry['score']);
 
                 continue;
             }
@@ -199,7 +258,7 @@ class GitHubRepositoryImporter
                 // Retryable at the job level with backoff; never half-import.
                 throw $e;
             } catch (GitHubException $e) {
-                $skipped[] = ['path' => $item['path'], 'reason' => 'download failed'];
+                $progress->skipped[] = ['path' => $item['path'], 'reason' => 'download failed'];
                 $this->setInventoryStatus($repository, $sha, $item['path'], 'failed', 'download failed');
 
                 continue;
@@ -208,41 +267,41 @@ class GitHubRepositoryImporter
             $content = $fetched['content'];
 
             if (! mb_check_encoding($content, 'UTF-8')) {
-                $skipped[] = ['path' => $item['path'], 'reason' => 'not UTF-8 text'];
+                $progress->skipped[] = ['path' => $item['path'], 'reason' => 'not UTF-8 text'];
                 $this->setInventoryStatus($repository, $sha, $item['path'], 'skipped', 'not UTF-8 text');
 
                 continue;
             }
 
             if (str_contains($content, "\0")) {
-                $skipped[] = ['path' => $item['path'], 'reason' => 'binary content'];
+                $progress->skipped[] = ['path' => $item['path'], 'reason' => 'binary content'];
                 $this->setInventoryStatus($repository, $sha, $item['path'], 'skipped', 'binary content');
 
                 continue;
             }
 
             if ($content === '') {
-                $skipped[] = ['path' => $item['path'], 'reason' => 'empty file'];
+                $progress->skipped[] = ['path' => $item['path'], 'reason' => 'empty file'];
                 $this->setInventoryStatus($repository, $sha, $item['path'], 'skipped', 'empty file');
 
                 continue;
             }
 
-            $downloaded++;
+            $progress->downloaded++;
             $this->setInventoryStatus($repository, $sha, $item['path'], 'downloaded');
 
             $extracted = FileExtractor::extract($item['path'], $content, $maxExtraction, $maxChunk);
             $entryTokens = (int) ceil(strlen($extracted['content']) / 4);
 
-            if ($approxTokens + $entryTokens > $tokenBudget) {
-                $skipped[] = ['path' => $item['path'], 'reason' => 'evidence token budget exhausted'];
+            if ($progress->approxTokens + $entryTokens > $tokenBudget) {
+                $progress->skipped[] = ['path' => $item['path'], 'reason' => 'evidence token budget exhausted'];
                 $this->setInventoryStatus($repository, $sha, $item['path'], 'skipped', 'evidence token budget exhausted');
 
                 continue;
             }
 
-            $approxTokens += $entryTokens;
-            $files[] = [
+            $progress->approxTokens += $entryTokens;
+            $progress->files[] = [
                 'path' => $item['path'],
                 'url' => $fetched['html_url'],
                 'content' => $extracted['content'],
@@ -257,10 +316,15 @@ class GitHubRepositoryImporter
                 'extraction_note' => $extracted['note'],
             ];
         }
+    }
 
-        // Previously stored but no longer queued (e.g. tighter budgets):
-        // retained and grandfathered — never deleted, never re-skipped.
-        $filePaths = array_flip(array_column($files, 'path'));
+    /**
+     * Previously stored but no longer queued (e.g. tighter budgets):
+     * retained and grandfathered — never deleted, never re-skipped.
+     */
+    private function retainGrandfathered(Collection $existingEvidence, Collection $byPath, ImportProgress $progress): void
+    {
+        $filePaths = array_flip(array_column($progress->files, 'path'));
         $retained = 0;
 
         foreach ($existingEvidence as $path => $existing) {
@@ -269,39 +333,45 @@ class GitHubRepositoryImporter
             }
 
             $retained++;
-            $files[] = $this->reuseFileArray($existing, $byPath->get($path)['score'] ?? $existing->relevance_score);
+            $progress->files[] = $this->reuseFileArray($existing, $byPath->get($path)['score'] ?? $existing->relevance_score);
         }
 
         if ($retained > 0) {
-            $warnings[] = sprintf(
+            $progress->warnings[] = sprintf(
                 'Budgets tightened since the previous import; %d previously stored file(s) were retained and are grandfathered outside the current budgets.',
                 $retained
             );
         }
+    }
 
-        // Defense in depth: a stored path is never an exclusion.
-        $storedPaths = array_flip(array_column($files, 'path'));
-        $skipped = array_values(array_filter($skipped, fn ($s) => ! isset($storedPaths[$s['path']])));
+    /**
+     * Persist the manifest and return the import summary. Defense in
+     * depth: a stored path is never an exclusion.
+     */
+    private function persistResult(Repository $repository, string $sha, array $inventory, array $scored, Collection $byPath, array $config, ImportProgress $progress): array
+    {
+        $storedPaths = array_flip(array_column($progress->files, 'path'));
+        $skipped = array_values(array_filter($progress->skipped, fn ($s) => ! isset($storedPaths[$s['path']])));
 
         // Deterministic skip order for stable summaries.
         usort($skipped, fn ($a, $b) => [$a['path'], $a['reason']] <=> [$b['path'], $b['reason']]);
 
-        $partial = count(array_filter($files, fn ($f) => $f['is_partial']));
+        $partial = count(array_filter($progress->files, fn ($f) => $f['is_partial']));
 
         $subsystems = collect($inventory['entries'])->mapWithKeys(fn ($e) => [$e['path'] => $e['subsystem']]);
 
-        $result = $this->manifest->persist($repository, $sha, $files, $skipped, $warnings, [
+        $result = $this->manifest->persist($repository, $sha, $progress->files, $skipped, $progress->warnings, [
             'inventory' => [
                 'discovered' => $inventory['discovered'],
                 'blobs' => $inventory['blobs'],
                 'eligible' => count($scored),
-                'downloaded' => $downloaded,
-                'stored' => count($files),
+                'downloaded' => $progress->downloaded,
+                'stored' => count($progress->files),
                 'partial' => $partial,
                 'capped' => $inventory['capped'],
                 'over_cap' => $inventory['over_cap'],
             ],
-            'coverage' => $this->coverage($files, $subsystems),
+            'coverage' => $this->coverage($progress->files, $subsystems),
             'excluded_by_reason' => $this->tallyReasons($skipped),
             'missing_relevant' => $this->missingRelevant($skipped, $byPath),
             'budgets' => self::budgetSnapshot($config),
@@ -315,7 +385,7 @@ class GitHubRepositoryImporter
             'total_bytes' => $result['total_bytes'],
             'approx_tokens' => $result['approx_tokens'],
             'skipped' => $skipped,
-            'warnings' => $warnings,
+            'warnings' => $progress->warnings,
             'inventory' => $repository->fresh()->last_import_summary['inventory'] ?? [],
         ];
     }

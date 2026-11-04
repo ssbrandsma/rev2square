@@ -5,6 +5,7 @@ namespace App\Services\Agent;
 use App\Enums\AnalysisStatus;
 use App\Models\ArchitectureSnapshot;
 use App\Services\Revival\FileClassifier;
+use App\Support\Like;
 
 /**
  * The Revival Agent's read-only tools: search_evidence, read_evidence,
@@ -152,7 +153,7 @@ final class EvidenceTools
         $candidates = $context->repository->currentEvidence()
             ->where(function ($q) use ($terms) {
                 foreach ($terms as $term) {
-                    $like = '%'.str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $term).'%';
+                    $like = Like::contains($term);
                     $q->orWhere('path', 'like', $like)->orWhere('content', 'like', $like);
                 }
             })

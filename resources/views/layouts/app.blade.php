@@ -41,7 +41,6 @@
                 @auth
                     <a href="{{ route('lounge') }}" class="text-sm font-medium text-zinc-300 hover:text-white">Lounge</a>
                     <a href="{{ route('dashboard') }}" class="text-sm font-medium text-zinc-300 hover:text-white">My workspace</a>
-                    @php($unreadCount = auth()->user()->unreadNotifications()->count())
                     <a href="{{ route('inbox.index') }}" class="text-sm font-medium text-zinc-300 hover:text-white" aria-label="Inbox{{ $unreadCount > 0 ? ", {$unreadCount} unread" : '' }}">Inbox @if($unreadCount > 0)<span class="ml-1 rounded-full bg-emerald-600 px-1.5 py-0.5 text-[11px] font-bold text-white">{{ $unreadCount }}</span>@endif</a>
                     <a href="{{ route('projects.create') }}" class="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500">Start a revival</a>
                     <x-account-menu />

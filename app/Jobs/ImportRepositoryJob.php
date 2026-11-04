@@ -10,6 +10,7 @@ use App\Services\GitHub\RepositoryNotFoundException;
 use App\Services\GitHub\RepositoryPrivateException;
 use App\Services\Revival\ArchiveRepositoryImporter;
 use App\Services\Revival\GitHubRepositoryImporter;
+use App\Support\RateLimit;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Throwable;
@@ -52,7 +53,7 @@ class ImportRepositoryJob implements ShouldQueue
             $repository->forceFill(['import_status' => 'failed', 'import_error' => $e->getMessage(), 'next_retry_at' => null, 'import_stage' => null])->save();
             $this->fail($e);
         } catch (RateLimitedException $e) {
-            $delay = self::rateLimitDelay($e->resetsAt);
+            $delay = RateLimit::delay($e->resetsAt);
 
             if ($this->attempts() < $this->tries) {
                 $repository->forceFill([
@@ -76,14 +77,5 @@ class ImportRepositoryJob implements ShouldQueue
 
             $repository->forceFill(['import_status' => 'failed', 'import_error' => $message, 'next_retry_at' => null, 'import_stage' => null])->save();
         }
-    }
-
-    public static function rateLimitDelay(?int $resetsAt): int
-    {
-        if ($resetsAt === null) {
-            return 300;
-        }
-
-        return min(max($resetsAt - time() + 5, 60), 3600);
     }
 }

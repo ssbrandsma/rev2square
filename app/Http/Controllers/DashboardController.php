@@ -4,15 +4,17 @@ namespace App\Http\Controllers;
 
 use App\Enums\InvitationStatus;
 use App\Enums\OfferStatus;
+use App\Models\Project;
 use App\Models\TeamInvitation;
 use App\Services\Profile\MemberProfile;
+use Illuminate\Http\Request;
 use Illuminate\View\View;
 
 class DashboardController extends Controller
 {
-    public function __invoke(MemberProfile $profiles): View
+    public function __invoke(Request $request, MemberProfile $profiles): View
     {
-        $user = request()->user();
+        $user = $request->user();
 
         $projects = $user->createdProjects()
             ->withCount('tasks')
@@ -37,7 +39,15 @@ class DashboardController extends Controller
             ->get();
 
         $saved = $user->savedProjects()->with('project')->latest()->get()
-            ->filter(fn ($save): bool => $save->project !== null && $user->can('view', $save->project));
+            ->filter(fn ($save): bool => $save->project !== null);
+
+        // One visibility query for every saved project instead of a
+        // permission check (and its own query) per row.
+        $visibleIds = Project::whereIn('id', $saved->map->project->pluck('id')->all())
+            ->visibleTo($user)
+            ->pluck('id')
+            ->all();
+        $saved = $saved->filter(fn ($save): bool => in_array($save->project->id, $visibleIds, true));
 
         $activity = $user->notifications()->latest()->take(8)->get();
 

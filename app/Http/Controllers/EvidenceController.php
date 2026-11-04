@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\AgentConversation;
 use App\Models\EvidenceSource;
 use App\Models\Project;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\View\View;
 
@@ -24,13 +25,11 @@ class EvidenceController extends Controller
         ]);
     }
 
-    public function showSource(Project $project, EvidenceSource $source): View
+    public function showSource(Request $request, Project $project, EvidenceSource $source): View
     {
         Gate::authorize('update', $project);
 
-        if ($source->project_id !== $project->id) {
-            abort(404);
-        }
+        $this->assertBelongsToProject($project, $source);
 
         $current = $project->repositories()->latest()->first();
         $stale = $current !== null
@@ -38,7 +37,7 @@ class EvidenceController extends Controller
             && $source->commit_sha !== $current->last_commit_sha;
 
         $backToConversation = null;
-        $from = request()->query('from');
+        $from = $request->query('from');
 
         if (is_string($from) && preg_match('/^agent:(\d+)$/', $from, $m)) {
             $conversation = AgentConversation::where('id', (int) $m[1])

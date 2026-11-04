@@ -6,6 +6,9 @@ use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
 {
+    // Name note: despite the *_table suffix, this migration creates no
+    // publish_provenance table. It only adds provenance columns to the
+    // existing contributor_tasks, milestones, and analysis_reports tables.
     public function up(): void
     {
         Schema::table('contributor_tasks', function (Blueprint $table) {

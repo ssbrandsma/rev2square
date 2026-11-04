@@ -42,6 +42,8 @@ class SettingController extends Controller
     {
         Gate::authorize('admin');
 
+        $request->validate(['reason' => ['nullable', 'string', 'max:2000']]);
+
         $input = $request->input('settings', []);
         $applied = [];
         $errors = [];
@@ -69,7 +71,7 @@ class SettingController extends Controller
 
         // Dependency validation: model must stay within the supported set,
         // and a spend cap without pricing refuses future requests (warn now).
-        if (isset($applied['ai.model']) && ! in_array($applied['ai.model']['after'], ['muse-spark-1.3'], true)) {
+        if (isset($applied['ai.model']) && ! in_array($applied['ai.model']['after'], config('ai.supported_models', ['muse-spark-1.3']), true)) {
             AppSetting::where('key', 'ai.model')->delete();
             unset($applied['ai.model']);
             $errors[] = 'ai.model reverted: only supported provider models are allowed.';

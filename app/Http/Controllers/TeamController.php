@@ -60,7 +60,12 @@ class TeamController extends Controller
         $data = $request->validate(['email' => ['required', 'email:filter', 'max:255']]);
 
         $invitee = User::where('email', $data['email'])->first();
-        abort_unless($invitee !== null, 422, 'No registered account uses that email address.');
+
+        // Generic failure, same shape as the other invite errors below:
+        // the message must not reveal whether an account exists.
+        if ($invitee === null) {
+            return back()->withErrors(['email' => 'That email address cannot be invited to this project.']);
+        }
 
         if ($invitee->id === $request->user()->id || $project->managedBy($invitee)) {
             return back()->withErrors(['email' => 'That person already maintains this project.']);
@@ -91,11 +96,11 @@ class TeamController extends Controller
         return back()->with('status', "Invitation sent to {$invitee->name}. Nothing changes until they accept.");
     }
 
-    public function revokeMember(Project $project, ProjectMember $member): RedirectResponse
+    public function revokeMember(Request $request, Project $project, ProjectMember $member): RedirectResponse
     {
         Gate::authorize('update', $project);
-        abort_unless($project->owner_id === request()->user()->id, 403, 'Only the project owner can revoke team access.');
-        abort_unless($member->project_id === $project->id, 404);
+        abort_unless($project->owner_id === $request->user()->id, 403, 'Only the project owner can revoke team access.');
+        $this->assertBelongsToProject($project, $member);
 
         if ($member->status !== 'active') {
             return back()->withErrors(['member' => 'That membership is already revoked.']);
@@ -114,31 +119,31 @@ class TeamController extends Controller
 
         ChannelRotation::announceProjectRotation($project->id, $transition['old'], $transition['new']);
 
-        AuditEvent::record('team.revoked', request()->user(), $project, $member, [
+        AuditEvent::record('team.revoked', $request->user(), $project, $member, [
             'revoked_user_id' => $member->user_id,
         ]);
 
         return back()->with('status', 'Team access revoked.');
     }
 
-    public function revokeInvitation(Project $project, TeamInvitation $invitation): RedirectResponse
+    public function revokeInvitation(Request $request, Project $project, TeamInvitation $invitation): RedirectResponse
     {
         Gate::authorize('update', $project);
-        abort_unless($project->owner_id === request()->user()->id, 403, 'Only the project owner can revoke invitations.');
-        abort_unless($invitation->project_id === $project->id, 404);
+        abort_unless($project->owner_id === $request->user()->id, 403, 'Only the project owner can revoke invitations.');
+        $this->assertBelongsToProject($project, $invitation);
         abort_unless($invitation->isPending(), 422, 'Only a pending invitation can be revoked.');
 
         $invitation->update(['status' => InvitationStatus::Revoked]);
 
-        AuditEvent::record('team.invitation_revoked', request()->user(), $project, $invitation);
+        AuditEvent::record('team.invitation_revoked', $request->user(), $project, $invitation);
 
         return back()->with('status', 'Invitation revoked.');
     }
 
-    public function accept(Project $project, TeamInvitation $invitation): RedirectResponse
+    public function accept(Request $request, Project $project, TeamInvitation $invitation): RedirectResponse
     {
-        abort_unless($invitation->project_id === $project->id, 404);
-        abort_unless($invitation->user_id === request()->user()->id, 403, 'This invitation belongs to a different account.');
+        $this->assertBelongsToProject($project, $invitation);
+        abort_unless($invitation->user_id === $request->user()->id, 403, 'This invitation belongs to a different account.');
         abort_unless($invitation->isPending(), 422, 'This invitation is no longer pending.');
 
         if ($invitation->isExpired()) {
@@ -157,20 +162,20 @@ class TeamController extends Controller
 
         $invitation->update(['status' => InvitationStatus::Accepted]);
 
-        AuditEvent::record('team.accepted', request()->user(), $project, $invitation);
+        AuditEvent::record('team.accepted', $request->user(), $project, $invitation);
 
         return back()->with('status', 'Welcome to the team. You can now maintain this project.');
     }
 
-    public function decline(Project $project, TeamInvitation $invitation): RedirectResponse
+    public function decline(Request $request, Project $project, TeamInvitation $invitation): RedirectResponse
     {
-        abort_unless($invitation->project_id === $project->id, 404);
-        abort_unless($invitation->user_id === request()->user()->id, 403, 'This invitation belongs to a different account.');
+        $this->assertBelongsToProject($project, $invitation);
+        abort_unless($invitation->user_id === $request->user()->id, 403, 'This invitation belongs to a different account.');
         abort_unless($invitation->isPending(), 422, 'This invitation is no longer pending.');
 
         $invitation->update(['status' => InvitationStatus::Declined]);
 
-        AuditEvent::record('team.declined', request()->user(), $project, $invitation);
+        AuditEvent::record('team.declined', $request->user(), $project, $invitation);
 
         return back()->with('status', 'Invitation declined.');
     }

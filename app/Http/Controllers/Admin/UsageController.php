@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\AiUsageEntry;
 use App\Models\User;
 use App\Services\Admin\CostEstimates;
+use App\Support\Like;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
@@ -104,13 +105,13 @@ class UsageController extends Controller
     {
         return AiUsageEntry::query()
             ->when($request->string('user')->toString() !== '', function ($query) use ($request): void {
-                $term = '%'.str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $request->string('user')->toString()).'%';
+                $term = Like::contains($request->string('user')->toString());
                 $query->whereHas('user', fn ($q) => $q->where('email', 'like', $term)->orWhere('name', 'like', $term));
             })
             ->when($request->string('feature')->toString() !== '', fn ($q) => $q->where('feature', $request->string('feature')->toString()))
             ->when($request->string('status')->toString() !== '', fn ($q) => $q->where('status', $request->string('status')->toString()))
             ->when($request->string('project')->toString() !== '', function ($query) use ($request): void {
-                $term = '%'.str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $request->string('project')->toString()).'%';
+                $term = Like::contains($request->string('project')->toString());
                 $query->whereHas('project', fn ($q) => $q->where('title', 'like', $term));
             })
             ->when($request->string('from')->toString() !== '', fn ($q) => $q->whereDate('created_at', '>=', $request->string('from')->toString()))

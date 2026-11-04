@@ -22,9 +22,10 @@ class Project extends Model
 {
     use HasFactory;
 
+    // slug and owner_id are deliberately absent: the controller sets
+    // them explicitly, so no fill($validated) call can ever take them
+    // from request input.
     protected $fillable = [
-        'slug',
-        'owner_id',
         'title',
         'pitch',
         'body',
@@ -194,6 +195,12 @@ class Project extends Model
         return $this->hasMany(ContributorTask::class);
     }
 
+    /** @return HasMany<DocPage, $this> */
+    public function docPages(): HasMany
+    {
+        return $this->hasMany(DocPage::class);
+    }
+
     /** @return HasMany<DiscussionPost, $this> */
     public function discussionPosts(): HasMany
     {
@@ -248,6 +255,28 @@ class Project extends Model
         return $query->published()
             ->where('activity', '!=', ProjectActivity::Archived->value)
             ->whereHas('devices');
+    }
+
+    /**
+     * Projects the viewer may see: everything published, plus drafts
+     * they manage. Mirrors ProjectPolicy::view in a single query so
+     * list pages can filter without a permission check per row.
+     *
+     * @param  Builder<$this>  $query
+     */
+    public function scopeVisibleTo(Builder $query, ?User $user): Builder
+    {
+        return $query->where(function (Builder $query) use ($user): void {
+            $query->where('publication_status', PublicationStatus::Published->value);
+
+            if ($user !== null) {
+                $query->orWhere('owner_id', $user->id)
+                    ->orWhereHas('members', fn ($query) => $query
+                        ->where('user_id', $user->id)
+                        ->whereIn('role', [ProjectRole::Owner->value, ProjectRole::Maintainer->value])
+                        ->where('status', 'active'));
+            }
+        });
     }
 
     public function isPublished(): bool

@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Enums\CorrectionStatus;
+use App\Enums\ProjectActivity;
 use App\Enums\PublicationStatus;
 use App\Enums\TestOutcome;
 use App\Models\Attachment;
@@ -322,6 +323,59 @@ class FieldEvidenceTest extends TestCase
         $this->actingAs($user)
             ->delete(route('projects.attachments.destroy', [$project, $attachment]))
             ->assertRedirect();
+        $this->assertSame(0, Attachment::count());
+    }
+
+    public function test_attachment_upload_distrusts_client_filename_and_mime(): void
+    {
+        Storage::fake('local');
+
+        $project = $this->publishedProject();
+        $observation = Observation::factory()->create(['project_id' => $project->id]);
+        $user = User::factory()->create();
+
+        // Traversal adventure in the client filename is stripped: the
+        // stored name is reused as the download filename.
+        $evil = UploadedFile::fake()->create('../../evil.txt', 10, 'text/plain');
+
+        $this->actingAs($user)
+            ->post(route('projects.observations.attachments.store', [$project, $observation]), ['file' => $evil])
+            ->assertRedirect();
+
+        $this->assertSame('evil.txt', Attachment::firstOrFail()->original_name);
+
+        // A lying client MIME is ignored: text content sniffed
+        // server-side is stored even when the client claims PDF.
+        $path = tempnam(sys_get_temp_dir(), 'upl');
+        file_put_contents($path, "plain text\n");
+        $lying = new UploadedFile($path, 'note.pdf', 'application/pdf', UPLOAD_ERR_OK, true);
+
+        $this->actingAs($user)
+            ->post(route('projects.observations.attachments.store', [$project, $observation]), ['file' => $lying])
+            ->assertRedirect();
+
+        $this->assertSame('text/plain', Attachment::orderByDesc('id')->firstOrFail()->mime);
+    }
+
+    public function test_attachment_upload_refused_on_archived_and_paused_projects(): void
+    {
+        Storage::fake('local');
+
+        foreach ([ProjectActivity::Archived, ProjectActivity::Paused] as $activity) {
+            $project = Project::factory()->create([
+                'publication_status' => PublicationStatus::Published,
+                'activity' => $activity,
+            ]);
+            $observation = Observation::factory()->create(['project_id' => $project->id]);
+
+            $this->actingAs(User::factory()->create())
+                ->post(route('projects.observations.attachments.store', [$project, $observation]), [
+                    'file' => UploadedFile::fake()->create('note.txt', 10, 'text/plain'),
+                ])
+                ->assertRedirect()
+                ->assertSessionHasErrors('file');
+        }
+
         $this->assertSame(0, Attachment::count());
     }
 

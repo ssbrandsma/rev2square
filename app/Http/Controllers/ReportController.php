@@ -12,7 +12,7 @@ class ReportController extends Controller
     public function show(Project $project, AnalysisReport $report): View
     {
         Gate::authorize('view', $project);
-        abort_unless($report->project_id === $project->id, 404);
+        $this->assertBelongsToProject($project, $report);
 
         $report->load('run');
 

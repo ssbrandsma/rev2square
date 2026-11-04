@@ -5,6 +5,7 @@ namespace App\Livewire\Projects;
 use App\Enums\ProjectActivity;
 use App\Enums\ProjectPhase;
 use App\Models\Project;
+use App\Support\Like;
 use Livewire\Attributes\Url;
 use Livewire\Component;
 use Livewire\WithPagination;
@@ -92,9 +93,9 @@ class Explorer extends Component
         $projects = Project::published()
             ->with(['devices', 'tasks', 'cover'])
             ->when($this->search !== '', fn ($query) => $query->where(function ($query) {
-                $query->where('title', 'like', '%'.$this->search.'%')
-                    ->orWhere('pitch', 'like', '%'.$this->search.'%')
-                    ->orWhereHas('devices', fn ($query) => $query->where('model', 'like', '%'.$this->search.'%'));
+                $query->where('title', 'like', Like::contains($this->search))
+                    ->orWhere('pitch', 'like', Like::contains($this->search))
+                    ->orWhereHas('devices', fn ($query) => $query->where('model', 'like', Like::contains($this->search)));
             }))
             ->when($this->phase !== '', fn ($query) => $query->where('phase', $this->phase))
             ->when($this->activity !== '', fn ($query) => $query->where('activity', $this->activity))

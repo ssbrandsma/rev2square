@@ -32,7 +32,7 @@
                     <h3 class="text-sm font-semibold">Project story</h3>
                     @include('projects._story-editor', ['project' => $project, 'images' => $images])
                 </div>
-                @include('projects._form-details', ['project' => $project])
+                @include('projects._form-details', ['project' => $project, 'linkedVariant' => $linkedVariant])
                 <div class="flex items-center justify-end gap-3 border-t border-zinc-100 pt-6">
                     <a href="{{ route('projects.show', $project) }}" class="text-sm font-semibold text-zinc-600 hover:text-zinc-900">Cancel</a>
                     <button type="submit" class="rounded-lg bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-emerald-500">Save project</button>
@@ -104,6 +104,7 @@
                                     <p class="mt-1 flex flex-wrap gap-1 text-xs">
                                         @if($project->cover_media_id === $image->id)<span class="rounded-full bg-emerald-100 px-2 py-0.5 font-semibold text-emerald-900">Cover</span>@endif
                                         @if(in_array($image->id, $storyMediaIds, true))<span class="rounded-full bg-sky-100 px-2 py-0.5 font-semibold text-sky-900">In story</span>@endif
+                                        @if(in_array($image->id, $docsMediaIds ?? [], true))<span class="rounded-full bg-violet-100 px-2 py-0.5 font-semibold text-violet-900">In docs</span>@endif
                                         @if($image->in_gallery)<span class="rounded-full bg-zinc-100 px-2 py-0.5 font-semibold text-zinc-700">Gallery</span>@endif
                                     </p>
                                 </div>

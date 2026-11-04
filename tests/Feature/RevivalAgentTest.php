@@ -204,7 +204,7 @@ class RevivalAgentTest extends TestCase
 
         // Cross-project ids do not leak, even for a viewer of the other project.
         [$other] = $this->seedProject(['o.py' => "y = 2\n"]);
-        $other->update(['owner_id' => $owner->id]);
+        $other->forceFill(['owner_id' => $owner->id])->save();
         $this->actingAs($owner)->get(route('projects.agent.show', [$other, $conversation]))->assertNotFound();
 
         // The stranger's index stays empty even on a public project.

@@ -316,4 +316,29 @@ class TasksWorkflowTest extends TestCase
         $this->assertSame(ContentOrigin::Human, $manual->fresh()->origin);
         $this->assertSame(2, $project->tasks()->count());
     }
+
+    public function test_assign_rejects_outsiders_on_draft_projects(): void
+    {
+        $project = Project::factory()->draft()->create();
+        $outsider = User::factory()->create();
+        $task = ContributorTask::factory()->create(['project_id' => $project->id]);
+
+        // Nobody outside the project may be assigned on a draft: the
+        // assignment notification would leak draft details to them.
+        $this->actingAs($project->owner)
+            ->patch(route('projects.tasks.assign', [$project, $task]), ['assignee_id' => $outsider->id])
+            ->assertRedirect()
+            ->assertSessionHasErrors('assignee');
+
+        $this->assertNull($task->fresh()->assigned_to_user_id);
+        $this->assertSame(0, $outsider->notifications()->count());
+
+        // Managers can still be assigned on drafts.
+        $this->actingAs($project->owner)
+            ->patch(route('projects.tasks.assign', [$project, $task]), ['assignee_id' => $project->owner->id])
+            ->assertRedirect()
+            ->assertSessionHasNoErrors();
+
+        $this->assertSame($project->owner->id, $task->fresh()->assigned_to_user_id);
+    }
 }

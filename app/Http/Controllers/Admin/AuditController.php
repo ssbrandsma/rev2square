@@ -4,6 +4,7 @@ namespace App\Http\Controllers\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\AdminAuditEvent;
+use App\Support\Like;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\View\View;
@@ -15,9 +16,9 @@ class AuditController extends Controller
         Gate::authorize('admin');
 
         $events = AdminAuditEvent::query()
-            ->when($request->string('action')->toString() !== '', fn ($q) => $q->where('action', 'like', $request->string('action')->toString().'%'))
+            ->when($request->string('action')->toString() !== '', fn ($q) => $q->where('action', 'like', Like::escape($request->string('action')->toString()).'%'))
             ->when($request->string('actor')->toString() !== '', function ($query) use ($request): void {
-                $term = '%'.str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $request->string('actor')->toString()).'%';
+                $term = Like::contains($request->string('actor')->toString());
                 $query->whereHas('actor', fn ($q) => $q->where('email', 'like', $term));
             })
             ->with('actor')

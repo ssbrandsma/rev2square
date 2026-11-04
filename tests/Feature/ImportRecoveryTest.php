@@ -9,6 +9,7 @@ use App\Services\GitHub\GitHubException;
 use App\Services\GitHub\RateLimitedException;
 use App\Services\GitHub\RepositoryNotFoundException;
 use App\Services\Revival\GitHubRepositoryImporter;
+use App\Support\RateLimit;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\Client\Request;
 use Illuminate\Support\Facades\Artisan;
@@ -197,10 +198,10 @@ class ImportRecoveryTest extends TestCase
 
     public function test_rate_limit_delay_math(): void
     {
-        $this->assertSame(300, ImportRepositoryJob::rateLimitDelay(null));
-        $this->assertSame(60, ImportRepositoryJob::rateLimitDelay(time() - 100));
-        $this->assertSame(65, ImportRepositoryJob::rateLimitDelay(time() + 60));
-        $this->assertSame(3600, ImportRepositoryJob::rateLimitDelay(time() + 100000));
+        $this->assertSame(300, RateLimit::delay(null));
+        $this->assertSame(60, RateLimit::delay(time() - 100));
+        $this->assertSame(65, RateLimit::delay(time() + 60));
+        $this->assertSame(3600, RateLimit::delay(time() + 100000));
     }
 
     public function test_rate_limited_job_releases_then_recovers_after_reset(): void

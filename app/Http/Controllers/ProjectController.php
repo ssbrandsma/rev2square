@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Enums\ProjectActivity;
 use App\Enums\TaskStatus;
+use App\Http\Controllers\Concerns\ManagesEvidence;
 use App\Http\Requests\StoreProjectRequest;
 use App\Http\Requests\UpdateProjectRequest;
 use App\Models\AuditEvent;
@@ -12,6 +13,7 @@ use App\Models\DeviceVariant;
 use App\Models\Project;
 use App\Models\ProjectMedia;
 use App\Services\Community\ProjectActionPolicy;
+use App\Services\Docs\DocDocument;
 use App\Services\Media\StoryDocument;
 use App\Services\Realtime\ChannelRotation;
 use Illuminate\Http\RedirectResponse;
@@ -23,18 +25,20 @@ use Illuminate\View\View;
 
 class ProjectController extends Controller
 {
+    use ManagesEvidence;
+
     public function index(): View
     {
         return view('projects.index');
     }
 
-    public function show(Project $project): View
+    public function show(Request $request, Project $project): View
     {
         Gate::authorize('view', $project);
 
         $project->load(['devices', 'repositories', 'cover', 'gallery']);
 
-        $showRetired = request()->boolean('show_retired');
+        $showRetired = $request->boolean('show_retired');
 
         $milestones = $project->milestones()->orderBy('sort_order')
             ->when(! $showRetired, fn ($query) => $query->active())
@@ -59,7 +63,7 @@ class ProjectController extends Controller
             'historyEvents' => $historyEvents,
             'assignees' => AuditEvent::assigneeMap($historyEvents),
             'openTasks' => $project->tasks()->active()->orderBy('title')->get(),
-            'variants' => DeviceVariant::with('device')->whereIn('device_id', $project->devices()->pluck('devices.id'))->get(),
+            'variants' => $this->variants($project),
             'retiredMilestoneCount' => $showRetired ? 0 : $project->milestones()->whereNotNull('retired_at')->count(),
             'retiredTaskCount' => $showRetired ? 0 : $project->tasks()->where('status', TaskStatus::Retired)->count(),
             'showRetired' => $showRetired,
@@ -91,17 +95,30 @@ class ProjectController extends Controller
     {
         Gate::authorize('update', $project);
 
-        $project->load(['cover', 'media']);
+        $project->load(['cover', 'media', 'devices']);
+
+        // The device form prefills from the linked variant; resolve it
+        // here so the blade never queries during render.
+        $linkedVariantId = $project->devices->first()?->pivot?->device_variant_id;
+        $linkedVariant = $linkedVariantId ? DeviceVariant::find($linkedVariantId) : null;
 
         $storyIds = $project->hasRichStory()
             ? StoryDocument::mediaIds($project->story_document)
             : [];
+        $docsMediaIds = $project->docPages()
+            ->pluck('body')
+            ->flatMap(fn ($body): array => DocDocument::mediaIds(is_array($body) ? $body : null))
+            ->unique()
+            ->values()
+            ->all();
 
         return view('projects.edit', [
             'project' => $project,
             'images' => $project->media->where('kind', ProjectMedia::KIND_IMAGE)->values(),
             'files' => $project->media->where('kind', ProjectMedia::KIND_FILE)->values(),
             'storyMediaIds' => $storyIds,
+            'docsMediaIds' => $docsMediaIds,
+            'linkedVariant' => $linkedVariant,
         ]);
     }
 

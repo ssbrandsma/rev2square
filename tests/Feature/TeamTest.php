@@ -170,10 +170,12 @@ class TeamTest extends TestCase
             ->assertRedirect();
         $this->assertSame(1, TeamInvitation::count());
 
-        // Unknown emails are rejected without leaking anything else.
+        // Unknown emails fail exactly like any other invite error, so
+        // the response never reveals whether an account exists.
         $this->actingAs($project->owner)
             ->post(route('projects.team.invite', $project), ['email' => 'nobody@example.test'])
-            ->assertStatus(422);
+            ->assertRedirect()
+            ->assertSessionHasErrors(['email' => 'That email address cannot be invited to this project.']);
 
         // Maintainers cannot revoke either.
         $membership = ProjectMember::where('user_id', $member->id)->firstOrFail();
@@ -261,5 +263,20 @@ class TeamTest extends TestCase
             strpos($html, 'Maintain application message here.'),
             strpos($html, 'Maintainer applications (1)')
         );
+    }
+
+    public function test_invite_with_unknown_email_returns_generic_error(): void
+    {
+        $project = $this->publishedProject();
+
+        // Same response shape as every other invite failure (redirect
+        // with an email error), and the message never reveals whether
+        // an account exists for the address.
+        $this->actingAs($project->owner)
+            ->post(route('projects.team.invite', $project), ['email' => 'nobody@example.com'])
+            ->assertRedirect()
+            ->assertSessionHasErrors(['email' => 'That email address cannot be invited to this project.']);
+
+        $this->assertSame(0, TeamInvitation::count());
     }
 }

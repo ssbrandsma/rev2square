@@ -17,7 +17,7 @@ class PromotionController extends Controller
     public function create(Project $project, DiscussionPost $post): View
     {
         Gate::authorize('update', $project);
-        abort_unless($post->project_id === $project->id, 404);
+        $this->assertBelongsToProject($project, $post);
 
         $permalink = route('projects.discussion.show', [$project, $post->thread()]).($post->parent_id !== null ? '#reply-'.$post->id : '');
 
@@ -32,7 +32,7 @@ class PromotionController extends Controller
     public function store(Request $request, Project $project, DiscussionPost $post): RedirectResponse
     {
         Gate::authorize('update', $project);
-        abort_unless($post->project_id === $project->id, 404);
+        $this->assertBelongsToProject($project, $post);
 
         $data = $request->validate([
             'target' => ['required', 'in:observation,task'],

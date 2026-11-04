@@ -143,6 +143,15 @@ class TaskWorkflow
             throw new AuthorizationException('Only maintainers can assign tasks.');
         }
 
+        // The assignee is notified, so they must already be able to view
+        // the project. Otherwise any user id could be assigned on a
+        // draft and the notification would leak it to them.
+        if ($assignee !== null && ! $task->project->isPublished() && ! $task->project->managedBy($assignee)) {
+            throw ValidationException::withMessages([
+                'assignee' => 'Only someone who can view this project can be assigned to its tasks.',
+            ]);
+        }
+
         if (in_array($task->status, [TaskStatus::VerifiedComplete, TaskStatus::Retired], true)) {
             throw ValidationException::withMessages([
                 'assignee' => "Cannot assign a {$task->status->label()} task.",

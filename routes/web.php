@@ -17,9 +17,11 @@ use App\Http\Controllers\BinaryAnalysisController;
 use App\Http\Controllers\ChatController;
 use App\Http\Controllers\DashboardController;
 use App\Http\Controllers\DiscussionController;
+use App\Http\Controllers\DocController;
 use App\Http\Controllers\EvidenceController;
 use App\Http\Controllers\ExportController;
 use App\Http\Controllers\FollowController;
+use App\Http\Controllers\HomeController;
 use App\Http\Controllers\InboxController;
 use App\Http\Controllers\MediaController;
 use App\Http\Controllers\MilestoneController;
@@ -38,16 +40,11 @@ use App\Http\Controllers\SavedProjectController;
 use App\Http\Controllers\TaskController;
 use App\Http\Controllers\TeamController;
 use App\Http\Controllers\TestReportController;
-use App\Models\Project;
 use App\Services\Realtime\ChannelNames;
 use App\Services\Realtime\RealtimeEpoch;
 use Illuminate\Support\Facades\Route;
 
-Route::get('/', function () {
-    $featured = Project::featurable()->with(['devices', 'tasks', 'cover'])->latest()->take(2)->get();
-
-    return view('welcome', ['featured' => $featured]);
-})->name('home');
+Route::get('/', HomeController::class)->name('home');
 
 Route::view('/about', 'about')->name('about');
 Route::view('/suspended', 'suspended')->name('suspended');
@@ -241,6 +238,25 @@ Route::get('/projects/{project}/export/{format}', [ExportController::class, 'sho
 Route::get('/projects/{project}/test-reports/{testReport}', [TestReportController::class, 'show'])->name('projects.test-reports.show');
 
 Route::get('/projects/{project}/tasks/{task}', [TaskController::class, 'show'])->name('projects.tasks.show');
+
+Route::get('/projects/{project}/docs', [DocController::class, 'index'])->name('projects.docs.index');
+Route::get('/projects/{project}/docs/create', [DocController::class, 'create'])->middleware('auth')->name('projects.docs.create');
+Route::post('/projects/{project}/docs', [DocController::class, 'store'])->middleware('auth')->name('projects.docs.store');
+Route::get('/projects/{project}/docs/{doc}', [DocController::class, 'show'])->name('projects.docs.show');
+Route::get('/projects/{project}/docs/{doc}/edit', [DocController::class, 'edit'])->middleware('auth')->name('projects.docs.edit');
+Route::patch('/projects/{project}/docs/{doc}', [DocController::class, 'update'])->middleware('auth')->name('projects.docs.update');
+Route::delete('/projects/{project}/docs/{doc}', [DocController::class, 'destroy'])->middleware('auth')->name('projects.docs.destroy');
+Route::post('/projects/{project}/docs/{doc}/restore', [DocController::class, 'restore'])->middleware('auth')->name('projects.docs.restore');
+Route::post('/projects/{project}/docs/{doc}/publish', [DocController::class, 'publish'])->middleware('auth')->name('projects.docs.publish');
+Route::post('/projects/{project}/docs/{doc}/unpublish', [DocController::class, 'unpublish'])->middleware('auth')->name('projects.docs.unpublish');
+Route::post('/projects/{project}/docs/{doc}/move', [DocController::class, 'move'])->middleware('auth')->name('projects.docs.move');
+Route::get('/projects/{project}/docs/{doc}/revisions', [DocController::class, 'revisions'])->name('projects.docs.revisions');
+Route::post('/projects/{project}/docs/{doc}/revisions/{rev}', [DocController::class, 'restoreRevision'])->middleware('auth')->name('projects.docs.revisions.restore');
+Route::get('/projects/{project}/docs/{doc}/export/{format}', [DocController::class, 'export'])->name('projects.docs.export');
+Route::post('/projects/{project}/docs/{doc}/findings', [DocController::class, 'storeFinding'])->middleware('auth')->name('projects.docs.findings.store');
+Route::patch('/projects/{project}/docs/{doc}/findings/{finding}', [DocController::class, 'updateFindingStatus'])->middleware('auth')->name('projects.docs.findings.status');
+Route::put('/projects/{project}/docs/{doc}/findings/{finding}', [DocController::class, 'updateFinding'])->middleware('auth')->name('projects.docs.findings.update');
+Route::delete('/projects/{project}/docs/{doc}/findings/{finding}', [DocController::class, 'destroyFinding'])->middleware('auth')->name('projects.docs.findings.destroy');
 
 Route::get('/dashboard', DashboardController::class)
     ->middleware(['auth', 'verified'])->name('dashboard');

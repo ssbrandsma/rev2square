@@ -5,6 +5,7 @@ namespace App\Livewire\Projects;
 use App\Enums\TaskStatus;
 use App\Models\ContributorTask;
 use App\Models\Project;
+use App\Support\Like;
 use Livewire\Attributes\Url;
 use Livewire\Component;
 use Livewire\WithPagination;
@@ -120,11 +121,11 @@ class TaskDirectory extends Component
             ->whereHas('project', fn ($query) => $query->published())
             ->active()
             ->when($this->search !== '', fn ($query) => $query->where(function ($query) {
-                $query->where('title', 'like', '%'.$this->search.'%')
-                    ->orWhere('description', 'like', '%'.$this->search.'%');
+                $query->where('title', 'like', Like::contains($this->search))
+                    ->orWhere('description', 'like', Like::contains($this->search));
             }))
             ->when($this->skill !== '', function ($query) {
-                $needle = str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], mb_strtolower($this->skill));
+                $needle = Like::escape(mb_strtolower($this->skill));
                 $query->whereRaw('LOWER(skills) LIKE ?', ['%"'.$needle.'"%']);
             })
             ->when($this->hardware === 'yes', fn ($query) => $query->where('requires_hardware', true))

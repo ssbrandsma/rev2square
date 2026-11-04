@@ -5,6 +5,7 @@ namespace App\Services\Agent;
 use App\Services\AI\AIProviderException;
 use App\Services\AI\AIProviderInterface;
 use App\Services\AI\AIRequest;
+use App\Services\AI\AIToolCall;
 
 /**
  * One bounded model turn: prompt -> [tool calls] -> cited answer.
@@ -43,48 +44,16 @@ class AgentTurnRunner
     public function run(string $system, string $question, array $history, string $correlationId): AgentTurnResult
     {
         $started = microtime(true);
-        $messages = [['role' => 'system', 'content' => $system]];
-
-        foreach (array_slice($history, -6) as $turn) {
-            if (($turn['role'] ?? null) === 'user' || ($turn['role'] ?? null) === 'assistant') {
-                $messages[] = ['role' => $turn['role'], 'content' => substr((string) ($turn['content'] ?? ''), 0, 2000)];
-            }
-        }
-
-        $messages[] = ['role' => 'user', 'content' => $question];
-
-        $toolCalls = 0;
-        $providerCalls = 0;
-        $signatures = [];
-        $seenSources = [];
-        $seenArtifacts = [];
-        $searchesSinceRead = 0;
-        $foundUnread = [];
-        $readIds = [];
-        $trace = [];
-        $inputTokens = 0;
-        $outputTokens = 0;
-        $sawUsage = false;
-        $lastEstimate = $this->estimateTokens($messages);
+        $messages = $this->initialMessages($system, $question, $history);
+        $track = new TurnTracking;
+        $track->lastEstimate = $this->estimateTokens($messages);
 
         while (true) {
-            if ($this->elapsed($started) >= $this->turnSeconds) {
-                return $this->partial($seenSources, $seenArtifacts, $trace, $inputTokens, $outputTokens, $sawUsage, $started, $lastEstimate, 'time_budget',
-                    'I ran out of time while investigating. What I found so far is listed below — ask me to continue and I will pick up from there.');
+            if (($stopped = $this->checkBudgets($started, $messages, $track, $correlationId)) !== null) {
+                return $stopped;
             }
 
-            $lastEstimate = $this->estimateTokens($messages);
-
-            if ($lastEstimate > $this->tokenBudget) {
-                return $this->partial($seenSources, $seenArtifacts, $trace, $inputTokens, $outputTokens, $sawUsage, $started, $lastEstimate, 'token_budget',
-                    'The investigation grew too large for one turn. Narrow the question or ask about one file at a time.');
-            }
-
-            if ($providerCalls >= $this->maxProviderCalls) {
-                return $this->finalTextAttempt($messages, $seenArtifacts, 'tool_budget', $seenSources, $trace, $inputTokens, $outputTokens, $sawUsage, $started, $lastEstimate, $correlationId);
-            }
-
-            $providerCalls++;
+            $track->providerCalls++;
 
             try {
                 $response = $this->provider->complete(new AIRequest(
@@ -96,14 +65,14 @@ class AgentTurnRunner
                     usage: $this->usage,
                 ));
             } catch (AIProviderException $e) {
-                return $this->partial($seenSources, $seenArtifacts, $trace, $inputTokens, $outputTokens, $sawUsage, $started, $lastEstimate, 'provider_error',
+                return $this->partial($track->seenSources, $track->seenArtifacts, $track->seenDocs, $track->trace, $track->inputTokens, $track->outputTokens, $track->sawUsage, $started, $track->lastEstimate, 'provider_error',
                     'The model request failed ('.substr($e->getMessage(), 0, 200).'). Please try again.');
             }
 
             if ($response->inputTokens !== null || $response->outputTokens !== null) {
-                $sawUsage = true;
-                $inputTokens += $response->inputTokens ?? 0;
-                $outputTokens += $response->outputTokens ?? 0;
+                $track->sawUsage = true;
+                $track->inputTokens += $response->inputTokens ?? 0;
+                $track->outputTokens += $response->outputTokens ?? 0;
             }
 
             $calls = $response->toolCalls ?? [];
@@ -112,117 +81,206 @@ class AgentTurnRunner
                 return $this->finish(
                     trim($response->content) !== '' ? $response->content : 'The model returned an empty answer. Please rephrase the question.',
                     trim($response->content) !== '' ? 'complete' : 'empty_response',
-                    $seenSources, $seenArtifacts, $trace, $inputTokens, $outputTokens, $sawUsage, $started, $lastEstimate
+                    $track->seenSources, $track->seenArtifacts, $track->seenDocs, $track->trace, $track->inputTokens, $track->outputTokens, $track->sawUsage, $started, $track->lastEstimate
                 );
             }
 
-            if ($toolCalls >= $this->maxToolCalls) {
-                return $this->finalTextAttempt($messages, $seenArtifacts, 'tool_budget', $seenSources, $trace, $inputTokens, $outputTokens, $sawUsage, $started, $lastEstimate, $correlationId);
+            if ($track->toolCalls >= $this->maxToolCalls) {
+                return $this->toolBudgetAttempt($started, $messages, $track, $correlationId);
             }
 
             // Execute first, then append the assistant turn followed by its
             // tool results, so the history is always well-formed.
-            $executed = [];
-
-            foreach ($calls as $call) {
-                if ($toolCalls >= $this->maxToolCalls) {
-                    break;
-                }
-
-                if ($this->elapsed($started) >= $this->turnSeconds) {
-                    return $this->partial($seenSources, $seenArtifacts, $trace, $inputTokens, $outputTokens, $sawUsage, $started, $lastEstimate, 'time_budget',
-                        'I ran out of time while investigating. What I found so far is listed below — ask me to continue and I will pick up from there.');
-                }
-
-                $toolCalls++;
-                $callStarted = microtime(true);
-
-                $result = $this->dispatch($call->name, $call->arguments(), $signatures, $searchesSinceRead, $foundUnread, $toolCalls);
-
-                if ($call->name === EvidenceTools::SEARCH) {
-                    $searchesSinceRead++;
-                    foreach ($result->seenSourceIds as $id) {
-                        $foundUnread[$id] = true;
-                    }
-                }
-
-                if ($call->name === EvidenceTools::READ && $result->ok) {
-                    $searchesSinceRead = 0;
-                    $readId = $call->arguments()['source_id'] ?? null;
-                    if (is_numeric($readId)) {
-                        $readIds[(int) $readId] = true;
-                        unset($foundUnread[(int) $readId]);
-                    }
-                }
-
-                // Artifact searches consume planning budget like evidence
-                // searches; bounded reads and list/compare progress reset it.
-                if (in_array($call->name, [ArtifactTools::SEARCH_ELF, ArtifactTools::SEARCH_CAPTURE], true)) {
-                    $searchesSinceRead++;
-                }
-
-                if (in_array($call->name, [ArtifactTools::READ_ELF, ArtifactTools::READ_PACKET, ArtifactTools::LIST_FLOWS, ArtifactTools::COMPARE, ArtifactTools::LIST], true) && $result->ok) {
-                    $searchesSinceRead = 0;
-                }
-
-                // Binary evidence reads are progress; inspection and
-                // status polls are not.
-                if (in_array($call->name, [BinaryTools::DISASM, BinaryTools::FUNCTIONS, BinaryTools::XREFS, BinaryTools::CALLGRAPH], true) && $result->ok) {
-                    $searchesSinceRead = 0;
-                }
-
-                // A successfully examined snapshot is progress; a missing
-                // one is not — it must not launder a search loop.
-                if ($call->name === EvidenceTools::ARCHITECTURE && $result->ok) {
-                    if (($result->data['available'] ?? false) === true) {
-                        $searchesSinceRead = 0;
-                    } else {
-                        $searchesSinceRead++;
-                    }
-                }
-
-                foreach ($result->seenSourceIds as $id) {
-                    $seenSources[$id] = true;
-                }
-
-                foreach ($result->seenArtifactIds as $id) {
-                    $seenArtifacts[$id] = true;
-                }
-
-                $trace[] = [
-                    'name' => $call->name,
-                    'args' => substr($call->argumentsRaw, 0, 300),
-                    'ok' => $result->ok,
-                    'ms' => (int) round((microtime(true) - $callStarted) * 1000),
-                ];
-
-                $executed[] = [$call, $result];
+            $executed = $this->executeCalls($calls, $started, $track);
+            if ($executed === null) {
+                return $this->timeBudgetPartial($started, $track);
             }
 
-            $assistantMessage = ['role' => 'assistant', 'content' => $response->content, 'tool_calls' => []];
-            foreach ($executed as [$call]) {
-                $assistantMessage['tool_calls'][] = [
-                    'id' => $call->id,
-                    'type' => 'function',
-                    'function' => ['name' => $call->name, 'arguments' => $call->argumentsRaw],
-                ];
+            $this->appendTurnMessages($messages, $response->content, $executed, $track);
+        }
+    }
+
+    /**
+     * @param  list<array{role: string, content: string}>  $history
+     * @return list<array{role: string, content: string}>
+     */
+    private function initialMessages(string $system, string $question, array $history): array
+    {
+        $messages = [['role' => 'system', 'content' => $system]];
+
+        foreach (array_slice($history, -6) as $turn) {
+            if (($turn['role'] ?? null) === 'user' || ($turn['role'] ?? null) === 'assistant') {
+                $messages[] = ['role' => $turn['role'], 'content' => substr((string) ($turn['content'] ?? ''), 0, 2000)];
             }
-            $messages[] = $assistantMessage;
+        }
 
-            foreach ($executed as [$call, $result]) {
-                $content = $result->data;
+        $messages[] = ['role' => 'user', 'content' => $question];
 
-                if ($call->name === EvidenceTools::SEARCH && $result->ok) {
-                    $content = self::markReadResults($content, $readIds);
-                }
+        return $messages;
+    }
 
-                $messages[] = [
-                    'role' => 'tool',
-                    'tool_call_id' => $call->id,
-                    'name' => $call->name,
-                    'content' => substr((string) json_encode($content), 0, 12000),
-                ];
+    /**
+     * Loop-top budget guards. Returns a terminal result when a budget
+     * trips, or null to proceed with the next provider call.
+     */
+    private function checkBudgets(float $started, array $messages, TurnTracking $track, string $correlationId): ?AgentTurnResult
+    {
+        if ($this->elapsed($started) >= $this->turnSeconds) {
+            return $this->timeBudgetPartial($started, $track);
+        }
+
+        $track->lastEstimate = $this->estimateTokens($messages);
+
+        if ($track->lastEstimate > $this->tokenBudget) {
+            return $this->partial($track->seenSources, $track->seenArtifacts, $track->seenDocs, $track->trace, $track->inputTokens, $track->outputTokens, $track->sawUsage, $started, $track->lastEstimate, 'token_budget',
+                'The investigation grew too large for one turn. Narrow the question or ask about one file at a time.');
+        }
+
+        if ($track->providerCalls >= $this->maxProviderCalls) {
+            return $this->toolBudgetAttempt($started, $messages, $track, $correlationId);
+        }
+
+        return null;
+    }
+
+    private function toolBudgetAttempt(float $started, array $messages, TurnTracking $track, string $correlationId): AgentTurnResult
+    {
+        return $this->finalTextAttempt($messages, $track->seenArtifacts, 'tool_budget', $track->seenSources, $track->seenDocs, $track->trace, $track->inputTokens, $track->outputTokens, $track->sawUsage, $started, $track->lastEstimate, $correlationId);
+    }
+
+    private function timeBudgetPartial(float $started, TurnTracking $track): AgentTurnResult
+    {
+        return $this->partial($track->seenSources, $track->seenArtifacts, $track->seenDocs, $track->trace, $track->inputTokens, $track->outputTokens, $track->sawUsage, $started, $track->lastEstimate, 'time_budget',
+            'I ran out of time while investigating. What I found so far is listed below — ask me to continue and I will pick up from there.');
+    }
+
+    /**
+     * Execute one batch of tool calls with progress tracking.
+     *
+     * @param  list<AIToolCall>  $calls
+     * @return list<array{AIToolCall, ToolResult}>|null null when the time budget tripped mid-batch
+     */
+    private function executeCalls(array $calls, float $started, TurnTracking $track): ?array
+    {
+        $executed = [];
+
+        foreach ($calls as $call) {
+            if ($track->toolCalls >= $this->maxToolCalls) {
+                break;
             }
+
+            if ($this->elapsed($started) >= $this->turnSeconds) {
+                return null;
+            }
+
+            $track->toolCalls++;
+            $callStarted = microtime(true);
+
+            $result = $this->dispatch($call->name, $call->arguments(), $track->signatures, $track->searchesSinceRead, $track->foundUnread, $track->toolCalls);
+
+            $this->trackCallProgress($call, $result, $callStarted, $track);
+
+            $executed[] = [$call, $result];
+        }
+
+        return $executed;
+    }
+
+    private function trackCallProgress(AIToolCall $call, ToolResult $result, float $callStarted, TurnTracking $track): void
+    {
+        if ($call->name === EvidenceTools::SEARCH) {
+            $track->searchesSinceRead++;
+            foreach ($result->seenSourceIds as $id) {
+                $track->foundUnread[$id] = true;
+            }
+        }
+
+        if ($call->name === EvidenceTools::READ && $result->ok) {
+            $track->searchesSinceRead = 0;
+            $readId = $call->arguments()['source_id'] ?? null;
+            if (is_numeric($readId)) {
+                $track->readIds[(int) $readId] = true;
+                unset($track->foundUnread[(int) $readId]);
+            }
+        }
+
+        // Artifact searches consume planning budget like evidence
+        // searches; bounded reads and list/compare progress reset it.
+        if (in_array($call->name, [ArtifactTools::SEARCH_ELF, ArtifactTools::SEARCH_CAPTURE], true)) {
+            $track->searchesSinceRead++;
+        }
+
+        if (in_array($call->name, [ArtifactTools::READ_ELF, ArtifactTools::READ_PACKET, ArtifactTools::LIST_FLOWS, ArtifactTools::COMPARE, ArtifactTools::LIST], true) && $result->ok) {
+            $track->searchesSinceRead = 0;
+        }
+
+        // Binary evidence reads are progress; inspection and
+        // status polls are not.
+        if (in_array($call->name, [BinaryTools::DISASM, BinaryTools::FUNCTIONS, BinaryTools::XREFS, BinaryTools::CALLGRAPH], true) && $result->ok) {
+            $track->searchesSinceRead = 0;
+        }
+
+        // A successfully examined snapshot is progress; a missing
+        // one is not — it must not launder a search loop.
+        if ($call->name === EvidenceTools::ARCHITECTURE && $result->ok) {
+            if (($result->data['available'] ?? false) === true) {
+                $track->searchesSinceRead = 0;
+            } else {
+                $track->searchesSinceRead++;
+            }
+        }
+
+        foreach ($result->seenSourceIds as $id) {
+            $track->seenSources[$id] = true;
+        }
+
+        foreach ($result->seenArtifactIds as $id) {
+            $track->seenArtifacts[$id] = true;
+        }
+
+        foreach ($result->seenDocIds as $key) {
+            $track->seenDocs[$key] = true;
+        }
+
+        $track->trace[] = [
+            'name' => $call->name,
+            'args' => substr($call->argumentsRaw, 0, 300),
+            'ok' => $result->ok,
+            'ms' => (int) round((microtime(true) - $callStarted) * 1000),
+        ];
+    }
+
+    /**
+     * Append the assistant turn plus its tool results, so the history
+     * is always well-formed.
+     *
+     * @param  list<array{AIToolCall, ToolResult}>  $executed
+     */
+    private function appendTurnMessages(array &$messages, string $content, array $executed, TurnTracking $track): void
+    {
+        $assistantMessage = ['role' => 'assistant', 'content' => $content, 'tool_calls' => []];
+        foreach ($executed as [$call]) {
+            $assistantMessage['tool_calls'][] = [
+                'id' => $call->id,
+                'type' => 'function',
+                'function' => ['name' => $call->name, 'arguments' => $call->argumentsRaw],
+            ];
+        }
+        $messages[] = $assistantMessage;
+
+        foreach ($executed as [$call, $result]) {
+            $toolContent = $result->data;
+
+            if ($call->name === EvidenceTools::SEARCH && $result->ok) {
+                $toolContent = self::markReadResults($toolContent, $track->readIds);
+            }
+
+            $messages[] = [
+                'role' => 'tool',
+                'tool_call_id' => $call->id,
+                'name' => $call->name,
+                'content' => substr((string) json_encode($toolContent), 0, 12000),
+            ];
         }
     }
 
@@ -311,11 +369,11 @@ class AgentTurnRunner
      * @param  array<int, bool>  $seenSources
      * @param  list<array{name: string, args: string, ok: bool, ms: int}>  $trace
      */
-    private function finalTextAttempt(array $messages, array $seenArtifacts, string $reason, array $seenSources, array $trace, int $in, int $out, bool $sawUsage, float $started, int $estimate, string $correlationId): AgentTurnResult
+    private function finalTextAttempt(array $messages, array $seenArtifacts, string $reason, array $seenSources, array $seenDocs, array $trace, int $in, int $out, bool $sawUsage, float $started, int $estimate, string $correlationId): AgentTurnResult
     {
         $messages[] = [
             'role' => 'user',
-            'content' => 'The tool budget for this turn is spent. Answer from the evidence gathered so far, citing the [S{id}] and [A{id}] sources you saw. If the evidence is insufficient, say what is missing.',
+            'content' => 'The tool budget for this turn is spent. Answer from the evidence gathered so far, citing the [S{id}], [A{id}], and [D{id}@{rev}] sources you saw. If the evidence is insufficient, say what is missing.',
         ];
 
         try {
@@ -327,7 +385,7 @@ class AgentTurnRunner
                 usage: $this->usage,
             ));
         } catch (AIProviderException) {
-            return $this->partial($seenSources, $seenArtifacts, $trace, $in, $out, $sawUsage, $started, $estimate, $reason,
+            return $this->partial($seenSources, $seenArtifacts, $seenDocs, $trace, $in, $out, $sawUsage, $started, $estimate, $reason,
                 'The tool budget for this turn is spent and the summary request failed. The investigation trace below shows what was examined.');
         }
 
@@ -342,7 +400,7 @@ class AgentTurnRunner
                 ? $response->content."\n\n(Note: the tool budget for this turn was spent; this answer covers the evidence gathered so far.)"
                 : 'The tool budget for this turn is spent. Ask a narrower follow-up to continue.',
             $reason,
-            $seenSources, $seenArtifacts, $trace, $in, $out, $sawUsage, $started, $estimate
+            $seenSources, $seenArtifacts, $seenDocs, $trace, $in, $out, $sawUsage, $started, $estimate
         );
     }
 
@@ -350,16 +408,16 @@ class AgentTurnRunner
      * @param  array<int, bool>  $seenSources
      * @param  list<array{name: string, args: string, ok: bool, ms: int}>  $trace
      */
-    private function partial(array $seenSources, array $seenArtifacts, array $trace, int $in, int $out, bool $sawUsage, float $started, int $estimate, string $reason, string $note): AgentTurnResult
+    private function partial(array $seenSources, array $seenArtifacts, array $seenDocs, array $trace, int $in, int $out, bool $sawUsage, float $started, int $estimate, string $reason, string $note): AgentTurnResult
     {
-        return $this->finish($note, $reason, $seenSources, $seenArtifacts, $trace, $in, $out, $sawUsage, $started, $estimate);
+        return $this->finish($note, $reason, $seenSources, $seenArtifacts, $seenDocs, $trace, $in, $out, $sawUsage, $started, $estimate);
     }
 
     /**
      * @param  array<int, bool>  $seenSources
      * @param  list<array{name: string, args: string, ok: bool, ms: int}>  $trace
      */
-    private function finish(string $answer, string $reason, array $seenSources, array $seenArtifacts, array $trace, int $in, int $out, bool $sawUsage, float $started, int $estimate): AgentTurnResult
+    private function finish(string $answer, string $reason, array $seenSources, array $seenArtifacts, array $seenDocs, array $trace, int $in, int $out, bool $sawUsage, float $started, int $estimate): AgentTurnResult
     {
         preg_match_all('/\[S(\d+)\]/', $answer, $m);
         $citations = [];
@@ -381,6 +439,29 @@ class AgentTurnRunner
             $citations[] = ['marker' => "[A{$id}]", 'artifact_id' => $id, 'verified' => $verified];
             if (! $verified) {
                 $unverified[] = "[A{$id}]";
+            }
+        }
+
+        // Pinned doc citations: [D{id}@{rev}] plus an optional
+        // #anchor. Only the exact revision the tools returned
+        // verifies — anything else is an unverified marker.
+        preg_match_all('/\[D(\d+)@(\d+)(#[A-Za-z0-9-]+)?\]/', $answer, $dm, PREG_SET_ORDER);
+        $seenMarkers = [];
+        foreach ($dm as $match) {
+            if (isset($seenMarkers[$match[0]])) {
+                continue;
+            }
+            $seenMarkers[$match[0]] = true;
+            $id = (int) $match[1];
+            $rev = (int) $match[2];
+            $verified = isset($seenDocs["{$id}@{$rev}"]);
+            $citation = ['marker' => $match[0], 'doc_id' => $id, 'rev' => $rev, 'verified' => $verified];
+            if (isset($match[3]) && $match[3] !== '') {
+                $citation['anchor'] = substr($match[3], 1);
+            }
+            $citations[] = $citation;
+            if (! $verified) {
+                $unverified[] = $match[0];
             }
         }
 

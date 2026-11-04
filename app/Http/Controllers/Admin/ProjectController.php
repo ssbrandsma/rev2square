@@ -8,6 +8,7 @@ use App\Models\Project;
 use App\Models\User;
 use App\Services\Admin\AdminProjectService;
 use App\Services\Admin\ProjectTransferException;
+use App\Support\Like;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
@@ -24,7 +25,7 @@ class ProjectController extends Controller
 
         $projects = Project::query()
             ->when(($filters['q'] ?? '') !== '', function ($query) use ($filters): void {
-                $term = '%'.str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], (string) $filters['q']).'%';
+                $term = Like::contains((string) $filters['q']);
                 $query->where(fn ($q) => $q->where('title', 'like', $term)
                     ->orWhere('slug', 'like', $term)
                     ->orWhereHas('owner', fn ($o) => $o->where('name', 'like', $term)->orWhere('email', 'like', $term)));

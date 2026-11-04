@@ -7,6 +7,7 @@ use App\Models\ProjectArtifact;
 use App\Services\Artifacts\ArtifactStorage;
 use App\Services\Binary\Adapters\AdapterRegistry;
 use App\Services\Binary\Adapters\AnalysisFailedException;
+use App\Services\Binary\Adapters\BinaryAdapter;
 use App\Services\Binary\Adapters\ExternalBackend;
 use App\Services\Binary\Adapters\SandboxedBackend;
 use App\Services\Binary\ArchiveMember;
@@ -63,167 +64,39 @@ class AnalyzeBinaryJob implements ShouldQueue
 
     public function handle(): void
     {
-        $analysis = BinaryAnalysis::find($this->analysisId);
+        $analysis = $this->prepareRun();
         if ($analysis === null) {
             return;
         }
 
-        // A cancelled-before-start run stays cancelled: never resurrect.
-        if ($analysis->status !== BinaryAnalysis::STATUS_QUEUED) {
-            return;
-        }
-
-        $artifact = $analysis->artifact;
-        $uploader = $artifact->uploader;
-        if ($uploader !== null && $uploader->isSuspended()) {
-            $this->finishFailed($analysis, 'access_revoked', 'The uploader account was suspended before analysis ran.');
-
-            return;
-        }
-
-        $analysis->forceFill([
-            'status' => BinaryAnalysis::STATUS_ANALYZING,
-            'progress_note' => 'Starting deterministic analysis…',
-            'started_at' => now(),
-        ])->save();
-
         try {
             $disk = Storage::disk('artifacts');
-            $status = ArtifactStorage::status('artifacts', $artifact->rawPath());
-            if ($status !== ArtifactStorage::OK) {
-                ArtifactStorage::logUnavailable('artifacts', $artifact->rawPath(), $status, [
-                    'analysis_id' => $analysis->id,
-                    'artifact_id' => $artifact->id,
-                    'project_id' => $artifact->project_id,
-                ]);
-                $this->finishFailed($analysis, $status === ArtifactStorage::MISSING ? 'missing_original' : 'storage_unreadable', ArtifactStorage::unavailableMessage());
+            $artifact = $analysis->artifact;
 
-                return;
-            }
-
-            $bytes = $disk->get($artifact->rawPath());
-            if (strlen($bytes) !== (int) $artifact->byte_size || hash('sha256', $bytes) !== $artifact->sha256) {
-                $this->finishFailed($analysis, 'integrity_mismatch', 'The stored file failed its integrity check. Re-upload it to analyze.');
-
+            $bytes = $this->loadVerifiedBytes($analysis, $artifact, $disk);
+            if ($bytes === null) {
                 return;
             }
 
             $snapshot = $artifact->readSnapshot() ?? [];
             $config = $analysis->config ?? [];
 
-            $memberName = $config['member'] ?? null;
-            if (in_array($artifact->format, [ProjectArtifact::FORMAT_ARCHIVE, ProjectArtifact::FORMAT_APK], true) && is_string($memberName) && $memberName !== '') {
-                $analysis->forceFill(['progress_note' => 'Extracting archive member…'])->save();
-                $staged = ArchiveMember::prepare($bytes, $memberName, $analysis->target, $config);
-                if (! ($staged['ok'] ?? false)) {
-                    $this->finishFailed($analysis, $staged['code'], $staged['message']);
-
-                    return;
-                }
-                $bytes = $staged['bytes'];
-                $snapshot = $staged['snapshot'];
-                $config = array_merge($config, [
-                    'member_format' => $staged['format'],
-                    'member_arch' => $staged['arch'],
-                    'member_info' => $staged['info'],
-                ]);
-                if (($analysis->target === null || $analysis->target === '') && ($staged['target'] ?? '') !== '') {
-                    $analysis->forceFill(['target' => $staged['target']])->save();
-                }
+            $member = $this->maybeExtractMember($analysis, $artifact, $bytes, $snapshot, $config);
+            if ($member === null) {
+                return;
             }
+            [$bytes, $snapshot, $config] = $member;
 
-            $adapter = AdapterRegistry::get($analysis->adapter);
+            $adapter = $this->resolveAdapter($analysis);
             if ($adapter === null) {
-                $this->finishFailed($analysis, 'unknown_adapter', 'The requested backend is no longer registered.');
-
                 return;
             }
 
-            // Execution-time re-validation: the worker that runs this
-            // job re-checks its own backend — never trusts dispatch.
-            // Sandboxed adapters re-probe through the spool (the runner
-            // may have been replaced since dispatch).
-            if ($adapter instanceof SandboxedBackend) {
-                $probe = $adapter->probe();
-                if (! $probe['available']) {
-                    $this->finishFailed($analysis, 'worker_unavailable', 'The isolated backend is unavailable at execution time: '.$probe['reason']);
-
-                    return;
-                }
-                $live = $adapter->version();
-                if ($live !== $analysis->adapter_version) {
-                    $this->finishFailed($analysis, 'worker_mismatch', 'Backend version changed between queue and execution (queued '.($analysis->adapter_version ?? 'unknown').', worker has '.($live ?? 'unknown').'). Queue a fresh run.');
-
-                    return;
-                }
-            }
-            if ($adapter instanceof ExternalBackend) {
-                $probe = $adapter->probe();
-                if (! $probe['available']) {
-                    $this->finishFailed($analysis, 'worker_unavailable', 'The worker no longer has this backend: '.$probe['reason']);
-
-                    return;
-                }
-                $live = $adapter->version();
-                if ($live !== $analysis->adapter_version) {
-                    $this->finishFailed($analysis, 'worker_mismatch', 'Backend version changed between queue and execution (queued '.($analysis->adapter_version ?? 'unknown').', worker has '.($live ?? 'unknown').'). Queue a fresh run.');
-
-                    return;
-                }
+            if (! $this->revalidateWorker($analysis, $adapter)) {
+                return;
             }
 
-            $analysis->forceFill(['progress_note' => 'Disassembling executable segments…'])->save();
-            $heartbeat = fn (): bool => $analysis->fresh()?->status === BinaryAnalysis::STATUS_ANALYZING;
-
-            $evidence = $adapter->analyze($analysis, $bytes, $snapshot, $config, $heartbeat);
-            $archive = $adapter instanceof SandboxedBackend ? $adapter->lastOutputArchive() : null;
-            try {
-                // Single choke point: normalize + bound + reject hostile
-                // evidence before anything is stored or rendered.
-                $evidence = EvidenceValidator::validate($adapter->id(), $evidence);
-
-                // Retained-output persistence BEFORE fitEvidence: an
-                // archive discard is recorded in the stored evidence
-                // warnings. The tmp file is unlinked on every path by
-                // the finally below; persist itself never throws.
-                $outputMeta = $this->persistOutputArchive($analysis, $archive, $disk);
-                if ($archive !== null && $outputMeta === null) {
-                    $evidence['warnings'][] = 'output_archive_discarded';
-                }
-
-                $encoded = self::fitEvidence($evidence);
-                if ($encoded === null) {
-                    $this->finishFailed($analysis, 'evidence_too_large', 'Analysis output exceeded the storage cap even after trimming disassembly. Narrow the target range and retry.');
-
-                    return;
-                }
-
-                $key = Str::random(40);
-                $disk->put($artifact->project_id.'/'.$key.'.analysis.json', $encoded);
-
-                $warnings = $evidence['warnings'] ?? [];
-                $partial = false;
-                foreach ($warnings as $warning) {
-                    if (str_contains((string) $warning, 'capped') || str_contains((string) $warning, 'trimmed')) {
-                        $partial = true;
-                        break;
-                    }
-                }
-
-                $analysis->forceFill([
-                    'status' => $partial ? BinaryAnalysis::STATUS_PARTIAL : BinaryAnalysis::STATUS_READY,
-                    'progress_note' => null,
-                    'error_code' => null,
-                    'error_message' => null,
-                    'evidence_key' => $key,
-                    'output_meta' => $outputMeta,
-                    'finished_at' => now(),
-                ])->save();
-            } finally {
-                if (is_string($archive['tmp'] ?? null)) {
-                    @unlink($archive['tmp']);
-                }
-            }
+            $this->runAndStore($analysis, $artifact, $adapter, $bytes, $snapshot, $config, $disk);
         } catch (AnalysisFailedException $e) {
             if ($e->errorCode === 'cancelled_race') {
                 $analysis->forceFill([
@@ -246,6 +119,204 @@ class AnalyzeBinaryJob implements ShouldQueue
         $analysis = BinaryAnalysis::find($this->analysisId);
         if ($analysis !== null && ! $analysis->isTerminal()) {
             $this->finishFailed($analysis, 'job_failed', 'Analysis did not finish (worker timeout or crash). Retry from the analysis page.');
+        }
+    }
+
+    /**
+     * Claim a queued run for this worker. Null when there is nothing
+     * to do (missing, already handled, or uploader suspended).
+     */
+    private function prepareRun(): ?BinaryAnalysis
+    {
+        $analysis = BinaryAnalysis::find($this->analysisId);
+        if ($analysis === null) {
+            return null;
+        }
+
+        // A cancelled-before-start run stays cancelled: never resurrect.
+        if ($analysis->status !== BinaryAnalysis::STATUS_QUEUED) {
+            return null;
+        }
+
+        $uploader = $analysis->artifact->uploader;
+        if ($uploader !== null && $uploader->isSuspended()) {
+            $this->finishFailed($analysis, 'access_revoked', 'The uploader account was suspended before analysis ran.');
+
+            return null;
+        }
+
+        $analysis->forceFill([
+            'status' => BinaryAnalysis::STATUS_ANALYZING,
+            'progress_note' => 'Starting deterministic analysis…',
+            'started_at' => now(),
+        ])->save();
+
+        return $analysis;
+    }
+
+    /**
+     * Read the stored bytes after availability and integrity checks.
+     * Null when the run already failed.
+     */
+    private function loadVerifiedBytes(BinaryAnalysis $analysis, ProjectArtifact $artifact, FilesystemAdapter $disk): ?string
+    {
+        $status = ArtifactStorage::status('artifacts', $artifact->rawPath());
+        if ($status !== ArtifactStorage::OK) {
+            ArtifactStorage::logUnavailable('artifacts', $artifact->rawPath(), $status, [
+                'analysis_id' => $analysis->id,
+                'artifact_id' => $artifact->id,
+                'project_id' => $artifact->project_id,
+            ]);
+            $this->finishFailed($analysis, $status === ArtifactStorage::MISSING ? 'missing_original' : 'storage_unreadable', ArtifactStorage::unavailableMessage());
+
+            return null;
+        }
+
+        $bytes = $disk->get($artifact->rawPath());
+        if (strlen($bytes) !== (int) $artifact->byte_size || hash('sha256', $bytes) !== $artifact->sha256) {
+            $this->finishFailed($analysis, 'integrity_mismatch', 'The stored file failed its integrity check. Re-upload it to analyze.');
+
+            return null;
+        }
+
+        return $bytes;
+    }
+
+    /**
+     * Narrow bytes/snapshot/config to one archive member when the run
+     * targets a member. Returns the (possibly unchanged) triple, or
+     * null when the run already failed.
+     *
+     * @return array{0: string, 1: array<string, mixed>, 2: array<string, mixed>}|null
+     */
+    private function maybeExtractMember(BinaryAnalysis $analysis, ProjectArtifact $artifact, string $bytes, array $snapshot, array $config): ?array
+    {
+        $memberName = $config['member'] ?? null;
+        if (! in_array($artifact->format, [ProjectArtifact::FORMAT_ARCHIVE, ProjectArtifact::FORMAT_APK], true) || ! is_string($memberName) || $memberName === '') {
+            return [$bytes, $snapshot, $config];
+        }
+
+        $analysis->forceFill(['progress_note' => 'Extracting archive member…'])->save();
+        $staged = ArchiveMember::prepare($bytes, $memberName, $analysis->target, $config);
+        if (! ($staged['ok'] ?? false)) {
+            $this->finishFailed($analysis, $staged['code'], $staged['message']);
+
+            return null;
+        }
+
+        $config = array_merge($config, [
+            'member_format' => $staged['format'],
+            'member_arch' => $staged['arch'],
+            'member_info' => $staged['info'],
+        ]);
+        if (($analysis->target === null || $analysis->target === '') && ($staged['target'] ?? '') !== '') {
+            $analysis->forceFill(['target' => $staged['target']])->save();
+        }
+
+        return [$staged['bytes'], $staged['snapshot'], $config];
+    }
+
+    private function resolveAdapter(BinaryAnalysis $analysis): ?BinaryAdapter
+    {
+        $adapter = AdapterRegistry::get($analysis->adapter);
+        if ($adapter === null) {
+            $this->finishFailed($analysis, 'unknown_adapter', 'The requested backend is no longer registered.');
+
+            return null;
+        }
+
+        return $adapter;
+    }
+
+    /**
+     * Execution-time re-validation: the worker that runs this job
+     * re-checks its own backend — never trusts dispatch. False when
+     * the run already failed.
+     */
+    private function revalidateWorker(BinaryAnalysis $analysis, BinaryAdapter $adapter): bool
+    {
+        $unavailablePrefix = match (true) {
+            $adapter instanceof SandboxedBackend => 'The isolated backend is unavailable at execution time: ',
+            $adapter instanceof ExternalBackend => 'The worker no longer has this backend: ',
+            default => null,
+        };
+
+        if ($unavailablePrefix === null) {
+            return true;
+        }
+
+        // Sandboxed adapters re-probe through the spool (the runner
+        // may have been replaced since dispatch).
+        $probe = $adapter->probe();
+        if (! $probe['available']) {
+            $this->finishFailed($analysis, 'worker_unavailable', $unavailablePrefix.$probe['reason']);
+
+            return false;
+        }
+
+        $live = $adapter->version();
+        if ($live !== $analysis->adapter_version) {
+            $this->finishFailed($analysis, 'worker_mismatch', 'Backend version changed between queue and execution (queued '.($analysis->adapter_version ?? 'unknown').', worker has '.($live ?? 'unknown').'). Queue a fresh run.');
+
+            return false;
+        }
+
+        return true;
+    }
+
+    private function runAndStore(BinaryAnalysis $analysis, ProjectArtifact $artifact, BinaryAdapter $adapter, string $bytes, array $snapshot, array $config, FilesystemAdapter $disk): void
+    {
+        $analysis->forceFill(['progress_note' => 'Disassembling executable segments…'])->save();
+        $heartbeat = fn (): bool => $analysis->fresh()?->status === BinaryAnalysis::STATUS_ANALYZING;
+
+        $evidence = $adapter->analyze($analysis, $bytes, $snapshot, $config, $heartbeat);
+        $archive = $adapter instanceof SandboxedBackend ? $adapter->lastOutputArchive() : null;
+        try {
+            // Single choke point: normalize + bound + reject hostile
+            // evidence before anything is stored or rendered.
+            $evidence = EvidenceValidator::validate($adapter->id(), $evidence);
+
+            // Retained-output persistence BEFORE fitEvidence: an
+            // archive discard is recorded in the stored evidence
+            // warnings. The tmp file is unlinked on every path by
+            // the finally below; persist itself never throws.
+            $outputMeta = $this->persistOutputArchive($analysis, $archive, $disk);
+            if ($archive !== null && $outputMeta === null) {
+                $evidence['warnings'][] = 'output_archive_discarded';
+            }
+
+            $encoded = self::fitEvidence($evidence);
+            if ($encoded === null) {
+                $this->finishFailed($analysis, 'evidence_too_large', 'Analysis output exceeded the storage cap even after trimming disassembly. Narrow the target range and retry.');
+
+                return;
+            }
+
+            $key = Str::random(40);
+            $disk->put($artifact->project_id.'/'.$key.'.analysis.json', $encoded);
+
+            $warnings = $evidence['warnings'] ?? [];
+            $partial = false;
+            foreach ($warnings as $warning) {
+                if (str_contains((string) $warning, 'capped') || str_contains((string) $warning, 'trimmed')) {
+                    $partial = true;
+                    break;
+                }
+            }
+
+            $analysis->forceFill([
+                'status' => $partial ? BinaryAnalysis::STATUS_PARTIAL : BinaryAnalysis::STATUS_READY,
+                'progress_note' => null,
+                'error_code' => null,
+                'error_message' => null,
+                'evidence_key' => $key,
+                'output_meta' => $outputMeta,
+                'finished_at' => now(),
+            ])->save();
+        } finally {
+            if (is_string($archive['tmp'] ?? null)) {
+                @unlink($archive['tmp']);
+            }
         }
     }
 

@@ -3,23 +3,24 @@
 namespace App\Http\Controllers;
 
 use App\Enums\TestOutcome;
+use App\Http\Controllers\Concerns\ManagesEvidence;
 use App\Models\AuditEvent;
-use App\Models\DeviceVariant;
 use App\Models\Project;
 use App\Models\TestReport;
 use App\Notifications\TestReportConfirmedNotification;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\View\View;
 
 class TestReportController extends Controller
 {
+    use ManagesEvidence;
+
     public function show(Project $project, TestReport $testReport): View
     {
         Gate::authorize('view', $project);
-        abort_unless($testReport->project_id === $project->id, 404);
+        $this->assertBelongsToProject($project, $testReport);
 
         $testReport->load(['author', 'task', 'variant.device', 'confirmedBy', 'attachments.uploader', 'attachments.reviewedBy']);
 
@@ -59,7 +60,7 @@ class TestReportController extends Controller
     public function edit(Project $project, TestReport $testReport): View
     {
         Gate::authorize('view', $project);
-        abort_unless($testReport->project_id === $project->id, 404);
+        $this->assertBelongsToProject($project, $testReport);
         abort_unless($this->canEdit($project, $testReport, auth()->user()), 403);
 
         return view('projects.test-reports.edit', [
@@ -73,7 +74,7 @@ class TestReportController extends Controller
     public function update(Request $request, Project $project, TestReport $testReport): RedirectResponse
     {
         Gate::authorize('view', $project);
-        abort_unless($testReport->project_id === $project->id, 404);
+        $this->assertBelongsToProject($project, $testReport);
         abort_unless($this->canEdit($project, $testReport, $request->user()), 403);
 
         $wasConfirmed = $testReport->isConfirmed();
@@ -96,7 +97,7 @@ class TestReportController extends Controller
     public function confirm(Request $request, Project $project, TestReport $testReport): RedirectResponse
     {
         Gate::authorize('view', $project);
-        abort_unless($testReport->project_id === $project->id, 404);
+        $this->assertBelongsToProject($project, $testReport);
         abort_unless($testReport->user_id !== $request->user()->id, 403, 'You cannot confirm your own report.');
         abort_unless(! $testReport->isConfirmed(), 422, 'This report is already confirmed.');
 
@@ -138,19 +139,11 @@ class TestReportController extends Controller
         $outcome = TestOutcome::tryFrom($data['outcome']);
         abort_unless($outcome !== null, 422, 'Unknown test outcome.');
 
-        if (($data['contributor_task_id'] ?? null) !== null) {
-            abort_unless(
-                $project->tasks()->whereKey($data['contributor_task_id'])->exists(),
-                422,
-                'Task does not belong to this project.'
-            );
-        }
+        $this->assertTaskBelongsToProject($project, $data['contributor_task_id'] ?? null);
 
         if (($data['device_variant_id'] ?? null) !== null) {
             abort_unless(
-                DeviceVariant::whereKey((int) $data['device_variant_id'])
-                    ->whereIn('device_id', $project->devices()->pluck('devices.id'))
-                    ->exists(),
+                $this->variantBelongsToProject($project, (int) $data['device_variant_id']),
                 422,
                 'Device variant does not belong to this project.'
             );
@@ -164,18 +157,5 @@ class TestReportController extends Controller
             'contributor_task_id' => $data['contributor_task_id'] ?? null,
             'device_variant_id' => $data['device_variant_id'] ?? null,
         ];
-    }
-
-    /** @return Collection<int, DeviceVariant> */
-    private function variants(Project $project)
-    {
-        return DeviceVariant::with('device')
-            ->whereIn('device_id', $project->devices()->pluck('devices.id'))
-            ->get();
-    }
-
-    private function canEdit(Project $project, TestReport $report, mixed $user): bool
-    {
-        return $report->user_id === $user?->id || $project->managedBy($user);
     }
 }

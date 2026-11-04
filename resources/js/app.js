@@ -9,3 +9,4 @@ import '../js/pages/chat-launcher.js';
 import '../js/pages/discussion-composer.js';
 import '../js/pages/architecture-diagram.js';
 import '../js/pages/story-editor.js';
+import '../js/docs/finding-refs.js';

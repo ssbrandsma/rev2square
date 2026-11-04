@@ -64,7 +64,18 @@
                                                 @else
                                                     <span class="font-semibold text-red-700">not verified this turn</span>
                                                 @endif
-                                            @elseif($citation['verified'] && isset($paths[$citation['source_id']]))
+                                            @elseif(isset($citation['doc_id']))
+                                                @php($docKey = $citation['doc_id'].'@'.$citation['rev'])
+                                                @if($citation['verified'] && isset($docTitles[$docKey]))
+                                                    @can('view', $project)
+                                                        <a href="{{ route('projects.docs.show', [$project, $citation['doc_id'], 'rev' => $citation['rev'], 'from' => 'agent:'.$conversation->id]).(isset($citation['anchor']) ? '#'.$citation['anchor'] : '') }}" class="text-amber-700 hover:underline">{{ $docTitles[$docKey]['title'] }} (rev {{ $citation['rev'] }}@if($citation['rev'] < $docTitles[$docKey]['rev']) — newer: {{ $docTitles[$docKey]['rev'] }}@endif)</a>
+                                                    @else
+                                                        <span class="text-zinc-600">{{ $docTitles[$docKey]['title'] }} (rev {{ $citation['rev'] }})</span>
+                                                    @endcan
+                                                @else
+                                                    <span class="font-semibold text-red-700">not verified this turn</span>
+                                                @endif
+                                            @elseif(isset($citation['source_id']) && $citation['verified'] && isset($paths[$citation['source_id']]))
                                                 @can('update', $project)
                                                     <a href="{{ route('projects.evidence.show', [$project, $citation['source_id'], 'from' => 'agent:'.$conversation->id]) }}" class="text-emerald-700 hover:underline">{{ $paths[$citation['source_id']] }}</a>
                                                 @else

@@ -16,19 +16,13 @@ use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
 use Tests\Support\MockAIProvider;
+use Tests\Support\SeedsProjects;
 use Tests\TestCase;
 
 class ArtifactInvestigationTest extends TestCase
 {
     use RefreshDatabase;
-
-    private function seedProject(): array
-    {
-        $owner = User::factory()->create();
-        $project = Project::factory()->draft()->create(['owner_id' => $owner->id]);
-
-        return [$project->fresh(), $owner];
-    }
+    use SeedsProjects;
 
     private function fixtureBytes(string $name): string
     {

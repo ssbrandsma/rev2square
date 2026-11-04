@@ -61,14 +61,14 @@ FROM php:8.4-fpm
 
 # Same extension set as docker/php/Dockerfile (dev): pdo_mysql (MariaDB),
 # mbstring, zip, exif, pcntl (queue/scheduler signals), bcmath, opcache,
-# curl, dom, gd (JPEG/PNG via --with-jpeg: media derivatives and avatar
-# resize/re-encode, which also strips embedded metadata; the queue
-# worker refuses image jobs without it). The curl binary serves the
-# reverb container healthcheck (the base image ships no HTTP client);
-# the PHP curl extension is separate.
+# curl, dom, gd (JPEG/PNG/WebP via --with-jpeg --with-webp: media
+# derivatives and avatar resize/re-encode, which also strips embedded
+# metadata; the queue worker refuses image jobs without it). The curl
+# binary serves the reverb container healthcheck (the base image ships
+# no HTTP client); the PHP curl extension is separate.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        curl git unzip libzip-dev libonig-dev libxml2-dev libcurl4-openssl-dev libpng-dev libjpeg-dev \
-    && docker-php-ext-configure gd --with-jpeg \
+        curl git unzip libzip-dev libonig-dev libxml2-dev libcurl4-openssl-dev libpng-dev libjpeg-dev libwebp-dev \
+    && docker-php-ext-configure gd --with-jpeg --with-webp \
     && docker-php-ext-install pdo_mysql mbstring zip exif pcntl bcmath opcache curl dom gd \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 

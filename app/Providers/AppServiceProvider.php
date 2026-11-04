@@ -14,8 +14,10 @@ use App\Services\GitHub\GitHubClient;
 use App\Services\Revival\ArchiveRepositoryImporter;
 use App\Services\Revival\EvidenceManifestBuilder;
 use App\Services\Revival\GitHubRepositoryImporter;
+use App\View\Composers\UnreadCountComposer;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\URL;
+use Illuminate\Support\Facades\View;
 use Illuminate\Support\ServiceProvider;
 use Tests\Support\MockAIProvider;
 
@@ -81,5 +83,9 @@ class AppServiceProvider extends ServiceProvider
         // boot (web request and each queue job), so admin changes
         // propagate to workers without restarts or root access.
         AppSettings::applyToConfig();
+
+        // One shared unread-notification count for the layout badge and
+        // the inbox header, instead of ad-hoc queries in each blade.
+        View::composer(['layouts.app', 'inbox.index'], UnreadCountComposer::class);
     }
 }

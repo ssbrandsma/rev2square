@@ -3,22 +3,12 @@
 namespace App\Notifications;
 
 use App\Models\ContributorTask;
-use Illuminate\Bus\Queueable;
-use Illuminate\Notifications\Notification;
 
-class TaskAssignedNotification extends Notification
+class TaskAssignedNotification extends DatabaseNotification
 {
-    use Queueable;
-
     public function __construct(
         private readonly ContributorTask $task,
     ) {}
-
-    /** @return list<string> */
-    public function via(object $notifiable): array
-    {
-        return ['database'];
-    }
 
     /** @return array<string, mixed> */
     public function toArray(object $notifiable): array

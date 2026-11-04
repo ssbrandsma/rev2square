@@ -21,9 +21,7 @@ class InboxController extends Controller
             ->values();
 
         if ($projectIds->isNotEmpty()) {
-            $visibleIds = Project::whereIn('id', $projectIds)->get()
-                ->filter(fn (Project $project): bool => auth()->user()->can('view', $project))
-                ->map->id;
+            $visibleIds = Project::whereIn('id', $projectIds)->visibleTo(auth()->user())->pluck('id');
 
             $notifications->setCollection($notifications->getCollection()->filter(
                 fn ($notification): bool => ! isset($notification->data['project_id'])

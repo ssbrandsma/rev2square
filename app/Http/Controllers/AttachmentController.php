@@ -7,10 +7,12 @@ use App\Models\AuditEvent;
 use App\Models\Observation;
 use App\Models\Project;
 use App\Models\TestReport;
+use App\Services\Community\ProjectActionPolicy;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 class AttachmentController extends Controller
@@ -29,14 +31,14 @@ class AttachmentController extends Controller
 
     public function storeObservationFile(Request $request, Project $project, Observation $observation): RedirectResponse
     {
-        abort_unless($observation->project_id === $project->id, 404);
+        $this->assertBelongsToProject($project, $observation);
 
         return $this->store($request, $project, $observation);
     }
 
     public function storeTestReportFile(Request $request, Project $project, TestReport $testReport): RedirectResponse
     {
-        abort_unless($testReport->project_id === $project->id, 404);
+        $this->assertBelongsToProject($project, $testReport);
 
         return $this->store($request, $project, $testReport);
     }
@@ -64,12 +66,12 @@ class AttachmentController extends Controller
         return back()->with('status', 'Attachment marked as reviewed.');
     }
 
-    public function destroy(Project $project, Attachment $attachment): RedirectResponse
+    public function destroy(Request $request, Project $project, Attachment $attachment): RedirectResponse
     {
         Gate::authorize('view', $project);
         abort_unless($attachment->project()?->id === $project->id, 404);
 
-        $user = request()->user();
+        $user = $request->user();
         abort_unless($attachment->user_id === $user->id || $project->managedBy($user), 403);
 
         Storage::delete($attachment->path);
@@ -85,6 +87,10 @@ class AttachmentController extends Controller
     {
         Gate::authorize('view', $project);
 
+        if ($denial = ProjectActionPolicy::evidenceDenial($project, $request->user())) {
+            return back()->withErrors(['file' => $denial]);
+        }
+
         $data = $request->validate([
             'file' => ['required', 'file', 'max:'.self::MAX_KILOBYTES, 'mimetypes:'.implode(',', self::ALLOWED_MIMES)],
         ]);
@@ -92,16 +98,21 @@ class AttachmentController extends Controller
         $file = $data['file'];
         $path = $file->store('attachments', 'local');
 
+        // Never trust client-supplied metadata: strip any directory
+        // adventure from the name (it is reused as the download
+        // filename) and sniff the MIME server-side instead.
+        $originalName = Str::limit(pathinfo((string) $file->getClientOriginalName(), PATHINFO_BASENAME) ?: 'upload', 255, '');
+
         $parent->attachments()->create([
             'user_id' => $request->user()->id,
             'path' => $path,
-            'original_name' => $file->getClientOriginalName(),
-            'mime' => $file->getClientMimeType(),
+            'original_name' => $originalName,
+            'mime' => $file->getMimeType(),
             'size' => $file->getSize(),
         ]);
 
         AuditEvent::record('attachment.uploaded', $request->user(), $project, $parent, [
-            'original_name' => $file->getClientOriginalName(),
+            'original_name' => $originalName,
         ]);
 
         return back()->with('status', 'File attached. A maintainer will review it for sensitive content.');

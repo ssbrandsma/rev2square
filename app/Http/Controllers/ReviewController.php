@@ -17,7 +17,7 @@ class ReviewController extends Controller
     public function approve(Request $request, Project $project, AnalysisReport $report): RedirectResponse
     {
         Gate::authorize('update', $project);
-        $this->ensureBelongs($project, $report);
+        $this->assertBelongsToProject($project, $report);
 
         $data = $request->validate(['review_notes' => ['nullable', 'string', 'max:5000']]);
 
@@ -41,7 +41,7 @@ class ReviewController extends Controller
     public function reject(Request $request, Project $project, AnalysisReport $report): RedirectResponse
     {
         Gate::authorize('update', $project);
-        $this->ensureBelongs($project, $report);
+        $this->assertBelongsToProject($project, $report);
 
         $data = $request->validate(['review_notes' => ['nullable', 'string', 'max:5000']]);
 
@@ -62,25 +62,20 @@ class ReviewController extends Controller
             ->with('status', "Report v{$report->version_number} rejected.");
     }
 
-    public function publish(Project $project, AnalysisReport $report, ProjectPublisher $publisher): RedirectResponse
+    public function publish(Request $request, Project $project, AnalysisReport $report, ProjectPublisher $publisher): RedirectResponse
     {
         Gate::authorize('update', $project);
-        $this->ensureBelongs($project, $report);
+        $this->assertBelongsToProject($project, $report);
 
         try {
-            $summary = $publisher->publish($report->fresh(), request()->user());
+            $summary = $publisher->publish($report->fresh(), $request->user());
         } catch (PublisherException $e) {
             return back()->withErrors(['review' => $e->getMessage()]);
         }
 
-        AuditEvent::record('report.published', request()->user(), $project, $report, $summary);
+        AuditEvent::record('report.published', $request->user(), $project, $report, $summary);
 
         return redirect()->route('projects.show', $project)
             ->with('status', "Report v{$report->version_number} published: {$summary['milestones_created']} new milestones, {$summary['tasks_created']} new tasks.");
-    }
-
-    private function ensureBelongs(Project $project, AnalysisReport $report): void
-    {
-        abort_unless($report->project_id === $project->id, 404);
     }
 }

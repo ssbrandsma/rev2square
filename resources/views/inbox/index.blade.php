@@ -1,8 +1,7 @@
 <x-app-layout>
     <x-slot name="title">Inbox</x-slot>
     <x-slot name="header">
-        @php($unreadInboxCount = auth()->user()->unreadNotifications()->count())
-        <h1 class="text-[1.75rem] font-semibold leading-tight tracking-tight sm:text-3xl">Inbox @if($unreadInboxCount > 0)<span class="text-lg font-semibold text-zinc-400">({{ $unreadInboxCount }} unread)</span>@endif</h1>
+        <h1 class="text-[1.75rem] font-semibold leading-tight tracking-tight sm:text-3xl">Inbox @if($unreadCount > 0)<span class="text-lg font-semibold text-zinc-400">({{ $unreadCount }} unread)</span>@endif</h1>
     </x-slot>
     <div class="mx-auto max-w-3xl px-4 py-10 sm:px-6">
         @if(session('status'))
@@ -13,7 +12,7 @@
             <form method="POST" action="{{ route('inbox.read-all') }}" class="inline">
                 @csrf
                 @method('PATCH')
-                <button type="submit" @disabled($unreadInboxCount === 0) class="text-sm font-semibold text-emerald-700 hover:text-emerald-600 disabled:cursor-not-allowed disabled:text-zinc-400 disabled:hover:text-zinc-400">Mark all as read</button>
+                <button type="submit" @disabled($unreadCount === 0) class="text-sm font-semibold text-emerald-700 hover:text-emerald-600 disabled:cursor-not-allowed disabled:text-zinc-400 disabled:hover:text-zinc-400">Mark all as read</button>
             </form>
         </div>
 

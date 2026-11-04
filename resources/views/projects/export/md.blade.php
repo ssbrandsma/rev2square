@@ -19,6 +19,24 @@
 @empty
 @endforelse
 @endif
+@if(! empty($data['docs']))
+
+## Documentation
+
+@foreach($data['docs'] as $doc)
+### {{ $doc['title'] }} ({{ $doc['category'] }} — {{ $doc['status'] }}, rev {{ $doc['revision'] }})
+
+@if($doc['summary']){{ $doc['summary'] }}
+
+@endif
+{{ $doc['markdown'] }}
+
+@foreach($doc['findings'] as $finding)
+- **{{ $finding['status'] }}**: {{ $finding['statement'] }}@if($finding['measurement_notes']) ({{ $finding['measurement_notes'] }})@endif
+
+@endforeach
+@endforeach
+@endif
 
 ## Devices
 

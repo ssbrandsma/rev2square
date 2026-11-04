@@ -13,7 +13,6 @@ use App\Services\Binary\CapabilityMatrix;
 use App\Services\Binary\Targets;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
-use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
@@ -48,9 +47,8 @@ class ArtifactController extends Controller
         // PHP silently empties the request when the body exceeds
         // post_max_size. Detect that here so an oversized batch is
         // never misreported as a missing file or a CSRF failure.
-        $postMax = self::phpBytes((string) ini_get('post_max_size'));
         $contentLength = (int) $request->headers->get('Content-Length', 0);
-        if ($postMax > 0 && $contentLength > $postMax) {
+        if (($postMax = ArtifactUploadService::exceededPostLimit($contentLength)) !== null) {
             return back()
                 ->withInput($request->only(['investigation_question', 'device_context']))
                 ->with('error', 'This upload batch exceeds the server request limit of '
@@ -63,71 +61,27 @@ class ArtifactController extends Controller
             'as_raw' => 'nullable|boolean',
         ]);
 
-        $maxBytes = (int) config('artifacts.max_upload_bytes');
-        $stored = [];
-        $reused = 0;
-        $errors = [];
-
-        foreach ($request->file('files', []) as $file) {
-            if (! $file instanceof UploadedFile) {
-                $errors[] = 'One upload slot did not contain a file. Select the files again.';
-                continue;
-            }
-            $name = $file->getClientOriginalName() ?: 'file';
-            if (! $file->isValid()) {
-                $errors[] = $name.': '.self::uploadErrorMessage($file->getError(), $maxBytes);
-                continue;
-            }
-            if (($file->getSize() ?? 0) > $maxBytes) {
-                $errors[] = $name.': this file is '.ArtifactUploadService::humanBytes((int) $file->getSize())
-                    .'; the limit is '.ArtifactUploadService::humanBytes($maxBytes).'. Narrow the capture or split the input and try again.';
-                continue;
-            }
-
-            $result = ArtifactUploadService::store($project, $request->user(), $file, (bool) ($data['as_raw'] ?? false));
-
-            if ($result['ok']) {
-                if (! empty($result['reused'])) {
-                    $reused++;
-                } else {
-                    $stored[] = $result['artifact'];
-                }
-            } else {
-                $errors[] = $name.': '.$result['error'];
-            }
-        }
+        $batch = ArtifactUploadService::storeBatch($project, $request->user(), $request->file('files', []), (bool) ($data['as_raw'] ?? false));
 
         // Preserve the investigation question across upload failures.
         $question = $request->input('investigation_question');
         $deviceContext = $request->input('device_context');
 
-        if ($stored === [] && $reused === 0) {
+        if ($batch['stored'] === [] && $batch['reused'] === 0) {
             return back()
                 ->withInput($question !== null ? ['investigation_question' => $question, 'device_context' => $deviceContext] : [])
-                ->with('error', implode(' ', $errors));
+                ->with('error', implode(' ', $batch['errors']));
         }
-
-        $parts = [];
-        if ($stored !== []) {
-            $parts[] = count($stored).' new ('.implode(', ', array_map(fn ($a) => $a->original_name, $stored)).' — extraction queued)';
-        }
-        if ($reused > 0) {
-            $parts[] = $reused.' duplicate'.($reused === 1 ? '' : 's').' reused without re-uploading';
-        }
-        if ($errors !== []) {
-            $parts[] = count($errors).' rejected: '.implode(' ', $errors);
-        }
-        $message = 'Upload result: '.implode('; ', $parts).'.';
 
         return redirect()->route('projects.artifacts.index', $project)
             ->withInput($question !== null ? ['investigation_question' => $question, 'device_context' => $deviceContext] : [])
-            ->with('status', $message);
+            ->with('status', ArtifactUploadService::resultMessage($batch['stored'], $batch['reused'], $batch['errors']));
     }
 
-    public function show(Project $project, ProjectArtifact $artifact): View
+    public function show(Request $request, Project $project, ProjectArtifact $artifact): View
     {
         Gate::authorize('view', $project);
-        $this->authorizeArtifact($project, $artifact);
+        $this->assertBelongsToProject($project, $artifact);
 
         $snapshot = $artifact->isUsable() ? $artifact->readSnapshot() : null;
         // A usable artifact always has a snapshot: a null read means the
@@ -153,7 +107,7 @@ class ArtifactController extends Controller
         $analyses = BinaryAnalysis::where('project_artifact_id', $artifact->id)->latest('id')->get();
 
         $backToConversation = null;
-        $from = request()->query('from');
+        $from = $request->query('from');
 
         if (is_string($from) && preg_match('/^agent:(\d+)$/', $from, $m)) {
             $conversation = $project->agentConversations()->find((int) $m[1]);
@@ -207,7 +161,7 @@ class ArtifactController extends Controller
     public function retry(Project $project, ProjectArtifact $artifact): RedirectResponse
     {
         Gate::authorize('view', $project);
-        $this->authorizeArtifact($project, $artifact);
+        $this->assertBelongsToProject($project, $artifact);
 
         if (! in_array($artifact->state, [ProjectArtifact::STATE_FAILED, ProjectArtifact::STATE_UPLOADED], true)) {
             return back()->with('error', 'Only failed uploads can be retried. This artifact is '.$artifact->stateLabel().'.');
@@ -237,7 +191,7 @@ class ArtifactController extends Controller
     public function destroy(Project $project, ProjectArtifact $artifact): RedirectResponse
     {
         Gate::authorize('update', $project);
-        $this->authorizeArtifact($project, $artifact);
+        $this->assertBelongsToProject($project, $artifact);
 
         $disk = Storage::disk('artifacts');
         $paths = [$artifact->rawPath(), $artifact->snapshotPath()];
@@ -254,52 +208,5 @@ class ArtifactController extends Controller
 
         return redirect()->route('projects.artifacts.index', $project)
             ->with('status', 'Artifact deleted. Historical citations to it keep their recorded metadata but no longer resolve to content.');
-    }
-
-    private function authorizeArtifact(Project $project, ProjectArtifact $artifact): void
-    {
-        if ($artifact->project_id !== $project->id) {
-            abort(404);
-        }
-    }
-
-    /**
-     * Distinct, actionable message per PHP upload failure. Oversized
-     * files name the application limit; interruptions and server-side
-     * failures say so instead of blaming the file format.
-     */
-    private static function uploadErrorMessage(int $error, int $maxBytes): string
-    {
-        return match ($error) {
-            UPLOAD_ERR_INI_SIZE, UPLOAD_ERR_FORM_SIZE => 'exceeds the per-file limit of '
-                .ArtifactUploadService::humanBytes($maxBytes).'. Narrow the capture or split the input and try again.',
-            UPLOAD_ERR_PARTIAL => 'was interrupted during upload. Check the connection and try again.',
-            UPLOAD_ERR_NO_FILE => 'no file was received. Select the file again.',
-            UPLOAD_ERR_NO_TMP_DIR, UPLOAD_ERR_CANT_WRITE, UPLOAD_ERR_EXTENSION => 'could not be saved on the server. Try again later.',
-            default => 'did not complete. Try again.',
-        };
-    }
-
-    /**
-     * Parse a php.ini shorthand byte value (e.g. "80M", "1G", "512K").
-     * Returns 0 for unlimited/empty.
-     */
-    private static function phpBytes(string $value): int
-    {
-        $value = trim($value);
-        if ($value === '' || $value === '-1') {
-            return 0;
-        }
-        $last = strtolower(substr($value, -1));
-        if (ctype_digit($last)) {
-            return (int) $value;
-        }
-
-        return match ($last) {
-            'g' => (int) substr($value, 0, -1) * 1024 * 1024 * 1024,
-            'm' => (int) substr($value, 0, -1) * 1024 * 1024,
-            'k' => (int) substr($value, 0, -1) * 1024,
-            default => (int) $value,
-        };
     }
 }

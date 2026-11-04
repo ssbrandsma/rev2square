@@ -8,6 +8,7 @@ use App\Services\Admin\AiBudgets;
 use App\Services\AI\AIRateLimitedException;
 use App\Services\AI\AITimeoutException;
 use App\Services\Revival\ArchitectureService;
+use App\Support\RateLimit;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Throwable;
@@ -45,7 +46,7 @@ class AnalyzeArchitectureJob implements ShouldQueue
             $service->analyze($snapshot);
         } catch (AIRateLimitedException $e) {
             if ($this->attempts() < $this->tries) {
-                $this->release(AnalyzeProjectJob::rateLimitDelay($e->resetsAt));
+                $this->release(RateLimit::delay($e->resetsAt));
             } else {
                 $this->markFailed($snapshot, 'RATE_LIMITED', $e->getMessage());
                 $this->fail($e);
