@@ -1,3 +1,5 @@
+# https://rev2square.com
+
 # Rev²Square — Reverse Engineer. Revive. Together.
 
 Hackathon project for the Meta Global AI Developer Hackathon 2026 (Indie Developer track):
